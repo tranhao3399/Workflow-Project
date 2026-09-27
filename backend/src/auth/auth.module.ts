@@ -1,24 +1,33 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
+import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
 import type { StringValue } from 'ms';
+import { AuditLogModule } from '../audit-logs/audit-log.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
+import { AuthRateLimit, AuthRateLimitSchema } from './schemas/auth-rate-limit.schema.js';
+import { UserSession, UserSessionSchema } from './schemas/user-session.schema.js';
 
 @Module({
   imports: [
     UsersModule,
+    AuditLogModule,
+    MongooseModule.forFeature([
+      { name: UserSession.name, schema: UserSessionSchema },
+      { name: AuthRateLimit.name, schema: AuthRateLimitSchema },
+    ]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.getOrThrow<string>('JWT_SECRET'),
+        secret: configService.get<string>('JWT_ACCESS_SECRET') ?? configService.getOrThrow<string>('JWT_SECRET'),
         signOptions: {
-          expiresIn: configService.get<string>('JWT_EXPIRES_IN', '1d') as StringValue,
+          expiresIn: configService.get<string>('JWT_ACCESS_TTL', '15m') as StringValue,
         },
       }),
     }),
