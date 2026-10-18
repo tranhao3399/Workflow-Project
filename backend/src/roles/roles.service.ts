@@ -9,12 +9,13 @@ import { User } from '../users/schemas/user.schema.js';
 import { CreateRoleDto, ListRolesDto, UpdateRoleDto } from './dto/role.dto.js';
 import { ALL_PERMISSION_KEYS, PERMISSION_KEYS, PERMISSION_REGISTRY } from './permission-registry.js';
 import { Role, RoleDocument } from './schemas/role.schema.js';
+import { normalizeSearchText } from '../common/text/normalize-search-text.js';
 
 const ROLE_SEEDS: Array<Pick<Role, 'key' | 'name' | 'permissionKeys' | 'isSystem' | 'isActive'>> = [
   { key: UserRole.EMPLOYEE, name: 'Nhân viên', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'REQUESTS.CREATE'], isSystem: true, isActive: true },
-  { key: UserRole.MANAGER, name: 'Quản lý', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
-  { key: UserRole.ACCOUNTANT, name: 'Kế toán', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
-  { key: UserRole.DIRECTOR, name: 'Giám đốc', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.MANAGER, name: 'Quản lý', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.ACCOUNTANT, name: 'Kế toán', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.DIRECTOR, name: 'Giám đốc', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
   { key: UserRole.ADMIN, name: 'Quản trị viên', permissionKeys: ALL_PERMISSION_KEYS, isSystem: true, isActive: true },
 ];
 
@@ -34,9 +35,9 @@ export class RolesService implements OnModuleInit {
       const update = role.key === UserRole.ADMIN
         ? {
           $setOnInsert: { key: role.key },
-          $set: { name: role.name, permissionKeys, permissions: permissionKeys, isSystem: true, isActive: true },
+          $set: { name: role.name, nameNormalized: normalizeSearchText(role.name), permissionKeys, isSystem: true, isActive: true },
         }
-        : { $setOnInsert: { ...role, permissionKeys, permissions: permissionKeys } };
+        : { $setOnInsert: { ...role, nameNormalized: normalizeSearchText(role.name), permissionKeys } };
       await this.model.updateOne(
         { key: role.key },
         update,
@@ -45,23 +46,14 @@ export class RolesService implements OnModuleInit {
       if (role.key !== UserRole.ADMIN) {
         await this.model.updateOne(
           { key: role.key },
-          { $addToSet: { permissionKeys: { $each: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW'] }, permissions: { $each: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW'] } } },
+          { $addToSet: { permissionKeys: { $each: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW'] } } },
         ).exec();
       }
     }));
-    const legacyRoles = await this.model.find({
-      $or: [{ permissionKeys: { $exists: false } }, { permissionKeys: { $size: 0 } }],
-      permissions: { $exists: true, $ne: [] },
-    }).select({ _id: 1, permissions: 1 }).lean().exec();
-    await Promise.all(legacyRoles.map((role) => {
-      const permissionKeys = this.normalizePermissionKeys(role.permissions ?? []);
-      return this.model.updateOne({ _id: role._id }, { $set: { permissionKeys, permissions: permissionKeys } }).exec();
-    }));
-    const persistedRoles = await this.model.find().select({ _id: 1, permissionKeys: 1 }).lean().exec();
-    await Promise.all(persistedRoles.map((role) => this.model.updateOne(
-      { _id: role._id },
-      { $set: { permissions: [...new Set(role.permissionKeys ?? [])] } },
-    ).exec()));
+    await this.model.updateMany(
+      { permissionKeys: 'APPROVALS.APPROVE_ASSIGNED' },
+      { $addToSet: { permissionKeys: 'APPROVALS.VIEW_ASSIGNED' } },
+    ).exec();
   }
 
   permissionRegistry() {
@@ -111,11 +103,13 @@ export class RolesService implements OnModuleInit {
     const item = await this.model.create({
       key,
       name: input.name.trim(),
+      nameNormalized: normalizeSearchText(input.name),
       description: input.description?.trim(),
       permissionKeys,
-      permissions: permissionKeys,
       isSystem: false,
       isActive: input.isActive ?? true,
+      createdBy: request.user?.id,
+      updatedBy: request.user?.id,
     });
     await this.record(request, 'ROLE.CREATED', item, undefined, this.snapshot(item));
     return { ...this.toResponse(item.toObject() as StoredRole), assignedUserCount: 0 };
@@ -162,10 +156,11 @@ export class RolesService implements OnModuleInit {
         $set: {
           key: nextKey,
           name: nextName,
+          nameNormalized: normalizeSearchText(nextName),
           ...(input.description === undefined ? {} : { description: nextDescription }),
           permissionKeys: nextPermissionKeys,
-          permissions: nextPermissionKeys,
           isActive: nextIsActive,
+          updatedBy: request.user?.id,
         },
       },
       { returnDocument: 'after', runValidators: true },
@@ -208,8 +203,12 @@ export class RolesService implements OnModuleInit {
 
   private normalizePermissionKeys(values: string[]): string[] {
     const selected = [...new Set(values.map((value) => value.trim()).filter(Boolean))];
-    if (selected.some((value) => !PERMISSION_KEYS.has(value))) {
-      throw new ConflictException('Có quyền không tồn tại trong Permission Registry.');
+    const invalidPermissionKeys = selected.filter((value) => !PERMISSION_KEYS.has(value));
+    if (invalidPermissionKeys.length) {
+      throw new ConflictException({
+        message: `Permission key không tồn tại trong Permission Registry: ${invalidPermissionKeys.join(', ')}.`,
+        invalidPermissionKeys,
+      });
     }
     const normalized = new Set(selected);
     const viewPermissions = PERMISSION_REGISTRY.filter((permission) => permission.matrixColumn === 'VIEW');
@@ -235,9 +234,8 @@ export class RolesService implements OnModuleInit {
   }
 
   private async ensureNameAvailable(name: string, excludedId?: string): Promise<void> {
-    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const duplicate = await this.model.exists({
-      name: new RegExp(`^${escapedName}$`, 'i'),
+      nameNormalized: normalizeSearchText(name),
       ...(excludedId ? { _id: { $ne: excludedId } } : {}),
     });
     if (duplicate) throw new ConflictException({ message: 'Tên vai trò đã tồn tại.', field: 'name' });

@@ -5,20 +5,24 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
 import type { StringValue } from 'ms';
 import { AuditLogModule } from '../audit-logs/audit-log.module.js';
+import { MailModule } from '../mail/mail.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 import { AuthRateLimit, AuthRateLimitSchema } from './schemas/auth-rate-limit.schema.js';
 import { UserSession, UserSessionSchema } from './schemas/user-session.schema.js';
+import { PasswordResetRequest, PasswordResetRequestSchema } from './schemas/password-reset-request.schema.js';
 
 @Module({
   imports: [
     UsersModule,
     AuditLogModule,
+    MailModule,
     MongooseModule.forFeature([
       { name: UserSession.name, schema: UserSessionSchema },
       { name: AuthRateLimit.name, schema: AuthRateLimitSchema },
+      { name: PasswordResetRequest.name, schema: PasswordResetRequestSchema },
     ]),
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({

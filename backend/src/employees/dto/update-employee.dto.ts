@@ -1,73 +1,59 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsDateString, IsEmail, IsEnum, IsMongoId, IsNotEmpty, IsOptional, IsString, Matches, MaxLength, ValidateIf } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { EmploymentType } from '../enums/employment-type.enum.js';
 
 const trimValue = ({ value }: { value: unknown }): unknown => typeof value === 'string' ? value.trim() : value;
 
 export class UpdateEmployeeDto {
-  @IsOptional()
-  @Transform(trimValue)
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
+  @ApiPropertyOptional({ example: 'Nguyen Van A', maxLength: 100 })
+  @IsOptional() @Transform(trimValue) @IsString() @IsNotEmpty() @MaxLength(100)
   fullName?: string;
 
-  @IsOptional()
-  @Transform(trimValue)
-  @IsEmail()
-  @MaxLength(255)
+  @ApiPropertyOptional({ example: 'nguyenvana@workflow.local', format: 'email', maxLength: 255 })
+  @IsOptional() @Transform(trimValue) @IsEmail() @MaxLength(255)
   workEmail?: string;
 
-  @IsOptional()
-  @Transform(trimValue)
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
-  department?: string;
+  @ApiPropertyOptional({ nullable: true, example: '66d0f0b74d5b5d4e65e75123' })
+  @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId()
+  departmentId?: string | null;
 
-  @IsOptional()
-  @Transform(trimValue)
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(120)
-  position?: string;
+  @ApiPropertyOptional({ nullable: true, example: '66d0f0b74d5b5d4e65e75124' })
+  @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId()
+  positionId?: string | null;
 
-  @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId() departmentId?: string | null;
-  @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId() positionId?: string | null;
-
-  @IsOptional()
-  @Transform(trimValue)
-  @IsString()
-  @MaxLength(30)
-  @Matches(/^[0-9+() .-]+$/)
+  @ApiPropertyOptional({ example: '0901234567', maxLength: 30 })
+  @IsOptional() @Transform(trimValue) @IsString() @MaxLength(30) @Matches(/^[0-9+() .-]+$/)
   phone?: string;
 
-  @IsOptional()
-  @IsDateString()
+  @ApiPropertyOptional({ example: '123 Đường Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh', maxLength: 255 })
+  @IsOptional() @Transform(trimValue) @IsString() @MaxLength(255)
+  address?: string;
+
+  @ApiPropertyOptional({ example: '1996-05-18T00:00:00.000Z', format: 'date-time' })
+  @IsOptional() @IsDateString()
   dateOfBirth?: string;
 
-  @IsOptional()
-  @IsDateString()
+  @ApiPropertyOptional({ example: '2026-09-01T00:00:00.000Z', format: 'date-time' })
+  @IsOptional() @IsDateString()
   hiredAt?: string;
 
-  @IsOptional()
-  @IsEnum(EmploymentType)
+  @ApiPropertyOptional({ enum: EmploymentType, example: EmploymentType.FULL_TIME })
+  @IsOptional() @IsEnum(EmploymentType)
   employmentType?: EmploymentType;
 
-  @ValidateIf((_, value) => value !== null && value !== undefined)
-  @IsMongoId()
+  @ApiPropertyOptional({ nullable: true, example: '66d0f0b74d5b5d4e65e75125' })
+  @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId()
   managerId?: string | null;
 
-  @IsOptional()
-  @IsBoolean()
+  @ApiPropertyOptional({ example: true })
+  @IsOptional() @IsBoolean()
   isActive?: boolean;
 
-  @ValidateIf((_, value) => value !== null && value !== undefined)
-  @IsMongoId()
-  userId?: string | null;
 }
 
 export class UpdateEmployeeStatusDto {
+  @ApiProperty({ example: false })
   @IsBoolean()
   isActive: boolean;
 }

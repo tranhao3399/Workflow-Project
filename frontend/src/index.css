@@ -39,7 +39,7 @@
   text-rendering: optimizeLegibility;
 }
 
-html { overflow-y: scroll; scrollbar-gutter: stable; }
+html { overflow-y: auto; }
 * { box-sizing: border-box; }
 body { min-width: 320px; margin: 0; }
 button, input, select { font: inherit; }

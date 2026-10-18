@@ -10,7 +10,9 @@
     "dev": "concurrently \"npm run dev --workspace frontend\" \"npm run start:dev --workspace backend\"",
     "build": "npm run build --workspace frontend && npm run build --workspace backend",
     "lint": "npm run lint --workspace frontend && npm run lint --workspace backend",
-    "test": "npm run test --workspace backend"
+    "test": "npm run test --workspace backend",
+    "db:replica:up": "docker compose -f compose.mongodb.yml up -d",
+    "db:replica:down": "docker compose -f compose.mongodb.yml down"
   },
   "devDependencies": {
     "concurrently": "^10.0.5"

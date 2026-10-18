@@ -20,8 +20,21 @@ export interface UserRoleOption {
   isActive: boolean
 }
 
+export interface UserEmployeeOption {
+  id: string
+  employeeCode: string
+  fullName: string
+  department: string
+  isActive: boolean
+  userId?: string
+}
+
 export async function getUsers(): Promise<User[]> {
   return apiClient<{ data: User[] }>('/users?page=1&limit=100').then((response) => response.data)
+}
+
+export async function getUserEmployeeOptions(): Promise<UserEmployeeOption[]> {
+  return apiClient<ApiDataResponse<UserEmployeeOption[]>>('/users/employee-options').then((response) => response.data)
 }
 
 export async function getUserById(userId: string): Promise<User | null> {

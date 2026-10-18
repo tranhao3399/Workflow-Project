@@ -5,14 +5,15 @@ interface ProfileFieldProps {
   value?: ReactNode
   editControl?: ReactNode
   isEditing: boolean
+  required?: boolean
   emptyValue?: string
 }
 
 /** Displays static profile data until the surrounding page explicitly enters edit mode. */
-export function ProfileField({ label, value, editControl, isEditing, emptyValue = 'Chưa cập nhật' }: ProfileFieldProps) {
+export function ProfileField({ label, value, editControl, isEditing, required = false, emptyValue = 'Chưa cập nhật' }: ProfileFieldProps) {
   return (
     <div className="profile-field">
-      <span className="profile-field-label">{label}</span>
+      <span className={isEditing && required ? 'profile-field-label required-field-label' : 'profile-field-label'}>{label}</span>
       {isEditing && editControl ? (
         <div className="profile-field-control">{editControl}</div>
       ) : (

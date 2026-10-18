@@ -5,7 +5,6 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
-  "type": "module",
   "scripts": {
     "build": "nest build",
     "deploy": "nest deploy",
@@ -20,7 +19,10 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
-    "db:reset:dev": "node --env-file=.env ./scripts/reset-development-data.mjs"
+    "db:reset:dev": "node --env-file=.env ./scripts/reset-development-data.mjs",
+    "db:migrate:user-role-ids": "node --env-file=.env ./scripts/migrate-user-role-ids.mjs",
+    "db:migrate:core-collections": "node --env-file=.env ./scripts/migrate-core-collections.mjs",
+    "db:migrate:notification-audit-indexes": "node --env-file=.env ./scripts/migrate-notification-audit-indexes.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
@@ -29,11 +31,16 @@
     "@nestjs/jwt": "^12.0.1",
     "@nestjs/mongoose": "^12.0.0",
     "@nestjs/passport": "^12.0.0",
-    "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/platform-express": "^12.1.1",
+    "@nestjs/swagger": "^12.0.2",
+    "@types/nodemailer": "^8.0.2",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "fast-xml-parser": "^5.11.2",
+    "file-type": "^22.0.2",
     "mongoose": "^9.10.0",
+    "nodemailer": "^10.0.12",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",

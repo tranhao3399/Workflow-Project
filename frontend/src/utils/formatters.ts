@@ -1,4 +1,5 @@
 import type { RequestStatus } from '../types/erp'
+import { workflowStatusLabel } from './workflow-status'
 
 export function formatDate(value: string | Date): string {
   return new Intl.DateTimeFormat('vi-VN', {
@@ -16,17 +17,8 @@ export function formatCurrency(value: number): string {
   }).format(value)
 }
 
-const statusLabels: Record<RequestStatus, string> = {
-  DRAFT: 'Nháp',
-  PENDING: 'Chờ phê duyệt',
-  NEEDS_CHANGES: 'Yêu cầu bổ sung',
-  APPROVED: 'Đã phê duyệt',
-  REJECTED: 'Từ chối',
-  CANCELLED: 'Đã hủy',
-}
-
 export function formatStatus(status: RequestStatus): string {
-  return statusLabels[status]
+  return workflowStatusLabel(status)
 }
 
 export function formatRole(role: string): string {

@@ -38,6 +38,7 @@ interface DepartmentPositionApiRecord {
     _id: string
     code: string
     name: string
+    isActive: boolean
   } | null
 }
 
@@ -130,10 +131,10 @@ export async function createJobTitleFromApi(input: JobTitleInput): Promise<JobTi
   }).then((response) => response.data)
 }
 
-export async function updateJobTitleFromApi(jobTitleId: string, input: Pick<JobTitleInput, 'code' | 'name' | 'isActive'>): Promise<JobTitleApiResponse> {
+export async function updateJobTitleFromApi(jobTitleId: string, input: Pick<JobTitleInput, 'code' | 'name'> & Partial<Pick<JobTitleInput, 'isActive'>>): Promise<JobTitleApiResponse> {
   return apiClient<ApiDataResponse<JobTitleApiResponse>>(`/job-titles/${encodeURIComponent(jobTitleId)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ code: input.code.trim().toUpperCase(), name: input.name.trim(), isActive: input.isActive }),
+    body: JSON.stringify({ code: input.code.trim().toUpperCase(), name: input.name.trim(), ...(input.isActive === undefined ? {} : { isActive: input.isActive }) }),
   }).then((response) => response.data)
 }
 
@@ -143,7 +144,7 @@ export async function deleteJobTitleFromApi(jobTitleId: string): Promise<void> {
 
 export async function getDepartmentPositionsFromApi(departmentId: string): Promise<JobTitlePreview[]> {
   const records = await apiClient<DepartmentPositionApiRecord[]>(`/departments/${encodeURIComponent(departmentId)}/positions`)
-  return records.flatMap((record) => record.jobTitleId ? [{ id: record._id, name: record.jobTitleId.name, code: record.jobTitleId.code, departmentCount: 1, isActive: true }] : [])
+  return records.flatMap((record) => record.jobTitleId ? [{ id: record.jobTitleId._id, name: record.jobTitleId.name, code: record.jobTitleId.code, departmentCount: 1, isActive: record.jobTitleId.isActive }] : [])
 }
 
 interface ApplyDepartmentJobTitlesResponse {

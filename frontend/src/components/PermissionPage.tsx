@@ -51,6 +51,8 @@ export function PermissionPage({ onCreateRole, onOpenRole, canCreateRole }: Perm
     }
   }
 
+  // Initial server synchronization for this catalog.
+  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void load() }, [])
   useEffect(() => {
     const timer = window.setTimeout(() => { setSearchQuery(searchInput); setPage(1) }, 300)

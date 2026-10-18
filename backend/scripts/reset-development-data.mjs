@@ -1,7 +1,18 @@
 import mongoose from 'mongoose';
 
 const collectionNames = [
+  'approval_histories',
+  'approval_tasks',
+  'files',
+  'requests',
+  'workflow_definitions',
+  'form_definitions',
   'audit_logs',
+  'notification_reads',
+  'notifications',
+  'password_reset_requests',
+  'auth_rate_limits',
+  'user_sessions',
   'department_positions',
   'departments',
   'employees',

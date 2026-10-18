@@ -45,7 +45,7 @@ export function WorkspaceModulesPage() {
   }, [toast])
 
   const sortedModules = useMemo(() => [...modules].sort((left, right) => (
-    left.group.localeCompare(right.group) || left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)
+    left.groupKey.localeCompare(right.groupKey) || left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)
   )), [modules])
   const changedModules = useMemo(() => modules.filter((module) => savedEnabled[module.moduleKey] !== module.isEnabled), [modules, savedEnabled])
 
@@ -79,7 +79,7 @@ export function WorkspaceModulesPage() {
         <thead><tr><th>Module</th><th>Nhóm</th><th>Đường dẫn</th><th>Trạng thái</th></tr></thead>
         <tbody>{sortedModules.map((module) => <tr key={module.moduleKey}>
           <td><strong>{module.name}</strong><span className="cell-subtitle">{module.moduleKey}</span></td>
-          <td>{module.group === 'ADMIN' ? 'Quản trị' : 'Không gian làm việc'}</td>
+          <td>{module.groupKey === 'ADMIN' ? 'Quản trị' : 'Không gian làm việc'}</td>
           <td><span className="module-path">{module.path}</span></td>
           <td><label className="inline-toggle"><input type="checkbox" checked={module.isEnabled} disabled={isProtectedModule(module)} onChange={(event) => setModuleEnabled(module.moduleKey, event.target.checked)} /><span>{module.isEnabled ? 'Đang bật' : 'Đã tắt'}</span></label></td>
         </tr>)}</tbody>

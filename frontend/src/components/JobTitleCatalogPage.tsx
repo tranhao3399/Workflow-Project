@@ -18,11 +18,11 @@ const pageSizes: PageSize[] = [5, 10, 20, 50]
 
 interface JobTitleCatalogPageProps {
   onCreateJobTitle: () => void
-  onEditJobTitle: (jobTitleId: string) => void
+  onOpenJobTitle: (jobTitleId: string) => void
   canCreateJobTitle: boolean
 }
 
-export function JobTitleCatalogPage({ onCreateJobTitle, onEditJobTitle, canCreateJobTitle }: JobTitleCatalogPageProps) {
+export function JobTitleCatalogPage({ onCreateJobTitle, onOpenJobTitle, canCreateJobTitle }: JobTitleCatalogPageProps) {
   const [jobTitles, setJobTitles] = useState<JobTitlePreview[] | null>(null)
   const [hasError, setHasError] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -47,6 +47,8 @@ export function JobTitleCatalogPage({ onCreateJobTitle, onEditJobTitle, canCreat
     }
   }
 
+  // Initial server synchronization for this catalog.
+  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void load() }, [])
   useEffect(() => {
     const timer = window.setTimeout(() => { setSearchQuery(searchInput); setPage(1) }, 300)
@@ -102,7 +104,7 @@ export function JobTitleCatalogPage({ onCreateJobTitle, onEditJobTitle, canCreat
           <AdvancedFilterPanel id="job-title-filters" label="Bộ lọc chức danh" isOpen={isFilterOpen}><div className="advanced-filter-content master-filter-content"><label><span>Trạng thái</span><FilterSelect ariaLabel="Lọc theo trạng thái chức danh" value={status} options={[{ value: 'ALL', label: 'Tất cả trạng thái' }, { value: 'ACTIVE', label: 'Hoạt động' }, { value: 'INACTIVE', label: 'Ngưng hoạt động' }]} isOpen={openSelect === 'status'} onOpenChange={(open) => setOpenSelect(open ? 'status' : null)} onChange={(value) => { setStatus(value as StatusFilter); setPage(1) }} /></label></div></AdvancedFilterPanel>
         </div>
       </ListToolbar>
-      <DataTable className="admin-table master-data-table" fixedLayout><thead><tr><th>Mã chức danh</th><th>Chức danh</th><th>Trạng thái</th></tr></thead><tbody>{rows.length === 0 ? <EmptyTableRow colSpan={3} message="Không tìm thấy chức danh phù hợp." /> : rows.map((jobTitle) => <tr key={jobTitle.id}><td><button className="master-code-link" type="button" onClick={() => onEditJobTitle(jobTitle.id)}>{jobTitle.code}</button></td><td><strong className="master-primary-text">{jobTitle.name}</strong></td><td><JobTitleStatusBadge isActive={jobTitle.isActive} /></td></tr>)}</tbody></DataTable><TablePagination currentPage={currentPage} totalPages={totalPages} onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)} rangeLabel={`${rangeStart}–${rangeEnd} trên ${filtered.length} chức danh`} pageSize={pageSize} pageSizes={pageSizes} onPageSizeChange={(value) => { setPageSize(value as PageSize); setPage(1) }} />
+      <DataTable className="admin-table master-data-table" fixedLayout><thead><tr><th>Mã chức danh</th><th>Chức danh</th><th>Trạng thái</th></tr></thead><tbody>{rows.length === 0 ? <EmptyTableRow colSpan={3} message="Không tìm thấy chức danh phù hợp." /> : rows.map((jobTitle) => <tr key={jobTitle.id}><td><button className="master-code-link" type="button" onClick={() => onOpenJobTitle(jobTitle.id)}>{jobTitle.code}</button></td><td><strong className="master-primary-text">{jobTitle.name}</strong></td><td><JobTitleStatusBadge isActive={jobTitle.isActive} /></td></tr>)}</tbody></DataTable><TablePagination currentPage={currentPage} totalPages={totalPages} onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)} rangeLabel={`${rangeStart}–${rangeEnd} trên ${filtered.length} chức danh`} pageSize={pageSize} pageSizes={pageSizes} onPageSizeChange={(value) => { setPageSize(value as PageSize); setPage(1) }} />
     </SurfaceCard>
   </>
 }

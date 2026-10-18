@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
-import { Model } from 'mongoose';
+import { ClientSession, Model } from 'mongoose';
 import type { QueryFilter } from 'mongoose';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import type { SafeUser } from '../users/users.service.js';
@@ -36,6 +36,8 @@ const CHANGE_ALLOWLIST = new Set([
   'sortOrder',
   'isEnabled',
   'visibleToRoles',
+  'groupKey',
+  'requiredPermission',
   'employeeCode',
   'workEmail',
   'position',
@@ -59,13 +61,22 @@ const CHANGE_ALLOWLIST = new Set([
   'employmentType',
   'avatarUpdated',
   'avatarRemoved',
+  'version',
+  'requestNo',
+  'stepKey',
+  'stepRunNo',
+  'approvalMode',
+  'fileName',
+  'mimeType',
+  'sizeBytes',
 ]);
 
-const BLOCKED_KEY_PATTERN = /password|secret|token|jwt|authorization|cookie|binary|filedata/i;
+const BLOCKED_KEY_PATTERN = /password|secret|token|otp|jwt|authorization|cookie|binary|filedata|storagekey|internalpath|absolutepath/i;
 const MAX_VALUE_DEPTH = 5;
 
 export interface AuditLogEvent {
   action: string;
+  description?: string;
   resource: AuditResource;
   outcome: AuditOutcome;
   changes?: AuditChangeSet;
@@ -78,8 +89,12 @@ export class AuditLogService {
 
   constructor(@InjectModel(AuditLog.name) private readonly auditLogModel: Model<AuditLog>) {}
 
-  async record(request: RequestWithContext, event: AuditLogEvent): Promise<void> {
-    await this.write(request, request.user, event);
+  async record(
+    request: RequestWithContext,
+    event: AuditLogEvent,
+    session?: ClientSession,
+  ): Promise<void> {
+    await this.write(request, request.user, event, session);
   }
 
   // Used by authentication flows before Passport has attached a JWT user to the request.
@@ -87,8 +102,9 @@ export class AuditLogService {
     request: RequestWithContext,
     actor: SafeUser | undefined,
     event: AuditLogEvent,
+    session?: ClientSession,
   ): Promise<void> {
-    await this.write(request, actor, event);
+    await this.write(request, actor, event, session);
   }
 
   async findAll(query: ListAuditLogsDto) {
@@ -131,35 +147,50 @@ export class AuditLogService {
     request: RequestWithContext,
     actor: SafeUser | undefined,
     event: AuditLogEvent,
+    session?: ClientSession,
   ): Promise<void> {
+    const document = {
+      occurredAt: new Date(),
+      requestId: request.requestId ?? randomUUID(),
+      actor: this.resolveActor(actor),
+      action: event.action.trim().toUpperCase(),
+      description: event.description?.trim() || this.defaultDescription(event.action),
+      resource: this.sanitizeResource(event.resource),
+      outcome: event.outcome,
+      changes: this.sanitizeChanges(event.changes),
+      metadata: this.sanitizeMetadata(event.metadata),
+      context: {
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent']?.slice(0, 1000),
+        method: request.method,
+        path: request.originalUrl?.slice(0, 500),
+      },
+    };
     try {
-      await this.auditLogModel.create({
-        occurredAt: new Date(),
-        requestId: request.requestId ?? randomUUID(),
-        actor: this.resolveActor(actor),
-        action: event.action.trim().toUpperCase(),
-        resource: this.sanitizeResource(event.resource),
-        outcome: event.outcome,
-        changes: this.sanitizeChanges(event.changes),
-        metadata: this.sanitizeMetadata(event.metadata),
-      });
+      if (session) {
+        await this.auditLogModel.create([document], { session });
+      } else {
+        await this.auditLogModel.create(document);
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown audit persistence error';
       this.logger.error(`Unable to persist audit log for ${event.action}: ${errorMessage}`);
+      if (session) throw error;
     }
   }
 
   private resolveActor(actor?: SafeUser): AuditActor {
     return actor
-      ? { userId: actor.id, fullName: actor.fullName, rolesAtTime: actor.roles?.length ? actor.roles : [actor.role] }
+      ? { userId: actor.id, fullName: actor.fullName, email: actor.email, rolesAtTime: actor.roles?.length ? actor.roles : [actor.role] }
       : { rolesAtTime: [] };
   }
 
   private sanitizeResource(resource: AuditResource): AuditResource {
     return {
       type: resource.type.trim().toUpperCase(),
-      id: resource.id.trim(),
+      ...(resource.id ? { id: resource.id.trim() } : {}),
       ...(resource.code ? { code: resource.code.trim() } : {}),
+      ...(resource.name ? { name: resource.name.trim() } : {}),
     };
   }
 
@@ -189,7 +220,19 @@ export class AuditLogService {
   private sanitizeMetadata(metadata?: Record<string, unknown>): Record<string, unknown> | undefined {
     if (!metadata) return undefined;
     const sanitized = this.sanitizeObject(metadata, 0);
-    return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+    if (Object.keys(sanitized).length === 0) return undefined;
+    return JSON.stringify(sanitized).length <= 16_000 ? sanitized : { truncated: true };
+  }
+
+  private defaultDescription(action: string): string {
+    const normalized = action.trim().toUpperCase();
+    const [resource = 'Hệ thống', operation = 'UPDATED'] = normalized.split('.');
+    const operationLabels: Record<string, string> = {
+      CREATED: 'đã được tạo', UPDATED: 'đã được cập nhật', DELETED: 'đã được xóa',
+      ACTIVATED: 'đã được kích hoạt', DEACTIVATED: 'đã ngưng hoạt động',
+      LOGIN_FAILED: 'đăng nhập thất bại', LOGIN_SUCCEEDED: 'đăng nhập thành công',
+    };
+    return `${resource} ${operationLabels[operation] ?? operation.toLocaleLowerCase('vi-VN')}.`;
   }
 
   private sanitizeValue(value: unknown, depth = 0): unknown {

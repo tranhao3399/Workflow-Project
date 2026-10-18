@@ -1,10 +1,9 @@
 import { Type } from 'class-transformer';
-import { IsDateString, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsDateString, IsInt, IsMongoId, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class ListAuditLogsDto {
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @IsMongoId()
   actorId?: string;
 
   @IsOptional()

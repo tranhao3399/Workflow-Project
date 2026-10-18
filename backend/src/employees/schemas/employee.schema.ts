@@ -12,26 +12,29 @@ export class Employee {
   @Prop({ required: true, trim: true, maxlength: 100 })
   fullName: string;
 
+  @Prop({ required: true, trim: true, maxlength: 100, select: false })
+  fullNameNormalized: string;
+
   @Prop({ required: true, unique: true, index: true, trim: true, lowercase: true, maxlength: 255 })
   workEmail: string;
 
-  @Prop({ required: true, trim: true, maxlength: 100, index: true })
-  department: string;
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Department', required: true, index: true })
+  departmentId: Types.ObjectId;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Department', required: false, index: true })
-  departmentId?: Types.ObjectId;
-
-  @Prop({ required: true, trim: true, maxlength: 120 })
-  position: string;
-
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Position', required: false, index: true })
-  positionId?: Types.ObjectId;
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Position', required: true, index: true })
+  positionId: Types.ObjectId;
 
   @Prop({ required: false, trim: true, maxlength: 30 })
   phone?: string;
 
+  @Prop({ required: false, trim: true, maxlength: 255 })
+  address?: string;
+
   @Prop({ required: false })
   hiredAt?: Date;
+
+  @Prop({ required: false })
+  endedAt?: Date;
 
   @Prop({ required: false })
   dateOfBirth?: Date;
@@ -44,9 +47,6 @@ export class Employee {
 
   @Prop({ required: true, default: true, index: true })
   isActive: boolean;
-
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false, unique: true, sparse: true })
-  userId?: Types.ObjectId;
 
   @Prop({ required: false, trim: true, maxlength: 80 })
   avatarKey?: string;
@@ -62,9 +62,17 @@ export class Employee {
   })
   avatar?: { contentType: 'image/jpeg' | 'image/png'; size: number; updatedAt: Date };
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false })
+  createdBy?: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false })
+  updatedBy?: Types.ObjectId;
+
   createdAt: Date;
   updatedAt: Date;
 }
 
 export const EmployeeSchema = SchemaFactory.createForClass(Employee);
 EmployeeSchema.index({ departmentId: 1, isActive: 1, createdAt: -1 });
+EmployeeSchema.index({ managerId: 1, isActive: 1 });
+EmployeeSchema.index({ fullNameNormalized: 1 });

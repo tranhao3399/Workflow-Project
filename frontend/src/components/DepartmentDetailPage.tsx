@@ -106,6 +106,8 @@ export function DepartmentDetailPage({ departmentId, onBack, onDeleted }: Depart
     }
   }
 
+  // Reload detail state when the route identity changes.
+  // oxlint-disable-next-line react/set-state-in-effect react-hooks/exhaustive-deps
   useEffect(() => { void load() }, [departmentId])
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('workflow:unsaved-change', { detail: isEditing && Boolean(department && (draftCode !== department.code || draftName !== department.name || draftIsActive !== department.isActive)) }))
@@ -264,17 +266,19 @@ export function DepartmentDetailPage({ departmentId, onBack, onDeleted }: Depart
     <SurfaceCard className="department-info-card">
       <div className="department-info-heading"><h2>Thông tin phòng ban</h2></div>
       <div className="department-info-grid">
-        <div><span className="profile-field-label">Mã phòng ban</span>{isEditing ? <><input className="department-info-input" value={draftCode} onChange={(event) => { setDraftCode(event.target.value.toUpperCase()); setCodeError('') }} aria-label="Mã phòng ban" aria-invalid={Boolean(codeError) || !isCodeValid} required />{(codeError || !isCodeValid) && <small className="department-info-error">{codeError || 'Mã phòng ban chỉ dùng A-Z, 0-9 và dấu gạch dưới.'}</small>}</> : <span className="department-info-value department-info-code">{department.code}</span>}</div>
-        <div><span className="profile-field-label">Tên phòng ban</span>{isEditing ? <><input className="department-info-input" value={draftName} onChange={(event) => { setDraftName(event.target.value); setNameError('') }} aria-label="Tên phòng ban" aria-invalid={Boolean(nameError) || !draftName.trim()} required />{(nameError || !draftName.trim()) && <small className="department-info-error">{nameError || 'Tên phòng ban là bắt buộc.'}</small>}</> : <strong className="department-info-value">{department.name}</strong>}</div>
+        <div><span className={isEditing ? 'profile-field-label required-field-label' : 'profile-field-label'}>Mã phòng ban</span>{isEditing ? <><input className="department-info-input" value={draftCode} onChange={(event) => { setDraftCode(event.target.value.toUpperCase()); setCodeError('') }} aria-label="Mã phòng ban" aria-invalid={Boolean(codeError) || !isCodeValid} required />{(codeError || !isCodeValid) && <small className="department-info-error">{codeError || 'Mã phòng ban chỉ dùng A-Z, 0-9 và dấu gạch dưới.'}</small>}</> : <span className="department-info-value department-info-code">{department.code}</span>}</div>
+        <div><span className={isEditing ? 'profile-field-label required-field-label' : 'profile-field-label'}>Tên phòng ban</span>{isEditing ? <><input className="department-info-input" value={draftName} onChange={(event) => { setDraftName(event.target.value); setNameError('') }} aria-label="Tên phòng ban" aria-invalid={Boolean(nameError) || !draftName.trim()} required />{(nameError || !draftName.trim()) && <small className="department-info-error">{nameError || 'Tên phòng ban là bắt buộc.'}</small>}</> : <strong className="department-info-value">{department.name}</strong>}</div>
         <div><span className="profile-field-label">Trạng thái</span>{isEditing ? <FilterSelect ariaLabel="Trạng thái phòng ban" value={String(draftIsActive)} options={[{ value: 'true', label: 'Hoạt động' }, { value: 'false', label: 'Ngưng hoạt động' }]} onChange={(value) => setDraftIsActive(value === 'true')} disabled={isSaving} /> : <span className="department-info-value"><DepartmentStatusBadge isActive={department.isActive} /></span>}</div>
       </div>
     </SurfaceCard>
 
     <SurfaceCard className="department-position-card">
-      <div className="detail-tabs" role="tablist"><button className="active" type="button" role="tab" aria-selected="true">Vị trí</button></div>
-      <div className="department-position-toolbar">
-        <button className="primary-button compact-button" type="button" onClick={openJobTitleDialog}>+ Thêm vị trí</button>
-        {selectedPositions.length > 0 && <button className="secondary-button compact-button department-position-delete-button" type="button" onClick={() => setPendingRemoval(selectedPositions)}>Xóa ({selectedPositions.length})</button>}
+      <div className="department-position-heading">
+        <h2>Vị trí</h2>
+        <div>
+          <button className="primary-button compact-button" type="button" onClick={openJobTitleDialog}>+ Thêm vị trí</button>
+          {selectedPositions.length > 0 && <button className="danger-button compact-button" type="button" onClick={() => setPendingRemoval(selectedPositions)}>Xóa ({selectedPositions.length})</button>}
+        </div>
       </div>
       {positions.length === 0 ? <p className="department-position-empty">Chưa có vị trí nào.</p> : <DataTable className="admin-table department-position-table"><thead><tr><th className="department-position-select"><input type="checkbox" aria-label="Chọn tất cả vị trí" checked={allPositionsSelected} onChange={toggleAllPositions} disabled={isSaving} /></th><th className="department-position-number">#</th><th>Mã vị trí</th><th>Tên vị trí</th></tr></thead><tbody>{positions.map((position, index) => <tr key={position.id} className={selectedPositionIds.includes(position.id) ? 'is-selected' : ''}><td className="department-position-select"><input type="checkbox" aria-label={`Chọn ${position.name}`} checked={selectedPositionIds.includes(position.id)} onChange={() => togglePosition(position.id)} disabled={isSaving} /></td><td className="department-position-number">{index + 1}</td><td><span className="master-secondary-text">{position.code}</span></td><td><strong className="master-primary-text">{position.name}</strong></td></tr>)}</tbody></DataTable>}
     </SurfaceCard>

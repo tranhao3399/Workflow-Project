@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
-import { DepartmentsModule } from '../departments/departments.module.js';
 import { Department, DepartmentSchema } from '../departments/schemas/department.schema.js';
 import { Employee, EmployeeSchema } from '../employees/schemas/employee.schema.js';
 import { Position, PositionSchema } from '../positions/schemas/position.schema.js';
@@ -18,7 +17,6 @@ import { DashboardService } from './dashboard.service.js';
       { name: Department.name, schema: DepartmentSchema },
       { name: Position.name, schema: PositionSchema },
     ]),
-    DepartmentsModule,
   ],
   controllers: [DashboardController],
   providers: [DashboardService],

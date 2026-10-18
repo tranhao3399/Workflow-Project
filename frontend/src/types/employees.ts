@@ -19,6 +19,7 @@ export interface Employee {
   position: string
   positionId?: string
   phone?: string
+  address?: string
   dateOfBirth?: string
   hiredAt?: string
   employmentType?: EmploymentType
@@ -41,6 +42,7 @@ export interface EmployeeFormValues {
   position: string
   positionId?: string
   phone?: string
+  address?: string
   dateOfBirth?: string
   hiredAt?: string
   employmentType: EmploymentType

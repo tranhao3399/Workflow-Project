@@ -34,6 +34,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (session.revokedAt) throw new UnauthorizedException({ message: 'Phiên đăng nhập không còn hiệu lực.', code: 'SESSION_REVOKED' });
     if (session.expiresAt <= new Date()) throw new UnauthorizedException({ message: 'Phiên đăng nhập đã hết hạn.', code: 'SESSION_EXPIRED' });
 
-    return { ...this.usersService.toSafeUser(user), sessionId: session._id.toString() };
+    return { ...await this.usersService.findSafeByIdWithPermissions(user.id), sessionId: session._id.toString() };
   }
 }

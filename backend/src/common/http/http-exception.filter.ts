@@ -5,6 +5,9 @@ type ErrorResponse = {
   message?: string | string[];
   field?: string;
   error?: string;
+  code?: string;
+  errors?: unknown[];
+  details?: unknown;
 };
 
 @Catch()
@@ -22,6 +25,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       statusCode: status,
       message: details.message,
       ...(details.field ? { field: details.field } : {}),
+      ...(details.code ? { code: details.code } : {}),
+      ...(details.errors ? { errors: details.errors } : {}),
+      ...(details.details !== undefined ? { details: details.details } : {}),
       requestId: request.requestId,
       timestamp: new Date().toISOString(),
       path: request.originalUrl,
@@ -35,12 +41,18 @@ export class HttpExceptionFilter implements ExceptionFilter {
     return HttpStatus.INTERNAL_SERVER_ERROR;
   }
 
-  private toDetails(body: string | object | undefined, exception: unknown): Required<Pick<ErrorResponse, 'message'>> & Pick<ErrorResponse, 'field'> {
+  private toDetails(
+    body: string | object | undefined,
+    exception: unknown,
+  ): Required<Pick<ErrorResponse, 'message'>> & Pick<ErrorResponse, 'field' | 'code' | 'errors' | 'details'> {
     if (typeof body === 'string') return { message: body };
     if (this.isErrorResponse(body)) {
       return {
         message: Array.isArray(body.message) ? body.message.join(', ') : body.message ?? 'Yêu cầu không hợp lệ.',
         ...(body.field ? { field: body.field } : {}),
+        ...(body.code ? { code: body.code } : {}),
+        ...(Array.isArray(body.errors) ? { errors: body.errors } : {}),
+        ...(body.details !== undefined ? { details: body.details } : {}),
       };
     }
     if (this.errorName(exception) === 'CastError') return { message: 'Định danh bản ghi không hợp lệ.' };

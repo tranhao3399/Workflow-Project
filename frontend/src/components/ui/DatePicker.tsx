@@ -57,7 +57,17 @@ export function DatePicker({ value, onChange, ariaLabel, placeholder = 'dd/MM/yy
   const latest = dateFromValue(maxDate) ?? (ariaLabel.toLowerCase().includes('sinh') ? today : undefined)
   const showToday = showTodayProp && !ariaLabel.toLowerCase().includes('sinh')
 
-  useEffect(() => { setDisplayValue(formatDate(value)); setError(''); if (selectedDate) { setVisibleMonth(selectedDate); setYearDraft(String(selectedDate.getFullYear())) } }, [value])
+  useEffect(() => {
+    const nextSelectedDate = dateFromValue(value)
+    // This controlled field mirrors its external value while preserving typed drafts.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setDisplayValue(formatDate(value))
+    setError('')
+    if (nextSelectedDate) {
+      setVisibleMonth(nextSelectedDate)
+      setYearDraft(String(nextSelectedDate.getFullYear()))
+    }
+  }, [value])
   useEffect(() => {
     if (!isOpen) return
     const updatePosition = () => { const rect = rootRef.current?.getBoundingClientRect(); if (!rect) return; const width = Math.min(Math.max(rect.width, 300), window.innerWidth - 24); const estimatedHeight = 300; const hasRoomBelow = window.innerHeight - rect.bottom >= estimatedHeight + 12; const top = hasRoomBelow ? rect.bottom + 6 : Math.max(12, rect.top - estimatedHeight - 6); const left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12)); setPosition({ top, left, width }) }

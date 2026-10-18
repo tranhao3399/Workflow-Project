@@ -3,7 +3,6 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
 import { AuditLogController } from './audit-log.controller.js';
 import { AuditLogService } from './audit-log.service.js';
-import { AdminGuard } from './guards/admin.guard.js';
 import { AuditLog, AuditLogSchema } from './schemas/audit-log.schema.js';
 
 @Module({
@@ -12,7 +11,7 @@ import { AuditLog, AuditLogSchema } from './schemas/audit-log.schema.js';
     PassportModule.register({ defaultStrategy: 'jwt' }),
   ],
   controllers: [AuditLogController],
-  providers: [AuditLogService, AdminGuard],
+  providers: [AuditLogService],
   exports: [AuditLogService],
 })
 export class AuditLogModule {}

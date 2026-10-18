@@ -1,5 +1,3 @@
-import type { UserRole } from './auth'
-
 export type WorkspaceModuleGroup = 'WORKSPACE' | 'ADMIN'
 
 export interface WorkspaceModule {
@@ -7,10 +5,10 @@ export interface WorkspaceModule {
   name: string
   path: string
   icon: string
-  group: WorkspaceModuleGroup
+  groupKey: WorkspaceModuleGroup
   sortOrder: number
   isEnabled: boolean
-  visibleToRoles: UserRole[]
+  requiredPermission: string
   isCore: boolean
   createdAt?: string
   updatedAt?: string

@@ -1,15 +1,7 @@
 import type { UserRole } from './auth'
-
-export const requestStatuses = [
-  'DRAFT',
-  'PENDING',
-  'NEEDS_CHANGES',
-  'APPROVED',
-  'REJECTED',
-  'CANCELLED',
-] as const
-
-export type RequestStatus = (typeof requestStatuses)[number]
+import type { RequestStatus } from './workflow'
+export { requestStatuses } from './workflow'
+export type { RequestStatus } from './workflow'
 export type DashboardRole = Extract<UserRole, 'EMPLOYEE' | 'MANAGER' | 'ADMIN'>
 
 export interface WorkflowRequest {
@@ -52,9 +44,16 @@ export interface DashboardData {
 export type NavigationKey =
   | 'overview'
   | 'my-requests'
+  | 'new-request'
+  | 'request-detail'
   | 'approval-inbox'
+  | 'notifications'
   | 'form-builder'
+  | 'new-form-definition'
+  | 'form-definition-detail'
   | 'workflow-builder'
+  | 'new-workflow-definition'
+  | 'workflow-definition-detail'
   | 'employees'
   | 'organization'
   | 'departments'
@@ -62,7 +61,7 @@ export type NavigationKey =
   | 'department-detail'
   | 'job-titles'
   | 'new-job-title'
-  | 'edit-job-title'
+  | 'job-title-detail'
   | 'new-employee'
   | 'employee-detail'
   | 'users'
@@ -73,10 +72,10 @@ export type NavigationKey =
   | 'role-detail'
   | 'audit-logs'
   | 'workspace-modules'
+  | 'my-account'
 
 export interface NavigationItem {
   key: NavigationKey
   label: string
-  roles: UserRole[]
   section: 'workspace' | 'administration'
 }

@@ -1,15 +1,32 @@
 import type { RequestStatus } from '../types/erp'
-import { formatStatus } from '../utils/formatters'
+import type { ApprovalTaskStatus, DefinitionStatus, FileStatus } from '../types/workflow'
+import { workflowStatusClass, workflowStatusLabel, type WorkflowEntityStatus } from '../utils/workflow-status'
 
 interface StatusBadgeProps {
   status: RequestStatus
 }
 
 export function RequestStatusBadge({ status }: StatusBadgeProps) {
-  return <span className={`status-badge status-${status.toLowerCase()}`}>{formatStatus(status)}</span>
+  return <WorkflowEntityStatusBadge status={status} />
 }
 
 export const StatusBadge = RequestStatusBadge
+
+export function WorkflowEntityStatusBadge({ status }: { status: WorkflowEntityStatus }) {
+  return <span className={`status-badge ${workflowStatusClass(status)}`}>{workflowStatusLabel(status)}</span>
+}
+
+export function DefinitionStatusBadge({ status }: { status: DefinitionStatus }) {
+  return <WorkflowEntityStatusBadge status={status} />
+}
+
+export function ApprovalTaskStatusBadge({ status }: { status: ApprovalTaskStatus }) {
+  return <WorkflowEntityStatusBadge status={status} />
+}
+
+export function FileStatusBadge({ status }: { status: FileStatus }) {
+  return <WorkflowEntityStatusBadge status={status} />
+}
 
 export function ActivityStatusBadge({ isActive }: { isActive: boolean }) {
   return (

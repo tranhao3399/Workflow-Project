@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { addUserRoles, getActiveUserRoles, getUserActivity, getUserById, linkUserEmployee, removeUserRoles, unlinkUserEmployee, updateUser, type UserRoleOption } from '../services/administration.service'
-import { getEmployees } from '../services/employees.service'
+import { addUserRoles, getActiveUserRoles, getUserActivity, getUserById, getUserEmployeeOptions, linkUserEmployee, removeUserRoles, unlinkUserEmployee, updateUser, type UserEmployeeOption, type UserRoleOption } from '../services/administration.service'
 import type { User, UserActivityLog, UserFormValues } from '../types/administration'
-import type { Employee } from '../types/employees'
 import { formatRole } from '../utils/formatters'
 import { ActiveStatusBadge } from './ui/MasterDataStatusBadge'
 import { EmptyState, ErrorState, LoadingState } from './DataStates'
@@ -32,6 +30,7 @@ function formatDateTime(value: string): string {
 }
 
 function auditDescription(log: UserActivityLog, email: string): string {
+  if (log.action === 'AUTH.PASSWORD_RESET_SUCCEEDED') return `Tài khoản ${email} đã đặt lại mật khẩu qua chức năng Quên mật khẩu.`
   const actor = log.actorName ?? log.description ?? 'Người dùng hệ thống'
   const roleKeys = Array.isArray(log.changes?.after?.roles) ? log.changes?.after?.roles : Array.isArray(log.changes?.before?.roles) ? log.changes?.before?.roles : []
   const roleNames = roleKeys.filter((value): value is string => typeof value === 'string').map((value) => formatRole(value as User['role'])).join(', ')
@@ -47,7 +46,7 @@ function auditDescription(log: UserActivityLog, email: string): string {
 
 export function UserDetailPage({ userId, onBack, onOpenEmployee }: UserDetailPageProps) {
   const [user, setUser] = useState<User | null>(null)
-  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employees, setEmployees] = useState<UserEmployeeOption[]>([])
   const [roles, setRoles] = useState<UserRoleOption[]>([])
   const [activity, setActivity] = useState<UserActivityLog[]>([])
   const [form, setForm] = useState<UserFormValues | null>(null)
@@ -72,7 +71,7 @@ export function UserDetailPage({ userId, onBack, onOpenEmployee }: UserDetailPag
     setIsLoading(true)
     try {
       const account = await getUserById(userId)
-      const [employeeItems, activeRoles, auditLogs] = await Promise.all([getEmployees(), getActiveUserRoles(), getUserActivity(userId)])
+      const [employeeItems, activeRoles, auditLogs] = await Promise.all([getUserEmployeeOptions(), getActiveUserRoles(), getUserActivity(userId)])
       setUser(account)
       setEmployees(employeeItems)
       setRoles(activeRoles)
@@ -90,6 +89,8 @@ export function UserDetailPage({ userId, onBack, onOpenEmployee }: UserDetailPag
     }
   }
 
+  // Reload detail state when the route identity changes.
+  // oxlint-disable-next-line react/set-state-in-effect react-hooks/exhaustive-deps
   useEffect(() => { void load() }, [userId])
   useEffect(() => {
     if (!toast) return
@@ -162,7 +163,7 @@ export function UserDetailPage({ userId, onBack, onOpenEmployee }: UserDetailPag
       setIsEditing(false)
       setPendingConfirmation(null)
       setToast('Đã lưu thay đổi tài khoản.')
-      const [employeeItems, auditLogs] = await Promise.all([getEmployees(), getUserActivity(user.id)])
+      const [employeeItems, auditLogs] = await Promise.all([getUserEmployeeOptions(), getUserActivity(user.id)])
       setEmployees(employeeItems)
       setActivity(auditLogs)
     } catch (error) {
@@ -232,9 +233,7 @@ export function UserDetailPage({ userId, onBack, onOpenEmployee }: UserDetailPag
     <SurfaceCard className="user-detail-section user-information-card">
       <div className="user-section-heading"><h2>Thông tin tài khoản</h2></div>
       <div className="detail-facts user-detail-form user-information-grid">
-        {isEditing ? <><label><span>Email đăng nhập</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} disabled={isSaving} /></label><label><span>Mã nhân viên</span><FilterSelect ariaLabel="Chọn mã nhân viên" value={form.employeeId} options={[{ value: '', label: 'Chưa liên kết' }, ...availableEmployees.map((employee) => ({ value: employee.id, label: employee.employeeCode }))]} onChange={(employeeId) => setForm((current) => current ? { ...current, employeeId } : current)} disabled={isSaving} /></label><div className="user-detail-static-field"><span>Họ tên</span><strong>{selectedEmployee?.fullName ?? 'Chưa liên kết'}</strong></div><div className="detail-status"><span>Trạng thái</span><FilterSelect ariaLabel="Trạng thái tài khoản" value={String(form.isActive)} options={statusOptions} onChange={(value) => setForm({ ...form, isActive: value === 'true' })} disabled={isSaving} /></div></> : <><div className="user-detail-static-field"><span>Email đăng nhập</span><strong>{user.email}</strong></div><div className="user-detail-static-field"><span>Mã nhân viên</span>{linkedEmployee ? <button className="master-code-link" type="button" onClick={() => onOpenEmployee(linkedEmployee.id)}>{linkedEmployee.employeeCode}</button> : <strong>Chưa liên kết</strong>}</div><div className="user-detail-static-field"><span>Họ tên</span><strong>{linkedEmployee?.fullName ?? 'Chưa liên kết'}</strong></div><div className="detail-status"><span>Trạng thái</span><ActiveStatusBadge isActive={user.isActive} /></div></>}
-        <div className="user-detail-static-field"><span>Ngày tạo</span><strong>{formatDateTime(user.createdAt)}</strong></div>
-        <div className="user-detail-static-field"><span>Đăng nhập gần nhất</span><strong>{user.lastLoginAt ? formatDateTime(user.lastLoginAt) : 'Chưa đăng nhập'}</strong></div>
+        {isEditing ? <><label><span className="required-field-label">Email đăng nhập</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} disabled={isSaving} /></label><label><span>Mã nhân viên</span><FilterSelect ariaLabel="Chọn mã nhân viên" value={form.employeeId} options={[{ value: '', label: 'Chưa liên kết' }, ...availableEmployees.map((employee) => ({ value: employee.id, label: employee.employeeCode }))]} onChange={(employeeId) => setForm((current) => current ? { ...current, employeeId } : current)} disabled={isSaving} /></label><div className="user-detail-static-field"><span>Họ tên</span><strong>{selectedEmployee?.fullName ?? 'Chưa liên kết'}</strong></div><div className="detail-status"><span>Trạng thái</span><FilterSelect ariaLabel="Trạng thái tài khoản" value={String(form.isActive)} options={statusOptions} onChange={(value) => setForm({ ...form, isActive: value === 'true' })} disabled={isSaving} /></div></> : <><div className="user-detail-static-field"><span>Email đăng nhập</span><strong>{user.email}</strong></div><div className="user-detail-static-field"><span>Mã nhân viên</span>{linkedEmployee ? <button className="master-code-link" type="button" onClick={() => onOpenEmployee(linkedEmployee.id)}>{linkedEmployee.employeeCode}</button> : <strong>Chưa liên kết</strong>}</div><div className="user-detail-static-field"><span>Họ tên</span><strong>{linkedEmployee?.fullName ?? 'Chưa liên kết'}</strong></div><div className="detail-status"><span>Trạng thái</span><ActiveStatusBadge isActive={user.isActive} /></div></>}
       </div>
     </SurfaceCard>
 

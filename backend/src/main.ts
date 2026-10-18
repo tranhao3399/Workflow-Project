@@ -1,6 +1,7 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { join } from 'node:path';
 import { AppModule } from './app.module.js';
 import { HttpExceptionFilter } from './common/http/http-exception.filter.js';
@@ -22,6 +23,23 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
+  if (process.env.NODE_ENV !== 'production' || process.env.SWAGGER_ENABLED === 'true') {
+    const document = SwaggerModule.createDocument(
+      app,
+      new DocumentBuilder()
+        .setTitle('Workflow ERP API')
+        .setDescription('API quản trị tài khoản, nhân sự, phòng ban, chức danh, vai trò và phân quyền của Workflow ERP.')
+        .setVersion('1.0.0')
+        .addServer('/api')
+        .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'access-token')
+        .build(),
+    );
+    SwaggerModule.setup('docs', app, document, {
+      useGlobalPrefix: true,
+      jsonDocumentUrl: 'docs-json',
+      customSiteTitle: 'Workflow ERP API',
+    });
+  }
   await app.listen(process.env.PORT ?? 3000);
 }
-await bootstrap();
+void bootstrap();

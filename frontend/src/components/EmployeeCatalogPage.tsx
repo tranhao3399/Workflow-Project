@@ -45,6 +45,8 @@ export function EmployeeCatalogPage({ onOpenEmployee, onCreateEmployee, canCreat
     try { setEmployees(await getEmployees()); setHasError(false) }
     catch { setHasError(true) } finally { setIsLoading(false); setIsRefreshing(false) }
   }
+  // Initial server synchronization for this catalog.
+  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void load() }, [])
   useEffect(() => { const timer = window.setTimeout(() => setSearchQuery(searchInput), 300); return () => window.clearTimeout(timer) }, [searchInput])
   const departments = useMemo(() => [...new Set(employees.map((employee) => employee.department))].sort(), [employees])

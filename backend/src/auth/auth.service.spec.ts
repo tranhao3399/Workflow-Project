@@ -8,8 +8,7 @@ const user = {
   _id: { toString: () => '64b64b64b64b64b64b64b640' },
   fullName: 'Test User',
   email: 'test@example.com',
-  role: 'EMPLOYEE',
-  roles: ['EMPLOYEE'],
+  roleIds: [{ toString: () => '64b64b64b64b64b64b64b642' }],
   department: 'Engineering',
   isActive: true,
   passwordHash: '',
@@ -26,7 +25,7 @@ function createService(overrides: { sessionFindOne?: ReturnType<typeof vi.fn>; s
     findByEmailForAuth: vi.fn().mockResolvedValue(user),
     resetLoginFailures: vi.fn().mockResolvedValue(undefined),
     recordLogin: vi.fn().mockResolvedValue(undefined),
-    toSafeUser: vi.fn().mockReturnValue(safeUser),
+    toSafeUser: vi.fn().mockResolvedValue(safeUser),
     findSafeByIdWithPermissions: vi.fn().mockResolvedValue({ ...safeUser, permissionKeys: ['REQUESTS.VIEW_OWN'] }),
     findById: vi.fn().mockResolvedValue(user),
     recordLoginFailure: vi.fn(),
@@ -42,8 +41,10 @@ function createService(overrides: { sessionFindOne?: ReturnType<typeof vi.fn>; s
   };
   const jwt = { signAsync: vi.fn().mockResolvedValue('access-token') };
   const audit = { recordForResolvedActor: vi.fn().mockResolvedValue(undefined) };
+  const mail = { sendPasswordResetOtp: vi.fn().mockResolvedValue(undefined) };
   const config = { get: vi.fn((key: string, fallback?: string) => key === 'SESSION_ABSOLUTE_TTL_HOURS' ? '24' : fallback) };
-  return { service: new AuthService(users as never, jwt as never, audit as never, config as never, session as never, rateLimit as never), users, session, jwt };
+  const passwordResetRequest = {};
+  return { service: new AuthService(users as never, jwt as never, audit as never, mail as never, config as never, session as never, rateLimit as never, passwordResetRequest as never), users, session, jwt };
 }
 
 describe('AuthService session lifecycle', () => {
@@ -60,6 +61,7 @@ describe('AuthService session lifecycle', () => {
     expect(result.sessionExpiresAt).toBe('2026-09-25T07:30:00.000Z');
     expect(result.refreshToken).not.toHaveLength(0);
     expect(jwt.signAsync).toHaveBeenCalledWith(expect.objectContaining({ sub: user.id, sid: '64b64b64b64b64b64b64b641' }));
+    expect(jwt.signAsync).not.toHaveBeenCalledWith(expect.objectContaining({ role: expect.anything() }));
     vi.useRealTimers();
   });
 

@@ -15,6 +15,9 @@ interface JobTitleFormProps {
   onBack: () => void
   onSaved: () => void
   onDeleted?: () => void
+  canUpdateJobTitle?: boolean
+  canDeleteJobTitle?: boolean
+  canChangeStatus?: boolean
 }
 
 type JobTitleField = 'name' | 'code'
@@ -62,7 +65,7 @@ function dateTime(value: string): string {
   return new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
-export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted }: JobTitleFormProps) {
+export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdateJobTitle = false, canDeleteJobTitle = false, canChangeStatus = false }: JobTitleFormProps) {
   const isEdit = Boolean(jobTitleId)
   const [form, setForm] = useState<JobTitleInput>(initialForm)
   const [original, setOriginal] = useState<JobTitleInput>(initialForm)
@@ -98,6 +101,8 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted }: JobTitl
     }
   }
 
+  // Reload detail state when the route identity changes.
+  // oxlint-disable-next-line react/set-state-in-effect react-hooks/exhaustive-deps
   useEffect(() => { if (isEdit) void load() }, [isEdit, jobTitleId])
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('workflow:unsaved-change', { detail: isEditing && isDirty }))
@@ -135,6 +140,7 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted }: JobTitl
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (isEdit && !canUpdateJobTitle) return
     const nextErrors = validate(form)
     setTouched({ name: true, code: true })
     setErrors(nextErrors)
@@ -144,7 +150,11 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted }: JobTitl
     setIsSaving(true)
     try {
       if (isEdit && jobTitleId) {
-        await updateJobTitleFromApi(jobTitleId, { code: form.code, name: form.name, isActive: form.isActive })
+        await updateJobTitleFromApi(jobTitleId, {
+          code: form.code,
+          name: form.name,
+          ...(canChangeStatus && form.isActive !== original.isActive ? { isActive: form.isActive } : {}),
+        })
         const next = { ...form, code: form.code.trim().toUpperCase(), name: form.name.trim() }
         setForm(next)
         setOriginal(next)
@@ -168,7 +178,7 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted }: JobTitl
   }
 
   async function deleteJobTitle() {
-    if (!jobTitleId) return
+    if (!jobTitleId || !canDeleteJobTitle) return
     setIsSaving(true)
     try {
       await deleteJobTitleFromApi(jobTitleId)
@@ -193,7 +203,7 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted }: JobTitl
   const actions = isEdit
     ? isEditing
       ? <><button className="secondary-button compact-button" type="button" disabled={isSaving} onClick={cancelEditing}>Hủy</button><button className="primary-button compact-button" type="submit" form="job-title-form" disabled={!isValid || !isDirty || isSaving}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></>
-      : <><button className="secondary-button compact-button" type="button" onClick={requestBack} disabled={isSaving}>← Quay lại</button><button className="secondary-button compact-button" type="button" onClick={() => setIsEditing(true)} disabled={isSaving}>Chỉnh sửa</button><button className="danger-button compact-button" type="button" onClick={() => setShowDeleteConfirm(true)} disabled={isSaving}>Xóa</button></>
+      : <><button className="secondary-button compact-button" type="button" onClick={requestBack} disabled={isSaving}>← Quay lại</button>{canUpdateJobTitle && <button className="secondary-button compact-button" type="button" onClick={() => setIsEditing(true)} disabled={isSaving}>Chỉnh sửa</button>}{canDeleteJobTitle && <button className="danger-button compact-button" type="button" onClick={() => setShowDeleteConfirm(true)} disabled={isSaving}>Xóa</button>}</>
     : <><button className="secondary-button compact-button" type="button" onClick={requestBack} disabled={isSaving}>← Quay lại danh sách</button><button className="primary-button compact-button" type="submit" form="job-title-form" disabled={!isValid || !isDirty || isSaving}>{isSaving ? 'Đang tạo...' : 'Tạo chức danh'}</button></>
 
   return <>
@@ -202,7 +212,7 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted }: JobTitl
     <SurfaceCard className={isEdit ? 'department-info-card job-title-form-card' : 'job-title-form-card'}>
       <div className={isEdit ? 'department-info-heading' : 'job-title-form-heading'}><h2>Thông tin chức danh</h2></div>
       <form id="job-title-form" className={isEdit ? 'job-title-form job-title-detail-form' : 'job-title-form'} onSubmit={(event) => void submit(event)} noValidate>
-        {isEdit && !isEditing ? <div className="job-title-detail-grid"><div><span>Mã chức danh</span><strong>{original.code}</strong></div><div><span>Tên chức danh</span><strong>{original.name}</strong></div><div className="job-title-status-field"><span>Trạng thái</span><ActiveStatusBadge isActive={original.isActive} /></div></div> : <><label className="job-title-form-field"><span>Mã chức danh</span><input value={form.code} onChange={(event) => updateText('code', event.target.value)} onBlur={() => blurField('code')} aria-invalid={Boolean(touched.code && errors.code)} />{touched.code && errors.code && <small className="job-title-form-error">{errors.code}</small>}</label><label className="job-title-form-field"><span>Tên chức danh</span><input value={form.name} onChange={(event) => updateText('name', event.target.value)} onBlur={() => blurField('name')} aria-invalid={Boolean(touched.name && errors.name)} />{touched.name && errors.name && <small className="job-title-form-error">{errors.name}</small>}</label><div className="job-title-form-field job-title-status-field"><span>Trạng thái</span><FilterSelect ariaLabel="Trạng thái chức danh" value={String(form.isActive)} options={statusOptions} onChange={(value) => { setForm((current) => ({ ...current, isActive: value === 'true' })); setFormError('') }} disabled={isSaving} /></div></>}
+        {isEdit && !isEditing ? <div className="job-title-detail-grid"><div><span>Mã chức danh</span><strong>{original.code}</strong></div><div><span>Tên chức danh</span><strong>{original.name}</strong></div><div className="job-title-status-field"><span>Trạng thái</span><ActiveStatusBadge isActive={original.isActive} /></div></div> : <><label className="job-title-form-field"><span className="required-field-label">Mã chức danh</span><input value={form.code} onChange={(event) => updateText('code', event.target.value)} onBlur={() => blurField('code')} aria-invalid={Boolean(touched.code && errors.code)} />{touched.code && errors.code && <small className="job-title-form-error">{errors.code}</small>}</label><label className="job-title-form-field"><span className="required-field-label">Tên chức danh</span><input value={form.name} onChange={(event) => updateText('name', event.target.value)} onBlur={() => blurField('name')} aria-invalid={Boolean(touched.name && errors.name)} />{touched.name && errors.name && <small className="job-title-form-error">{errors.name}</small>}</label><div className="job-title-form-field job-title-status-field"><span>Trạng thái</span>{isEdit && !canChangeStatus ? <ActiveStatusBadge isActive={form.isActive} /> : <FilterSelect ariaLabel="Trạng thái chức danh" value={String(form.isActive)} options={statusOptions} onChange={(value) => { setForm((current) => ({ ...current, isActive: value === 'true' })); setFormError('') }} disabled={isSaving} />}</div></>}
         {formError && <p className="job-title-form-server-error" role="alert">{formError}</p>}
       </form>
     </SurfaceCard>

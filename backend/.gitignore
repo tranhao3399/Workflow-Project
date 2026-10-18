@@ -3,3 +3,4 @@ dist
 coverage
 .env
 uploads/
+private-storage/

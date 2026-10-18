@@ -1,37 +1,34 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import { UserRole } from '../enums/user-role.enum.js';
 
 export type UserDocument = HydratedDocument<User>;
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, collection: 'users' })
 export class User {
-  @Prop({ required: true, trim: true })
-  fullName: string;
+  @Prop({ required: false, trim: true, maxlength: 100 })
+  displayName?: string;
 
-  @Prop({ required: true, unique: true, lowercase: true, trim: true, index: true })
+  @Prop({ required: true, lowercase: true, trim: true })
   email: string;
 
   @Prop({ required: true, select: false })
   passwordHash: string;
 
-  @Prop({ required: true, type: String, enum: Object.values(UserRole), default: UserRole.EMPLOYEE })
-  role: UserRole;
-
-  // `role` remains during the transition so existing JWTs and legacy users keep working.
-  @Prop({ type: [String], enum: Object.values(UserRole), default: [] })
-  roles: UserRole[];
-
-  @Prop({ type: [MongooseSchema.Types.ObjectId], ref: 'Role', default: [] })
+  @Prop({
+    type: [MongooseSchema.Types.ObjectId],
+    ref: 'Role',
+    required: true,
+    validate: {
+      validator: (roleIds: Types.ObjectId[]) => Array.isArray(roleIds) && roleIds.length > 0,
+      message: 'User must have at least one role',
+    },
+  })
   roleIds: Types.ObjectId[];
 
-  @Prop({ required: true, trim: true })
-  department: string;
-
-  @Prop({ default: true })
+  @Prop({ required: true, default: true, index: true })
   isActive: boolean;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Employee', required: false, unique: true, sparse: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Employee', required: false })
   employeeId?: Types.ObjectId;
 
   @Prop({ required: false })
@@ -49,8 +46,20 @@ export class User {
   @Prop({ required: false })
   loginLockedUntil?: Date;
 
+  @Prop({ required: true, default: Date.now })
+  passwordChangedAt: Date;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false })
+  createdBy?: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false })
+  updatedBy?: Types.ObjectId;
+
   createdAt: Date;
   updatedAt: Date;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
+UserSchema.index({ email: 1 }, { unique: true });
+UserSchema.index({ employeeId: 1 }, { unique: true, partialFilterExpression: { employeeId: { $type: 'objectId' } } });
+UserSchema.index({ roleIds: 1, isActive: 1 });

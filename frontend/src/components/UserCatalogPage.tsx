@@ -43,6 +43,8 @@ export function UserCatalogPage({ onOpenUser, onCreateUser, canCreateUser }: Use
       setHasError(false)
     } catch { setHasError(true) } finally { setIsLoading(false); setIsRefreshing(false) }
   }
+  // Initial server synchronization for this catalog.
+  // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => { void load() }, [])
   useEffect(() => { const timer = window.setTimeout(() => setSearchQuery(searchInput), 300); return () => window.clearTimeout(timer) }, [searchInput])
   const filtered = useMemo(() => {

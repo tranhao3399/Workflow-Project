@@ -16,6 +16,13 @@ import { WorkspaceModulesModule } from './workspace-modules/workspace-modules.mo
 import { DashboardModule } from './dashboard/dashboard.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { AuthorizationModule } from './common/authorization/authorization.module.js';
+import { FormDefinitionsModule } from './form-definitions/form-definitions.module.js';
+import { RequestsModule } from './requests/requests.module.js';
+import { ApprovalsModule } from './approvals/approvals.module.js';
+import { FilesModule } from './files/files.module.js';
+import { DefinitionPackagesModule } from './definition-packages/definition-packages.module.js';
+import { WorkflowDefinitionsModule } from './workflow-definitions/workflow-definitions.module.js';
+import { MongoTransactionReadinessService } from './common/database/mongo-transaction-readiness.service.js';
 
 @Module({
   imports: [
@@ -28,7 +35,7 @@ import { AuthorizationModule } from './common/authorization/authorization.module
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>(
           'MONGODB_URI',
-          'mongodb://127.0.0.1:27017/workflow_db',
+          'mongodb://127.0.0.1:27017/workflow_db?replicaSet=rs0',
         ),
       }),
     }),
@@ -43,9 +50,15 @@ import { AuthorizationModule } from './common/authorization/authorization.module
     WorkspaceModulesModule,
     DashboardModule,
     NotificationsModule,
+    FormDefinitionsModule,
+    WorkflowDefinitionsModule,
+    RequestsModule,
+    ApprovalsModule,
+    FilesModule,
+    DefinitionPackagesModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, MongoTransactionReadinessService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {

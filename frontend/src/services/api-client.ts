@@ -1,4 +1,5 @@
 import type { AuthUser } from '../types/auth'
+import { apiErrorMessage, normalizeApiErrorCode } from '../utils/api-errors'
 import { broadcastAuthEvent, clearAuthSession, getAccessToken, notifyAuthEvent, setAuthSession } from './auth-session.store'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api'
@@ -18,19 +19,25 @@ interface ErrorPayload {
   message?: string | string[]
   field?: string
   code?: string
+  errors?: unknown[]
+  details?: unknown
 }
 
 export class ApiError extends Error {
   readonly status: number
   readonly field?: string
   readonly code?: string
+  readonly errors?: unknown[]
+  readonly details?: unknown
 
-  constructor(message: string, status: number, field?: string, code?: string) {
+  constructor(message: string, status: number, field?: string, code?: string, errors?: unknown[], details?: unknown) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.field = field
     this.code = code
+    this.errors = errors
+    this.details = details
   }
 }
 
@@ -71,32 +78,95 @@ export async function apiFormDataClient<T>(path: string, method: 'POST' | 'PATCH
   return request<T>(path, { method, body })
 }
 
+export async function apiUploadClient<T>(
+  path: string,
+  body: FormData,
+  onProgress?: (progress: number) => void,
+): Promise<T> {
+  return uploadRequest<T>(path, body, onProgress)
+}
+
+export async function apiBlobClient(path: string, options: RequestInit = {}): Promise<Blob> {
+  const headers = new Headers(options.headers)
+  if (!headers.has('Accept')) headers.set('Accept', '*/*')
+  return (await authorizedFetch(path, { ...options, headers })).blob()
+}
+
 export function resolveApiAssetUrl(path: string): string { return new URL(path, API_URL).toString() }
 
 async function request<T>(path: string, options: RequestInit, retried = false): Promise<T> {
+  const response = await authorizedFetch(path, options, retried)
+  return readPayload(response) as Promise<T>
+}
+
+async function authorizedFetch(path: string, options: RequestInit, retried = false): Promise<Response> {
+  const headers = new Headers(options.headers)
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json')
+  if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+  const accessToken = getAccessToken()
+  if (accessToken && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${accessToken}`)
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     credentials: 'include',
-    headers: {
-      Accept: 'application/json',
-      ...(options.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
-      ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-      ...options.headers,
-    },
+    headers,
   })
-  const payload = await readPayload(response)
-  if (response.ok) return payload as T
+  if (response.ok) return response
 
+  const payload = await readPayload(response)
   const error = toApiError(payload, response.status)
   if (error.status === 401 && !retried && canRefreshFor(path)) {
     await refreshAccessToken()
-    return request<T>(path, options, true)
+    return authorizedFetch(path, options, true)
+  }
+  throw error
+}
+
+async function uploadRequest<T>(
+  path: string,
+  body: FormData,
+  onProgress?: (progress: number) => void,
+  retried = false,
+): Promise<T> {
+  const response = await new Promise<{ status: number; payload: unknown }>((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('POST', `${API_URL}${path}`)
+    request.withCredentials = true
+    request.setRequestHeader('Accept', 'application/json')
+    const accessToken = getAccessToken()
+    if (accessToken) request.setRequestHeader('Authorization', `Bearer ${accessToken}`)
+    request.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)))
+    })
+    request.addEventListener('load', () => {
+      let payload: unknown = null
+      try {
+        payload = request.responseText ? JSON.parse(request.responseText) : null
+      } catch {
+        payload = null
+      }
+      resolve({ status: request.status, payload })
+    })
+    request.addEventListener('error', () => reject(new ApiError('Không thể kết nối với máy chủ. Vui lòng thử lại.', 0)))
+    request.addEventListener('abort', () => reject(new ApiError('Quá trình tải tệp đã bị hủy.', 0)))
+    request.send(body)
+  })
+
+  if (response.status >= 200 && response.status < 300) {
+    onProgress?.(100)
+    return response.payload as T
+  }
+  const error = toApiError(response.payload, response.status)
+  if (error.status === 401 && !retried && canRefreshFor(path)) {
+    await refreshAccessToken()
+    return uploadRequest<T>(path, body, onProgress, true)
   }
   throw error
 }
 
 function canRefreshFor(path: string): boolean {
-  return !['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout'].includes(path)
+  return !['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout', '/auth/change-password', '/auth/forgot-password/request', '/auth/forgot-password/verify', '/auth/forgot-password/reset'].includes(path)
 }
 
 async function readPayload(response: Response): Promise<unknown> {
@@ -114,8 +184,16 @@ function toApiError(payload: unknown, status: number): ApiError {
     ? result.message as unknown as ErrorPayload
     : undefined
   const messageSource = nested?.message ?? result.message
-  const message = Array.isArray(messageSource) ? messageSource.join(', ') : typeof messageSource === 'string' ? messageSource : 'Không thể kết nối với máy chủ. Vui lòng thử lại.'
-  return new ApiError(message, status, result.field ?? nested?.field, result.code ?? nested?.code)
+  const fallback = Array.isArray(messageSource) ? messageSource.join(', ') : typeof messageSource === 'string' ? messageSource : 'Không thể kết nối với máy chủ. Vui lòng thử lại.'
+  const code = normalizeApiErrorCode(result.code ?? nested?.code)
+  return new ApiError(
+    apiErrorMessage(code, fallback),
+    status,
+    result.field ?? nested?.field,
+    code,
+    result.errors ?? nested?.errors,
+    result.details ?? nested?.details,
+  )
 }
 
 function expireSession(): void {

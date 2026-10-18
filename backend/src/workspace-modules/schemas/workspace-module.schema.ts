@@ -1,6 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
-import { UserRole } from '../../users/enums/user-role.enum.js';
 import { WorkspaceModuleGroup } from '../enums/workspace-module-group.enum.js';
 
 export type WorkspaceModuleDocument = HydratedDocument<WorkspaceModule>;
@@ -13,6 +12,9 @@ export class WorkspaceModule {
   @Prop({ required: true, trim: true, maxlength: 80 })
   name: string;
 
+  @Prop({ required: false, trim: true, maxlength: 300 })
+  description?: string;
+
   @Prop({ required: true, trim: true, match: /^\/[a-z0-9-]+$/ })
   path: string;
 
@@ -20,7 +22,7 @@ export class WorkspaceModule {
   icon: string;
 
   @Prop({ required: true, type: String, enum: Object.values(WorkspaceModuleGroup), index: true })
-  group: WorkspaceModuleGroup;
+  groupKey: WorkspaceModuleGroup;
 
   @Prop({ required: true, min: 0, max: 10000, index: true })
   sortOrder: number;
@@ -28,8 +30,8 @@ export class WorkspaceModule {
   @Prop({ required: true, default: true, index: true })
   isEnabled: boolean;
 
-  @Prop({ type: [String], required: true, enum: Object.values(UserRole), default: [] })
-  visibleToRoles: UserRole[];
+  @Prop({ required: true, trim: true, uppercase: true })
+  requiredPermission: string;
 
   @Prop({ required: true, default: false })
   isCore: boolean;
@@ -39,4 +41,5 @@ export class WorkspaceModule {
 }
 
 export const WorkspaceModuleSchema = SchemaFactory.createForClass(WorkspaceModule);
-WorkspaceModuleSchema.index({ isEnabled: 1, visibleToRoles: 1, sortOrder: 1 });
+WorkspaceModuleSchema.index({ isEnabled: 1, groupKey: 1, sortOrder: 1 });
+WorkspaceModuleSchema.index({ path: 1 }, { unique: true });

@@ -48,6 +48,8 @@ function App() {
         setSessionState('error')
       }
     }
+    // Restoring the external auth session deliberately enters a loading state first.
+    // oxlint-disable-next-line react/set-state-in-effect
     setSessionState('checking')
     void loadSession()
     return () => { isCurrent = false }
@@ -93,10 +95,17 @@ function App() {
     }
   }
 
+  function handlePasswordChanged(message: string) {
+    clearSession()
+    setUser(null)
+    setSessionNotice(message)
+    setSessionState('anonymous')
+  }
+
   if (sessionState === 'checking') return <LoadingState />
   if (sessionState === 'error') return <ErrorState onRetry={() => setSessionReloadVersion((version) => version + 1)} />
-  if (sessionState === 'anonymous' || !user) return <>{sessionNotice && <div className="toast-message" role="status">{sessionNotice}</div>}<AuthScreen onAuthenticated={handleAuthenticated} /></>
-  return <><Workspace user={user} onLogout={handleLogout} isLoggingOut={isLoggingOut} />{sessionNotice && <div className="toast-message" role="status">{sessionNotice}</div>}</>
+  if (sessionState === 'anonymous' || !user) return <>{sessionNotice && <div className="toast-message" role="status">{sessionNotice}</div>}<AuthScreen onAuthenticated={handleAuthenticated} onPasswordReset={() => setSessionNotice('Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại.')} /></>
+  return <><Workspace user={user} onLogout={handleLogout} isLoggingOut={isLoggingOut} onCurrentUserUpdated={setUser} onPasswordChanged={handlePasswordChanged} />{sessionNotice && <div className="toast-message" role="status">{sessionNotice}</div>}</>
 }
 
 export default App

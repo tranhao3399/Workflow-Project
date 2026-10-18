@@ -11,6 +11,11 @@ export interface AuthUser {
   isActive: boolean
   createdAt: string
   updatedAt: string
+  avatarUrl?: string
+  employeeId?: string
+  employeeCode?: string
+  position?: string
+  roles?: UserRole[]
   permissionKeys?: string[]
 }
 

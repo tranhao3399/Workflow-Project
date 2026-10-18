@@ -3,25 +3,45 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { Model } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { MailService } from '../mail/mail.service.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import { UsersService } from '../users/users.service.js';
 import type { SafeUser, SafeUserWithPermissions } from '../users/users.service.js';
 import { UserRole } from '../users/enums/user-role.enum.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { ForgotPasswordRequestDto, ForgotPasswordResetDto, ForgotPasswordVerifyDto } from './dto/forgot-password.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { JwtPayload } from './interfaces/jwt-payload.interface.js';
-import { AuthRateLimit } from './schemas/auth-rate-limit.schema.js';
+import { AuthRateLimit, type AuthRateLimitAction } from './schemas/auth-rate-limit.schema.js';
 import { UserSession, UserSessionDocument } from './schemas/user-session.schema.js';
+import { PasswordResetRequest } from './schemas/password-reset-request.schema.js';
 
 const LOGIN_IP_LIMIT = 30;
 const LOGIN_IP_WINDOW_MS = 60_000;
 const FAILED_LOGIN_LIMIT = 5;
 const FAILED_LOGIN_WINDOW_MS = 15 * 60_000;
 const ACCOUNT_LOCK_MS = 10 * 60_000;
+const PASSWORD_RESET_TTL_MS = 10 * 60_000;
+const PASSWORD_RESET_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_SEQUENCE_TTL_MS = 30 * 60_000;
+const PASSWORD_RESET_SEND_DELAYS_MS = [60_000, 3 * 60_000, 5 * 60_000, 30 * 60_000] as const;
+
+export interface PasswordResetRequestResult {
+  message: string;
+  retryAfterSeconds: number;
+  resendLocked: boolean;
+}
+
+interface PasswordResetSendClaim {
+  shouldSend: boolean;
+  retryAfterSeconds: number;
+  resendLocked: boolean;
+}
 
 export interface AuthTokenResult {
   accessToken: string;
@@ -37,9 +57,11 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly auditLogService: AuditLogService,
+    private readonly mailService: MailService,
     private readonly configService: ConfigService,
     @InjectModel(UserSession.name) private readonly sessionModel: Model<UserSession>,
     @InjectModel(AuthRateLimit.name) private readonly rateLimitModel: Model<AuthRateLimit>,
+    @InjectModel(PasswordResetRequest.name) private readonly passwordResetRequestModel: Model<PasswordResetRequest>,
   ) {}
 
   async register(request: RequestWithContext, registerDto: RegisterDto): Promise<SafeUser> {
@@ -48,11 +70,11 @@ export class AuthService {
     if (await this.usersService.findByEmailForAuth(email)) throw new ConflictException('Email is already registered');
     const passwordHash = await bcrypt.hash(registerDto.password, 12);
     try {
-      const user = await this.usersService.create({ fullName: registerDto.fullName, email, passwordHash, role: registerDto.role, roles: [registerDto.role], department: registerDto.department });
-      const safeUser = this.usersService.toSafeUser(user);
+      const user = await this.usersService.create({ fullName: registerDto.fullName, email, passwordHash, role: registerDto.role });
+      const safeUser = await this.usersService.toSafeUser(user);
       await this.auditLogService.recordForResolvedActor(request, safeUser, {
         action: 'AUTH.REGISTER', outcome: AuditOutcome.SUCCESS, resource: { type: 'USER', id: safeUser.id },
-        changes: { after: { fullName: safeUser.fullName, email: safeUser.email, role: safeUser.role, department: safeUser.department, isActive: safeUser.isActive } },
+        changes: { after: { fullName: safeUser.fullName, email: safeUser.email, role: safeUser.role, isActive: safeUser.isActive } },
       });
       return safeUser;
     } catch (error) {
@@ -61,11 +83,140 @@ export class AuthService {
     }
   }
 
+  async requestPasswordReset(_request: RequestWithContext, input: ForgotPasswordRequestDto): Promise<PasswordResetRequestResult> {
+    const now = new Date();
+    const email = input.email.trim().toLowerCase();
+    const sendClaim = await this.claimPasswordResetSend(email, now);
+    if (!sendClaim.shouldSend) return this.passwordResetRequestResponse(sendClaim);
+
+    const user = await this.usersService.findByEmailForAuth(email);
+    if (!user || !user.isActive) return this.passwordResetRequestResponse(sendClaim);
+
+    const otp = this.createPasswordResetOtp();
+    await this.passwordResetRequestModel.findOneAndUpdate(
+      { userId: user._id },
+      {
+        $set: {
+          emailSnapshot: email,
+          otpHash: await bcrypt.hash(otp, 12),
+          attemptCount: 0,
+          maxAttempts: PASSWORD_RESET_MAX_ATTEMPTS,
+          lastSentAt: now,
+          status: 'PENDING',
+          expiresAt: new Date(now.getTime() + PASSWORD_RESET_TTL_MS),
+        },
+        $unset: {
+          verifiedAt: 1,
+          resetTokenHash: 1,
+          resetTokenExpiresAt: 1,
+          usedAt: 1,
+          invalidatedAt: 1,
+        },
+      },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).exec();
+    await this.mailService.sendPasswordResetOtp(email, otp);
+    return this.passwordResetRequestResponse(sendClaim);
+  }
+
+  async verifyPasswordResetOtp(input: ForgotPasswordVerifyDto): Promise<{ resetToken: string }> {
+    const now = new Date();
+    const email = input.email.trim().toLowerCase();
+    const user = await this.usersService.findByEmailForAuth(email);
+    if (!user || !user.isActive) throw new BadRequestException('Mã xác minh không hợp lệ hoặc đã hết hạn.');
+    const resetRequest = await this.passwordResetRequestModel.findOne({
+      emailSnapshot: email,
+      status: 'PENDING',
+      expiresAt: { $gt: now },
+    }).select('+otpHash').exec();
+    if (!resetRequest || !resetRequest.otpHash) throw new BadRequestException('Mã xác minh không hợp lệ hoặc đã hết hạn.');
+
+    if (!await bcrypt.compare(input.code, resetRequest.otpHash)) {
+      const nextAttemptCount = resetRequest.attemptCount + 1;
+      await this.passwordResetRequestModel.updateOne(
+        { _id: resetRequest._id, status: 'PENDING' },
+        nextAttemptCount >= PASSWORD_RESET_MAX_ATTEMPTS
+          ? { $set: { status: 'INVALIDATED', invalidatedAt: now, attemptCount: nextAttemptCount } }
+          : { $inc: { attemptCount: 1 } },
+      ).exec();
+      if (nextAttemptCount >= PASSWORD_RESET_MAX_ATTEMPTS) {
+        throw new BadRequestException('Mã xác minh đã vượt quá số lần cho phép. Vui lòng gửi mã mới.');
+      }
+      throw new BadRequestException('Mã xác minh không hợp lệ.');
+    }
+
+    const resetToken = this.createResetToken();
+    const verified = await this.passwordResetRequestModel.findOneAndUpdate(
+      { _id: resetRequest._id, status: 'PENDING', expiresAt: { $gt: now } },
+      {
+        $set: {
+          verifiedAt: now,
+          status: 'VERIFIED',
+          resetTokenHash: this.hashResetToken(resetToken),
+          resetTokenExpiresAt: new Date(now.getTime() + PASSWORD_RESET_TTL_MS),
+        },
+      },
+      { returnDocument: 'after' },
+    ).exec();
+    if (!verified) throw new BadRequestException('Mã xác minh không hợp lệ hoặc đã hết hạn.');
+    return { resetToken };
+  }
+
+  async resetPassword(request: RequestWithContext, input: ForgotPasswordResetDto): Promise<{ message: string }> {
+    if (input.newPassword !== input.confirmPassword) throw new BadRequestException('Xác nhận mật khẩu mới không khớp.');
+    const now = new Date();
+    const resetRequest = await this.passwordResetRequestModel.findOneAndUpdate(
+      {
+        resetTokenHash: this.hashResetToken(input.resetToken),
+        status: 'VERIFIED',
+        resetTokenExpiresAt: { $gt: now },
+      },
+      { $set: { usedAt: now, status: 'USED' } },
+      { returnDocument: 'before' },
+    ).select('+resetTokenHash').exec();
+    if (!resetRequest) throw new BadRequestException('Phiên đặt lại mật khẩu không hợp lệ hoặc đã hết hạn. Vui lòng xác minh mã lại.');
+
+    const user = await this.usersService.resetPasswordFromForgotPassword(resetRequest.userId.toString(), input.newPassword);
+    if (!user) throw new BadRequestException('Không thể đặt lại mật khẩu cho tài khoản này.');
+    const safeUser = await this.usersService.toSafeUser(user);
+    await this.auditLogService.recordForResolvedActor(request, safeUser, {
+      action: 'AUTH.PASSWORD_RESET_SUCCEEDED',
+      outcome: AuditOutcome.SUCCESS,
+      resource: { type: 'USER', id: safeUser.id, code: safeUser.email },
+    });
+    return { message: 'Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại.' };
+  }
+
+  async changePassword(request: RequestWithContext, input: ChangePasswordDto): Promise<{ message: string }> {
+    if (input.newPassword !== input.confirmPassword) throw new BadRequestException('Xác nhận mật khẩu mới không khớp.');
+    const userId = request.user?.id;
+    if (!userId) throw new UnauthorizedException('Phiên đăng nhập không hợp lệ.');
+
+    const user = await this.usersService.findByIdForAuth(userId);
+    if (!user || !user.isActive) throw new UnauthorizedException('Tài khoản không còn hoạt động.');
+    if (!await bcrypt.compare(input.currentPassword, user.passwordHash)) {
+      throw new BadRequestException('Mật khẩu hiện tại không chính xác.');
+    }
+    if (await bcrypt.compare(input.newPassword, user.passwordHash)) {
+      throw new BadRequestException('Mật khẩu mới phải khác mật khẩu hiện tại.');
+    }
+
+    const updated = await this.usersService.resetPasswordFromForgotPassword(userId, input.newPassword);
+    if (!updated) throw new BadRequestException('Không thể đổi mật khẩu cho tài khoản này.');
+    const safeUser = await this.usersService.toSafeUser(updated);
+    await this.auditLogService.recordForResolvedActor(request, safeUser, {
+      action: 'USER.PASSWORD_CHANGED',
+      outcome: AuditOutcome.SUCCESS,
+      resource: { type: 'USER', id: safeUser.id, code: safeUser.email },
+    });
+    return { message: 'Đổi mật khẩu thành công. Vui lòng đăng nhập lại.' };
+  }
+
   async login(request: RequestWithContext, loginDto: LoginDto): Promise<AuthTokenResult> {
     const now = new Date();
     const ipAddress = this.getIpAddress(request);
     const email = loginDto.email.trim().toLowerCase();
-    if (await this.consumeRateLimit(`login-ip:${ipAddress}`, LOGIN_IP_LIMIT, LOGIN_IP_WINDOW_MS, now)) {
+    if (await this.consumeRateLimit('LOGIN_IP', ipAddress, LOGIN_IP_LIMIT, LOGIN_IP_WINDOW_MS, now)) {
       throw this.tooManyLoginAttempts();
     }
     const user = await this.usersService.findByEmailForAuth(email);
@@ -74,16 +225,16 @@ export class AuthService {
       throw this.invalidCredentials();
     }
     if (user.loginLockedUntil && user.loginLockedUntil > now) {
-      await this.recordLoginLocked(request, this.usersService.toSafeUser(user));
+      await this.recordLoginLocked(request, await this.usersService.toSafeUser(user));
       throw new UnauthorizedException('Không thể đăng nhập. Vui lòng thử lại sau ít phút.');
     }
     if (!await bcrypt.compare(loginDto.password, user.passwordHash)) {
-      await this.recordFailedLogin(request, this.usersService.toSafeUser(user), email, ipAddress, now);
+      await this.recordFailedLogin(request, await this.usersService.toSafeUser(user), email, ipAddress, now);
       throw this.invalidCredentials();
     }
 
     await Promise.all([this.usersService.resetLoginFailures(user.id), this.usersService.recordLogin(user.id)]);
-    const safeUser = this.usersService.toSafeUser(user);
+    const safeUser = await this.usersService.toSafeUser(user);
     const { session, refreshToken } = await this.createSession(safeUser.id, request, now);
     const userWithPermissions = await this.usersService.findSafeByIdWithPermissions(safeUser.id);
     const result = await this.issueTokens(userWithPermissions, session, refreshToken);
@@ -140,7 +291,7 @@ export class AuthService {
   }
 
   private async issueTokens(user: SafeUserWithPermissions, session: UserSessionDocument, rotatedRefreshToken?: string): Promise<AuthTokenResult> {
-    const payload: JwtPayload = { sub: user.id, sid: session._id.toString(), email: user.email, role: user.role };
+    const payload: JwtPayload = { sub: user.id, sid: session._id.toString(), email: user.email };
     const accessToken = await this.jwtService.signAsync(payload);
     const refreshToken = rotatedRefreshToken ?? '';
     if (!refreshToken) throw new UnauthorizedException('Không thể tạo phiên đăng nhập.');
@@ -172,13 +323,14 @@ export class AuthService {
     ).exec();
     if (!updated) return;
     const user = await this.usersService.findById(session.userId.toString());
-    await this.auditLogService.recordForResolvedActor(request, user ? this.usersService.toSafeUser(user) : undefined, {
+    const actor = user ? await this.usersService.toSafeUser(user) : undefined;
+    await this.auditLogService.recordForResolvedActor(request, actor, {
       action, outcome: AuditOutcome.SUCCESS, resource: { type: 'USER_SESSION', id: session._id.toString() },
     });
   }
 
   private async recordFailedLogin(request: RequestWithContext, actor: SafeUser | undefined, email: string, ipAddress: string, now: Date): Promise<void> {
-    const pairExceeded = await this.consumeRateLimit(`login-failure:${email}:${ipAddress}`, FAILED_LOGIN_LIMIT, FAILED_LOGIN_WINDOW_MS, now);
+    const pairExceeded = await this.consumeRateLimit('LOGIN_FAILURE', `${email}:${ipAddress}`, FAILED_LOGIN_LIMIT, FAILED_LOGIN_WINDOW_MS, now);
     let locked = false;
     if (actor) {
       const failedUser = await this.usersService.recordLoginFailure(actor.id, now, new Date(now.getTime() - FAILED_LOGIN_WINDOW_MS), new Date(now.getTime() + ACCOUNT_LOCK_MS));
@@ -193,20 +345,118 @@ export class AuthService {
     await this.auditLogService.recordForResolvedActor(request, actor, { action: 'USER.LOGIN_LOCKED', outcome: AuditOutcome.FAILED, resource: { type: 'USER', id: actor.id, code: actor.email } });
   }
 
-  private async consumeRateLimit(key: string, limit: number, windowMs: number, now: Date): Promise<boolean> {
-    const active = await this.rateLimitModel.findOneAndUpdate({ key, expiresAt: { $gt: now } }, { $inc: { count: 1 }, $set: { updatedAt: now } }, { returnDocument: 'after' }).exec();
+  private async consumeRateLimit(action: AuthRateLimitAction, subject: string, limit: number, windowMs: number, now: Date): Promise<boolean> {
+    const subjectHash = this.hashRateLimitSubject(subject);
+    const active = await this.rateLimitModel.findOneAndUpdate({ action, subjectHash, expiresAt: { $gt: now } }, { $inc: { count: 1 }, $set: { updatedAt: now } }, { returnDocument: 'after' }).exec();
     if (active) return active.count > limit;
-    const reset = await this.rateLimitModel.findOneAndUpdate({ key, expiresAt: { $lte: now } }, { $set: { count: 1, expiresAt: new Date(now.getTime() + windowMs), updatedAt: now } }, { returnDocument: 'after' }).exec();
+    const reset = await this.rateLimitModel.findOneAndUpdate({ action, subjectHash, expiresAt: { $lte: now } }, { $set: { count: 1, windowStartedAt: now, expiresAt: new Date(now.getTime() + windowMs), updatedAt: now }, $unset: { blockedUntil: 1 } }, { returnDocument: 'after' }).exec();
     if (reset) return false;
     try {
-      await this.rateLimitModel.create({ key, count: 1, expiresAt: new Date(now.getTime() + windowMs), updatedAt: now });
+      await this.rateLimitModel.create({ action, subjectHash, count: 1, windowStartedAt: now, expiresAt: new Date(now.getTime() + windowMs), updatedAt: now });
       return false;
     } catch (error) {
-      if (this.isDuplicateKeyError(error)) return this.consumeRateLimit(key, limit, windowMs, now);
+      if (this.isDuplicateKeyError(error)) return this.consumeRateLimit(action, subject, limit, windowMs, now);
       throw error;
     }
   }
 
+  private hashRateLimitSubject(subject: string): string {
+    return createHash('sha256').update(subject.trim().toLowerCase()).digest('hex');
+  }
+
+  private async claimPasswordResetSend(email: string, now: Date): Promise<PasswordResetSendClaim> {
+    const action: AuthRateLimitAction = 'PASSWORD_RESET_COOLDOWN';
+    const subjectHash = this.hashRateLimitSubject(email);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const current = await this.rateLimitModel.findOne({ action, subjectHash }).exec();
+      const isActive = Boolean(current && current.expiresAt > now);
+      const blockedUntil = current?.blockedUntil ?? current?.expiresAt;
+
+      if (current && isActive && blockedUntil && blockedUntil > now) {
+        return {
+          shouldSend: false,
+          retryAfterSeconds: this.secondsUntil(blockedUntil, now),
+          resendLocked: current.count >= PASSWORD_RESET_SEND_DELAYS_MS.length,
+        };
+      }
+
+      const sendCount = isActive && current
+        ? Math.min(current.count + 1, PASSWORD_RESET_SEND_DELAYS_MS.length)
+        : 1;
+      const delayMs = PASSWORD_RESET_SEND_DELAYS_MS[sendCount - 1];
+      const nextAllowedAt = new Date(now.getTime() + delayMs);
+      const expiresAt = new Date(now.getTime() + (
+        sendCount === PASSWORD_RESET_SEND_DELAYS_MS.length
+          ? delayMs
+          : PASSWORD_RESET_SEQUENCE_TTL_MS
+      ));
+
+      if (current) {
+        const result = await this.rateLimitModel.updateOne(
+          { _id: current._id, count: current.count, updatedAt: current.updatedAt },
+          {
+            $set: {
+              count: sendCount,
+              windowStartedAt: isActive ? current.windowStartedAt : now,
+              blockedUntil: nextAllowedAt,
+              expiresAt,
+              updatedAt: now,
+            },
+          },
+        ).exec();
+        if (result.modifiedCount !== 1) continue;
+      } else {
+        try {
+          await this.rateLimitModel.create({
+            action,
+            subjectHash,
+            count: sendCount,
+            windowStartedAt: now,
+            blockedUntil: nextAllowedAt,
+            expiresAt,
+            updatedAt: now,
+          });
+        } catch (error) {
+          if (this.isDuplicateKeyError(error)) continue;
+          throw error;
+        }
+      }
+
+      return {
+        shouldSend: true,
+        retryAfterSeconds: Math.ceil(delayMs / 1000),
+        resendLocked: sendCount === PASSWORD_RESET_SEND_DELAYS_MS.length,
+      };
+    }
+
+    const latest = await this.rateLimitModel.findOne({ action, subjectHash }).exec();
+    const retryAt = latest?.blockedUntil ?? new Date(now.getTime() + PASSWORD_RESET_SEND_DELAYS_MS[0]);
+    return {
+      shouldSend: false,
+      retryAfterSeconds: this.secondsUntil(retryAt, now),
+      resendLocked: Boolean(latest && latest.count >= PASSWORD_RESET_SEND_DELAYS_MS.length),
+    };
+  }
+
+  private secondsUntil(target: Date, now: Date): number {
+    return Math.max(1, Math.ceil((target.getTime() - now.getTime()) / 1000));
+  }
+
+  private passwordResetRequestResponse(claim: PasswordResetSendClaim): PasswordResetRequestResult {
+    return {
+      message: 'Nếu email tồn tại, mã xác minh đã được gửi.',
+      retryAfterSeconds: claim.retryAfterSeconds,
+      resendLocked: claim.resendLocked,
+    };
+  }
+
+  private createPasswordResetOtp(): string {
+    return randomInt(0, 1_000_000).toString().padStart(6, '0');
+  }
+
+  private createResetToken(): string { return randomBytes(48).toString('base64url'); }
+  private hashResetToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
   private createRefreshToken(): string { return randomBytes(64).toString('base64url'); }
   private hashRefreshToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
   private accessTokenTtlMs(): number {
