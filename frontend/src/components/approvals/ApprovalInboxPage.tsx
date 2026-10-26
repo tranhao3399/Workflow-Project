@@ -7,6 +7,7 @@ import type {
   ApprovalTaskFilter,
   ApprovalTaskStatus,
 } from '../../types/workflow'
+import { formatDateTime } from '../../utils/formatters'
 import { ApprovalTaskStatusBadge, RequestStatusBadge } from '../StatusBadge'
 import { ErrorState, LoadingState } from '../DataStates'
 import { DataTable, EmptyTableRow } from '../ui/DataTable'
@@ -61,7 +62,7 @@ export function ApprovalInboxPage({ onOpenRequest }: ApprovalInboxPageProps) {
   const [overdueOnly, setOverdueOnly] = useState(false)
   const [sort, setSort] = useState('assignedAt:desc')
   const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(20)
+  const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [pendingCount, setPendingCount] = useState(0)
@@ -147,8 +148,4 @@ export function ApprovalInboxPage({ onOpenRequest }: ApprovalInboxPageProps) {
       {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : <><DataTable className="admin-table approval-inbox-table" fixedLayout><thead><tr><th>Mã phiếu</th><th>Form</th><th>Người gửi</th><th>Phòng ban</th><th>Bước</th><th>Ngày giao</th><th>Hạn xử lý</th><th>Trạng thái</th></tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không có task phê duyệt phù hợp." /> : items.map((task) => <tr className="approval-inbox-row" key={task.id} onClick={() => onOpenRequest(task.requestId, task.id)}><td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpenRequest(task.requestId, task.id) }}>{task.request?.requestNo ?? '—'}</button><small>{task.request?.title}</small></td><td><strong>{task.request?.form?.name || task.request?.form?.code || `Form v${task.request?.form?.version ?? '—'}`}</strong>{task.request?.form?.code && <small>{task.request.form.code} · v{task.request.form.version}</small>}</td><td><strong>{task.request?.requesterSnapshot.fullName ?? '—'}</strong><small>{task.request?.requesterSnapshot.employeeCode}</small></td><td>{task.request?.requesterSnapshot.departmentName ?? '—'}</td><td><strong>{task.stepName}</strong><small>{task.stepKey} · lần {task.stepRunNo}</small></td><td>{formatDateTime(task.assignedAt)}</td><td>{task.dueAt ? <><span>{formatDateTime(task.dueAt)}</span>{task.isOverdue && <span className="approval-overdue-badge">Quá hạn</span>}</> : 'Không có hạn'}</td><td><ApprovalTaskStatusBadge status={task.status} />{task.request && <RequestStatusBadge status={task.request.status} />}</td></tr>)}</tbody></DataTable><TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} task`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} /></>}
     </SurfaceCard>
   </>
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }

@@ -8,6 +8,7 @@ export const apiErrorCodes = [
   'FILE_ACCESS_DENIED',
   'CONCURRENT_MODIFICATION',
   'DEFINITION_VERSION_OUTDATED',
+  'EMAIL_ALREADY_EXISTS',
 ] as const
 
 export type ApiErrorCode = (typeof apiErrorCodes)[number]
@@ -47,6 +48,7 @@ const errorMessages: Record<ApiErrorCode, string> = {
   FILE_ACCESS_DENIED: 'Bạn không có quyền truy cập tệp này.',
   CONCURRENT_MODIFICATION: 'Dữ liệu vừa được thay đổi ở nơi khác. Vui lòng tải lại.',
   DEFINITION_VERSION_OUTDATED: 'Phiếu nháp đang dùng phiên bản Form–Workflow cũ. Hãy tạo phiếu mới từ phiên bản hiện hành.',
+  EMAIL_ALREADY_EXISTS: 'Email đã được sử dụng trong hệ thống.',
 }
 
 export function normalizeApiErrorCode(code?: string): string | undefined {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { AuthScreen } from './components/AuthScreen'
 import { ErrorState, LoadingState } from './components/DataStates'
 import { Workspace } from './components/Workspace'
@@ -11,12 +11,54 @@ import './App.css'
 type SessionState = 'checking' | 'anonymous' | 'authenticated' | 'error'
 const SESSION_EXPIRED_MESSAGE = 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'
 
+function getScrollbarWidth() {
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:absolute;top:-9999px;width:100px;height:100px;overflow:scroll;visibility:hidden;pointer-events:none;'
+  document.body.append(probe)
+  const width = probe.offsetWidth - probe.clientWidth
+  probe.remove()
+  return width
+}
+
+function useDocumentScrollbarCompensation() {
+  useLayoutEffect(() => {
+    const documentElement = document.documentElement
+    const appRoot = document.getElementById('root')
+    if (!appRoot) return
+
+    const scrollbarWidth = getScrollbarWidth()
+    const sync = () => {
+      const hasVerticalScrollbar = documentElement.scrollHeight > documentElement.clientHeight
+      documentElement.classList.toggle('document-scrollbar-absent', !hasVerticalScrollbar)
+      documentElement.style.setProperty('--app-scrollbar-compensation', hasVerticalScrollbar ? '0px' : `${scrollbarWidth}px`)
+    }
+    const resizeObserver = new ResizeObserver(sync)
+    resizeObserver.observe(appRoot)
+    const mutationObserver = new MutationObserver(sync)
+    mutationObserver.observe(appRoot, { childList: true, subtree: true, characterData: true })
+    window.addEventListener('resize', sync)
+    window.addEventListener('workflow:sync-scrollbar-layout', sync)
+    sync()
+
+    return () => {
+      resizeObserver.disconnect()
+      mutationObserver.disconnect()
+      window.removeEventListener('resize', sync)
+      window.removeEventListener('workflow:sync-scrollbar-layout', sync)
+      documentElement.classList.remove('document-scrollbar-absent')
+      documentElement.style.removeProperty('--app-scrollbar-compensation')
+    }
+  }, [])
+}
+
 function App() {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [sessionState, setSessionState] = useState<SessionState>('checking')
   const [sessionReloadVersion, setSessionReloadVersion] = useState(0)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [sessionNotice, setSessionNotice] = useState('')
+
+  useDocumentScrollbarCompensation()
 
   useEffect(() => {
     function onAuthEvent(event: Event) {

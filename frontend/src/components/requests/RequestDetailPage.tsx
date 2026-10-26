@@ -22,6 +22,7 @@ import {
 } from '../../types/workflow'
 import { isApiErrorCode } from '../../utils/api-errors'
 import { notifyRequestMutation } from '../../utils/request-events'
+import { formatDateTime } from '../../utils/formatters'
 import { DynamicFormRenderer, type DynamicFormRendererHandle } from '../dynamic-form'
 import { ErrorState, LoadingState, PermissionDeniedState } from '../DataStates'
 import { ApprovalTaskStatusBadge, RequestStatusBadge } from '../StatusBadge'
@@ -448,10 +449,6 @@ function historyRevisionRound(item: ApprovalHistory): number | undefined {
   if (item.revisionRound !== undefined) return item.revisionRound
   const value = item.metadata?.revisionRound
   return typeof value === 'number' ? value : undefined
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
 function confirmTitle(action: ConfirmAction): string {

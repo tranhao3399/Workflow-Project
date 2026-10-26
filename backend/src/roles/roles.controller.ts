@@ -57,14 +57,14 @@ export class RolesController {
   @ApiParam({ name: 'id', description: 'MongoDB ObjectId của vai trò.', example: '66d0f0b74d5b5d4e65e75123' })
   @ApiBody({ type: UpdateRoleDto })
   @ApiOkResponse({ description: 'Vai trò sau cập nhật.', type: RoleDataResponseDto })
-  @ApiResourceConflict('Không thể đổi mã role hệ thống hoặc ngưng role đang được gán.')
+  @ApiResourceConflict('Không thể đổi mã vai trò ADMIN hoặc ngưng vai trò đang được gán.')
   @ApiResourceNotFound()
   @ApiValidationError()
   async update(@Req() request: RequestWithContext, @Param() params: RoleIdParamDto, @Body() input: UpdateRoleDto) { return dataResponse(await this.service.update(request, params.id, input)); }
 
   @Patch(':id/status')
   @RequirePermissions('ROLE.CHANGE_STATUS')
-  @ApiOperation({ summary: 'Đổi trạng thái vai trò', description: 'Yêu cầu quyền: ROLE.CHANGE_STATUS. Không thể ngưng Role ADMIN hoạt động cuối cùng hoặc role đang được User gán.' })
+  @ApiOperation({ summary: 'Đổi trạng thái vai trò', description: 'Yêu cầu quyền: ROLE.CHANGE_STATUS. Không thể ngưng Role ADMIN hoạt động cuối cùng.' })
   @ApiParam({ name: 'id', description: 'MongoDB ObjectId của vai trò.', example: '66d0f0b74d5b5d4e65e75123' })
   @ApiBody({ type: UpdateRoleStatusDto })
   @ApiOkResponse({ description: 'Vai trò sau đổi trạng thái.', type: RoleDataResponseDto })

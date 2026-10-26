@@ -38,6 +38,7 @@ const fieldLabels: Record<FormFieldType, string> = {
 }
 
 export function FormBuilderEditorPage({ formDefinitionId, canCreate, canUpdate, canDeleteDraft, onBack, onOpen, onConfigureWorkflow, onNotify }: FormBuilderEditorPageProps) {
+  const [previewCreatedAt] = useState(() => new Date().toISOString())
   const [definition, setDefinition] = useState<FormDefinition | null>(null)
   const [draft, setDraft] = useState<FormDraft>(() => emptyDraft())
   const [originalFingerprint, setOriginalFingerprint] = useState(() => fingerprint(emptyDraft()))
@@ -89,9 +90,9 @@ export function FormBuilderEditorPage({ formDefinitionId, canCreate, canUpdate, 
     status: definition?.status ?? 'DRAFT',
     fields: reindexFields(draft.fields),
     settings: draft.settings,
-    createdAt: definition?.createdAt ?? new Date().toISOString(),
-    updatedAt: definition?.updatedAt ?? new Date().toISOString(),
-  }), [definition, draft])
+    createdAt: definition?.createdAt ?? previewCreatedAt,
+    updatedAt: definition?.updatedAt ?? previewCreatedAt,
+  }), [definition, draft, previewCreatedAt])
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('workflow:unsaved-change', { detail: isDirty }))
@@ -291,7 +292,7 @@ export function FormBuilderEditorPage({ formDefinitionId, canCreate, canUpdate, 
 
     {isEditable && <div className="form-builder-action-bar"><div><strong>{isDirty ? 'Có thay đổi chưa lưu' : 'Biểu mẫu đã được lưu'}</strong><span>Quy trình sẽ được cấu hình ở bước tiếp theo.</span></div><button className="primary-button" type="button" disabled={isSaving} onClick={() => void saveAndContinue()}>{isSaving ? 'Đang lưu...' : 'Lưu và cấu hình quy trình'}</button></div>}
 
-    {confirmation === 'DELETE' && <ConfirmDialog title="Xóa biểu mẫu nháp?" description="Bản nháp sẽ bị xóa vĩnh viễn nếu chưa được Workflow hoặc phiếu tham chiếu." confirmLabel="Xóa bản nháp" tone="danger" onCancel={() => setConfirmation(null)} onConfirm={() => void removeDraft()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." />}
+    {confirmation === 'DELETE' && <ConfirmDialog title="Xóa biểu mẫu nháp" description="Bạn có chắc chắn muốn xóa biểu mẫu nháp này?" confirmLabel="Xóa" tone="danger" onCancel={() => setConfirmation(null)} onConfirm={() => void removeDraft()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." compact />}
     {confirmation === 'CLONE' && <ConfirmDialog title="Tạo phiên bản chỉnh sửa?" description={`Hệ thống sẽ giữ nguyên phiên bản ${definition?.version} và tạo một bản DRAFT mới.`} confirmLabel="Tạo phiên bản mới" onCancel={() => setConfirmation(null)} onConfirm={() => void cloneVersion()} isConfirming={isCloning} confirmingLabel="Đang tạo..." />}
   </>
 }

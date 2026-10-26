@@ -36,7 +36,8 @@ export interface UpdateRoleInput {
 
 export interface RoleAuditLog {
   id: string
-  actorName: string
+  actor: { userId?: string; fullName?: string; employeeCode?: string; rolesAtTime?: string[] }
   action: string
   occurredAt: string
+  changes?: { before?: Record<string, unknown>; after?: Record<string, unknown> }
 }

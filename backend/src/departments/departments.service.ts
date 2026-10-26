@@ -3,7 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { escapeRegExp } from '../common/text/escape-reg-exp.js';
 import { normalizeSearchText } from '../common/text/normalize-search-text.js';
 import { Employee } from '../employees/schemas/employee.schema.js';
 import { Position } from '../positions/schemas/position.schema.js';
@@ -26,8 +29,8 @@ export class DepartmentsService {
     if (query.search?.trim()) {
       const raw = query.search.trim();
       filter.$or = [
-        { code: new RegExp(this.escapeRegExp(raw), 'i') },
-        { nameNormalized: new RegExp(this.escapeRegExp(normalizeSearchText(raw)), 'i') },
+        { code: new RegExp(escapeRegExp(raw), 'i') },
+        { nameNormalized: new RegExp(escapeRegExp(normalizeSearchText(raw)), 'i') },
       ];
     }
     const skip = (query.page - 1) * query.limit;
@@ -35,7 +38,7 @@ export class DepartmentsService {
       this.departments.find(filter).sort({ sortOrder: 1, name: 1 }).skip(skip).limit(query.limit).lean().exec(),
       this.departments.countDocuments(filter).exec(),
     ]);
-    return { data, pagination: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) } };
+    return { data, pagination: createPaginationMetadata(query.page, query.limit, total) };
   }
 
   async findCatalog(query: Pick<ListDepartmentsDto, 'active'>) {
@@ -91,7 +94,7 @@ export class DepartmentsService {
         }),
       };
     } catch (error) {
-      if (this.isDuplicate(error)) throw new ConflictException({ message: 'Một hoặc nhiều chức danh đã được gán cho phòng ban.', field: 'jobTitleIds' });
+      if (isMongoDuplicateKeyError(error)) throw new ConflictException({ message: 'Một hoặc nhiều chức danh đã được gán cho phòng ban.', field: 'jobTitleIds' });
       throw error;
     }
   }
@@ -148,7 +151,7 @@ export class DepartmentsService {
       });
       return { id: item.id, name: item.name, code: item.code, isActive: item.isActive, createdAt: item.createdAt, updatedAt: item.updatedAt };
     } catch (error) {
-      if (this.isDuplicate(error)) throw this.duplicateField('code');
+      if (isMongoDuplicateKeyError(error)) throw this.duplicateField('code');
       throw error;
     }
   }
@@ -176,7 +179,7 @@ export class DepartmentsService {
       await this.audit(request, current.isActive && !item.isActive ? 'DEPARTMENT.DEACTIVATED' : 'DEPARTMENT.UPDATED', item, this.snapshot(current), this.snapshot(item));
       return item.toObject();
     } catch (error) {
-      if (this.isDuplicate(error)) throw new ConflictException('Mã hoặc tên phòng ban đã tồn tại.');
+      if (isMongoDuplicateKeyError(error)) throw new ConflictException('Mã hoặc tên phòng ban đã tồn tại.');
       throw error;
     }
   }
@@ -224,6 +227,4 @@ export class DepartmentsService {
     return new ConflictException({ message: field === 'code' ? 'Mã phòng ban đã tồn tại.' : 'Tên phòng ban đã tồn tại.', field });
   }
 
-  private escapeRegExp(value: string) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-  private isDuplicate(error: unknown) { return typeof error === 'object' && error !== null && 'code' in error && error.code === 11000; }
 }

@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { ApprovalTask } from '../approvals/schemas/approval-task.schema.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import type { RequestDocument } from '../requests/schemas/request.schema.js';
 import {
@@ -102,7 +103,7 @@ export class WorkflowRuntimeService {
         dueAt,
       })), { session, ordered: true });
     } catch (error) {
-      if (this.isDuplicateKey(error)) {
+      if (isMongoDuplicateKeyError(error)) {
         throw this.runtimeConflict(
           'APPROVAL_TASK_ALREADY_EXISTS',
           'Nhiệm vụ phê duyệt cho bước chạy này đã tồn tại.',
@@ -435,10 +436,6 @@ export class WorkflowRuntimeService {
 
   private runtimeConflict(code: string, message: string): ConflictException {
     return new ConflictException({ code, message });
-  }
-
-  private isDuplicateKey(error: unknown): boolean {
-    return this.isRecord(error) && error.code === 11000;
   }
 
   private notificationDedupeKey(

@@ -6,6 +6,7 @@ import { CreateManagedUserDto } from './dto/create-managed-user.dto.js';
 import { UpdateManagedUserDto, UpdateManagedUserStatusDto } from './dto/update-managed-user.dto.js';
 import { UserIdParamDto } from './dto/user-id-param.dto.js';
 import { ListUsersDto } from './dto/list-users.dto.js';
+import { ListUserEmployeeOptionsDto } from './dto/list-user-employee-options.dto.js';
 import { UsersService } from './users.service.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import { dataResponse } from '../common/http/api-response.js';
@@ -35,9 +36,11 @@ export class UsersController {
 
   @Get('employee-options')
   @RequirePermissions({ any: ['USER.VIEW', 'USER.CREATE', 'USER.LINK_EMPLOYEE'] })
-  @ApiOperation({ summary: 'Danh sách nhân viên để liên kết tài khoản', description: 'Yêu cầu một trong các quyền: USER.VIEW, USER.CREATE hoặc USER.LINK_EMPLOYEE.' })
+  @ApiOperation({ summary: 'Danh sách nhân viên để liên kết tài khoản', description: 'Có thể chỉ lấy nhân viên hoạt động chưa có tài khoản; includeEmployeeId giữ lại một nhân viên đang được chọn khi cập nhật.' })
+  @ApiQuery({ name: 'availableOnly', required: false, type: Boolean, description: 'Chỉ trả nhân viên hoạt động chưa liên kết tài khoản.' })
+  @ApiQuery({ name: 'includeEmployeeId', required: false, description: 'Mã ObjectId nhân viên cần giữ trong danh sách dù đã liên kết.' })
   @ApiOkResponse({ description: 'Danh sách mã nhân viên dùng trong form tài khoản.', type: Object })
-  async findEmployeeOptions() { return dataResponse(await this.usersService.findEmployeeOptions()); }
+  async findEmployeeOptions(@Query() query: ListUserEmployeeOptionsDto) { return dataResponse(await this.usersService.findEmployeeOptions(query)); }
 
   @Post()
   @RequirePermissions('USER.CREATE')

@@ -9,7 +9,7 @@ interface AuditLogApiRecord {
   action: string
   outcome: 'SUCCESS' | 'FAILED'
   resource: { type: string; code?: string }
-  actor: { fullName?: string }
+  actor: { userId?: string; fullName?: string; employeeCode?: string }
   changes?: { before?: Record<string, unknown>; after?: Record<string, unknown> }
 }
 
@@ -33,8 +33,12 @@ export async function getUsers(): Promise<User[]> {
   return apiClient<{ data: User[] }>('/users?page=1&limit=100').then((response) => response.data)
 }
 
-export async function getUserEmployeeOptions(): Promise<UserEmployeeOption[]> {
-  return apiClient<ApiDataResponse<UserEmployeeOption[]>>('/users/employee-options').then((response) => response.data)
+export async function getUserEmployeeOptions(options: { availableOnly?: boolean; includeEmployeeId?: string } = {}): Promise<UserEmployeeOption[]> {
+  const query = new URLSearchParams()
+  if (options.availableOnly) query.set('availableOnly', 'true')
+  if (options.includeEmployeeId) query.set('includeEmployeeId', options.includeEmployeeId)
+  const suffix = query.size > 0 ? `?${query.toString()}` : ''
+  return apiClient<ApiDataResponse<UserEmployeeOption[]>>(`/users/employee-options${suffix}`).then((response) => response.data)
 }
 
 export async function getUserById(userId: string): Promise<User | null> {
@@ -43,13 +47,19 @@ export async function getUserById(userId: string): Promise<User | null> {
 }
 
 export async function createUser(values: UserFormValues & { temporaryPassword: string }): Promise<User> {
-  return apiClient<ApiDataResponse<User>>('/users', { method: 'POST', body: JSON.stringify(values) }).then((response) => response.data)
+  const { employeeId, ...payload } = values
+  return apiClient<ApiDataResponse<User>>('/users', {
+    method: 'POST',
+    body: JSON.stringify({ ...payload, ...(employeeId ? { employeeId } : {}) }),
+  }).then((response) => response.data)
 }
 
-export async function updateUser(userId: string, values: UserFormValues & { newPassword?: string }): Promise<User> {
+type UpdateUserValues = Omit<UserFormValues, 'roleIds'> & { roleIds?: string[]; newPassword?: string }
+
+export async function updateUser(userId: string, values: UpdateUserValues): Promise<User> {
   return apiClient<ApiDataResponse<User>>(`/users/${encodeURIComponent(userId)}`, {
     method: 'PATCH',
-    body: JSON.stringify({ email: values.email.trim().toLowerCase(), isActive: values.isActive, ...(values.newPassword ? { newPassword: values.newPassword } : {}) }),
+    body: JSON.stringify({ email: values.email.trim().toLowerCase(), ...(values.roleIds !== undefined ? { roleIds: values.roleIds } : {}), isActive: values.isActive, ...(values.newPassword ? { newPassword: values.newPassword } : {}) }),
   }).then((response) => response.data)
 }
 
@@ -78,14 +88,17 @@ export async function getUserActivity(userId: string): Promise<UserActivityLog[]
   const response = await apiClient<{ data: AuditLogApiRecord[] }>(`/audit-logs?resourceType=USER&resourceId=${encodeURIComponent(userId)}&page=1&limit=100`)
   return response.data.map((item) => ({
     id: item._id,
-    actorId: userId,
+    actorId: item.actor.userId ?? '',
     occurredAt: item.occurredAt,
     action: item.action,
     resourceType: item.resource.type,
     resourceCode: item.resource.code,
     outcome: item.outcome,
     description: item.actor.fullName ?? 'Người dùng hệ thống',
-    actorName: item.actor.fullName,
+    actorName: item.actor.fullName
+      ? item.actor.employeeCode ? `${item.actor.fullName} (${item.actor.employeeCode})` : item.actor.fullName
+      : undefined,
+    actorEmployeeCode: item.actor.employeeCode,
     changes: item.changes,
   }))
 }

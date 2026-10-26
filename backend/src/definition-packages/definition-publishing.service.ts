@@ -11,6 +11,7 @@ import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Connection, Model, Types } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import { DynamicFormValidatorService } from '../form-definitions/dynamic-form-validator.service.js';
 import {
@@ -370,7 +371,7 @@ export class DefinitionPublishingService {
       return result;
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      if (this.isDuplicateKey(error) || this.isConcurrentTransactionError(error)) {
+      if (isMongoDuplicateKeyError(error) || this.isConcurrentTransactionError(error)) {
         throw this.conflict(
           `DEFINITION_PACKAGE_CONCURRENT_${operation}`,
           'Gói định nghĩa vừa được thay đổi bởi một thao tác khác. Vui lòng tải lại dữ liệu và thử lại.',
@@ -450,10 +451,6 @@ export class DefinitionPublishingService {
 
   private conflict(code: string, message: string): ConflictException {
     return new ConflictException({ code, message });
-  }
-
-  private isDuplicateKey(error: unknown): boolean {
-    return this.isRecord(error) && error.code === 11000;
   }
 
   private isConcurrentTransactionError(error: unknown): boolean {

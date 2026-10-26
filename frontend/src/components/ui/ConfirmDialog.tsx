@@ -12,9 +12,10 @@ interface ConfirmDialogProps {
   confirmDisabled?: boolean
   isConfirming?: boolean
   confirmingLabel?: string
+  compact?: boolean
 }
 
-export function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, tone = 'primary', children, confirmDisabled = false, isConfirming = false, confirmingLabel = 'Đang cập nhật...' }: ConfirmDialogProps) {
+export function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, tone = 'primary', children, confirmDisabled = false, isConfirming = false, confirmingLabel = 'Đang cập nhật...', compact = false }: ConfirmDialogProps) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -28,10 +29,10 @@ export function ConfirmDialog({ title, description, confirmLabel, onCancel, onCo
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="confirm-panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
-        <p className="state-kicker">XÁC NHẬN THAO TÁC</p>
+      <section className={compact ? 'confirm-panel confirm-panel-compact' : 'confirm-panel'} role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+        {!compact && <p className="state-kicker">XÁC NHẬN THAO TÁC</p>}
         <h2 id="confirm-dialog-title">{title}</h2>
-        <p>{description}</p>
+        <p className={compact ? 'confirm-panel-message' : undefined}>{description}</p>
         {children}
         <div className="modal-actions"><button className="secondary-button" ref={cancelButtonRef} type="button" onClick={onCancel} disabled={isConfirming}>Hủy</button><button className={tone === 'danger' ? 'danger-button' : 'primary-button'} type="button" onClick={onConfirm} disabled={confirmDisabled || isConfirming}>{isConfirming ? confirmingLabel : confirmLabel}</button></div>
       </section>

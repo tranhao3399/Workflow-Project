@@ -14,6 +14,9 @@ import { ListEmployeesDto } from './dto/list-employees.dto.js';
 import { UpdateEmployeeDto } from './dto/update-employee.dto.js';
 import { Employee, EmployeeDocument } from './schemas/employee.schema.js';
 import { normalizeSearchText } from '../common/text/normalize-search-text.js';
+import { escapeRegExp } from '../common/text/escape-reg-exp.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 
 @Injectable()
 export class EmployeesService {
@@ -39,8 +42,8 @@ export class EmployeesService {
     if (query.isActive === true) filter.isActive = { $ne: false };
     if (query.search?.trim()) {
       const rawSearch = query.search.trim();
-      const expression = new RegExp(this.escapeRegExp(rawSearch), 'i');
-      const normalizedExpression = new RegExp(this.escapeRegExp(normalizeSearchText(rawSearch)), 'i');
+      const expression = new RegExp(escapeRegExp(rawSearch), 'i');
+      const normalizedExpression = new RegExp(escapeRegExp(normalizeSearchText(rawSearch)), 'i');
       const positions = await this.positionModel.find({ nameNormalized: normalizedExpression }).select({ _id: 1 }).lean().exec();
       filter.$or = [{ employeeCode: expression }, { fullNameNormalized: normalizedExpression }, { workEmail: expression }, { positionId: { $in: positions.map((position) => position._id) } }];
     }
@@ -50,12 +53,12 @@ export class EmployeesService {
       this.employeeModel.find(filter).select('-dateOfBirth').sort({ createdAt: -1 }).skip(skip).limit(query.limit).populate('departmentId', 'name').populate('positionId', 'name').populate('managerId', 'fullName').lean().exec(),
       this.employeeModel.countDocuments(filter).exec(),
     ]);
-    return { data: await this.toDisplayMany(data), pagination: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) } };
+    return { data: await this.toDisplayMany(data), pagination: createPaginationMetadata(query.page, query.limit, total) };
   }
 
   async findOne(id: string) {
     const employee = await this.employeeModel.findById(id).populate('departmentId', 'name').populate('positionId', 'name').populate('managerId', 'fullName').lean().exec();
-    if (!employee) throw new NotFoundException('Employee not found');
+    if (!employee) throw new NotFoundException('Không tìm thấy nhân viên.');
     return (await this.toDisplayMany([employee]))[0];
   }
 
@@ -78,7 +81,14 @@ export class EmployeesService {
         return (await this.toDisplayMany([employee.toObject()]))[0];
       } catch (error) {
         if (this.isDuplicateEmployeeCodeError(error)) continue;
-        if (this.isDuplicateKeyError(error)) throw new ConflictException('Email công việc hoặc tài khoản liên kết đã tồn tại');
+        if (isMongoDuplicateKeyError(error) && typeof error.keyPattern?.workEmail !== 'undefined') {
+          throw new ConflictException({
+            message: 'Email đã được sử dụng cho một nhân viên khác.',
+            code: 'EMAIL_ALREADY_EXISTS',
+            field: 'workEmail',
+          });
+        }
+        if (isMongoDuplicateKeyError(error)) throw new ConflictException('Dữ liệu nhân viên đã tồn tại.');
         throw error;
       }
     }
@@ -96,9 +106,9 @@ export class EmployeesService {
 
   async update(request: RequestWithContext, id: string, input: UpdateEmployeeDto) {
     const employee = await this.employeeModel.findById(id).exec();
-    if (!employee) throw new NotFoundException('Employee not found');
+    if (!employee) throw new NotFoundException('Không tìm thấy nhân viên.');
     if (input.departmentId === null || input.positionId === null) {
-      throw new BadRequestException('Department and job title cannot be removed from an employee');
+      throw new BadRequestException('Phòng ban và chức danh của nhân viên không được để trống.');
     }
     const before = this.snapshot(employee);
     const nextManagerId = input.managerId === null ? undefined : input.managerId ?? employee.managerId?.toString();
@@ -130,7 +140,7 @@ export class EmployeesService {
         { $set: update, ...(Object.keys(unset).length ? { $unset: unset } : {}) },
         { returnDocument: 'after', runValidators: true },
       ).exec();
-      if (!updated) throw new NotFoundException('Employee not found');
+      if (!updated) throw new NotFoundException('Không tìm thấy nhân viên.');
 
       const after = this.snapshot(updated);
       const activeChanged = before.isActive !== after.isActive;
@@ -140,7 +150,14 @@ export class EmployeesService {
       await this.audit(request, action, updated, before, after);
       return (await this.toDisplayMany([updated.toObject()]))[0];
     } catch (error) {
-      if (this.isDuplicateKeyError(error)) throw new ConflictException('Employee code, work email, or user link already exists');
+      if (isMongoDuplicateKeyError(error) && typeof error.keyPattern?.workEmail !== 'undefined') {
+        throw new ConflictException({
+          message: 'Email đã được sử dụng cho một nhân viên khác.',
+          code: 'EMAIL_ALREADY_EXISTS',
+          field: 'workEmail',
+        });
+      }
+      if (isMongoDuplicateKeyError(error)) throw new ConflictException('Mã nhân viên hoặc dữ liệu liên kết đã tồn tại.');
       throw error;
     }
   }
@@ -148,7 +165,7 @@ export class EmployeesService {
   async uploadAvatar(request: RequestWithContext, id: string, file: Express.Multer.File | undefined) {
     const validatedFile = this.validateAvatarFile(file);
     const employee = await this.employeeModel.findById(id).exec();
-    if (!employee) throw new NotFoundException('Employee not found');
+    if (!employee) throw new NotFoundException('Không tìm thấy nhân viên.');
 
     const stored = await this.avatarStorage.store(validatedFile);
     const oldAvatarKey = employee.avatarKey;
@@ -168,7 +185,7 @@ export class EmployeesService {
 
   async removeAvatar(request: RequestWithContext, id: string) {
     const employee = await this.employeeModel.findById(id).exec();
-    if (!employee) throw new NotFoundException('Employee not found');
+    if (!employee) throw new NotFoundException('Không tìm thấy nhân viên.');
     const oldAvatarKey = employee.avatarKey;
     if (!oldAvatarKey) return (await this.toDisplayMany([employee.toObject()]))[0];
 
@@ -182,12 +199,12 @@ export class EmployeesService {
 
   private async ensureManagerIsValid(managerId?: string, employeeId?: string): Promise<void> {
     if (!managerId) return;
-    if (managerId === employeeId) throw new BadRequestException('An employee cannot be their own direct manager');
+    if (managerId === employeeId) throw new BadRequestException('Nhân viên không thể là quản lý trực tiếp của chính mình.');
     const manager = await this.employeeModel.exists({ _id: managerId, isActive: { $ne: false } });
-    if (!manager) throw new BadRequestException('Direct manager does not exist');
+    if (!manager) throw new BadRequestException('Quản lý trực tiếp không tồn tại.');
     let cursor: string | undefined = managerId;
     while (cursor) {
-      if (cursor === employeeId) throw new BadRequestException('Manager hierarchy cannot contain a cycle');
+      if (cursor === employeeId) throw new BadRequestException('Cấu trúc quản lý nhân viên không được tạo thành vòng lặp.');
       const current = await this.employeeModel.findById(cursor).select({ managerId: 1 }).lean().exec();
       cursor = current?.managerId?.toString();
     }
@@ -199,19 +216,19 @@ export class EmployeesService {
     let resolvedPositionId: string | undefined;
     if (departmentId) {
       const department = await this.departmentModel.findOne({ _id: departmentId, isActive: true }).exec();
-      if (!department) throw new BadRequestException('Department does not exist or is inactive');
+    if (!department) throw new BadRequestException('Phòng ban không tồn tại hoặc đã ngưng hoạt động.');
       resolved.departmentId = department._id;
       resolvedDepartmentId = department._id.toString();
     }
     if (positionId) {
       const position = await this.positionModel.findOne({ _id: positionId, isActive: true }).exec();
-      if (!position) throw new BadRequestException('Position does not exist or is inactive');
+    if (!position) throw new BadRequestException('Chức danh không tồn tại hoặc đã ngưng hoạt động.');
       resolved.positionId = position._id;
       resolvedPositionId = position._id.toString();
     }
-    if (!resolvedDepartmentId || !resolvedPositionId) throw new BadRequestException('Department and job title are required');
+    if (!resolvedDepartmentId || !resolvedPositionId) throw new BadRequestException('Phòng ban và chức danh là bắt buộc.');
     if (!await this.departmentPositionModel.exists({ departmentId: resolvedDepartmentId, positionId: resolvedPositionId })) {
-      throw new BadRequestException('Job title is not assigned to the selected department');
+      throw new BadRequestException('Chức danh chưa được gán cho phòng ban đã chọn.');
     }
     return resolved;
   }
@@ -234,6 +251,7 @@ export class EmployeesService {
       positionId: employee.positionId.toString(),
       ...(employee.phone ? { phone: employee.phone } : {}),
       ...(employee.address ? { address: employee.address } : {}),
+      ...(employee.dateOfBirth ? { dateOfBirth: employee.dateOfBirth } : {}),
       ...(employee.hiredAt ? { hiredAt: employee.hiredAt } : {}),
       employmentType: employee.employmentType,
       ...(employee.managerId ? { managerId: employee.managerId.toString() } : {}),
@@ -289,10 +307,10 @@ export class EmployeesService {
   }
 
   private validateAvatarFile(file: Express.Multer.File | undefined): { buffer: Buffer; contentType: 'image/jpeg' | 'image/png' } {
-    if (!file) throw new BadRequestException('Avatar file is required');
-    if (file.size <= 0 || file.size > 2 * 1024 * 1024) throw new BadRequestException('Avatar must not exceed 2 MB');
+    if (!file) throw new BadRequestException('Vui lòng chọn ảnh đại diện.');
+    if (file.size <= 0 || file.size > 2 * 1024 * 1024) throw new BadRequestException('Ảnh đại diện không được vượt quá 2 MB.');
     if (file.mimetype !== 'image/jpeg' && file.mimetype !== 'image/png') {
-      throw new BadRequestException('Only JPG and PNG avatar files are accepted');
+      throw new BadRequestException('Ảnh đại diện chỉ hỗ trợ định dạng JPG và PNG.');
     }
 
     const isJpeg = file.buffer.length >= 3 && file.buffer[0] === 0xff && file.buffer[1] === 0xd8 && file.buffer[2] === 0xff;
@@ -300,22 +318,13 @@ export class EmployeesService {
       && file.buffer[0] === 0x89 && file.buffer[1] === 0x50 && file.buffer[2] === 0x4e && file.buffer[3] === 0x47
       && file.buffer[4] === 0x0d && file.buffer[5] === 0x0a && file.buffer[6] === 0x1a && file.buffer[7] === 0x0a;
     if ((file.mimetype === 'image/jpeg' && !isJpeg) || (file.mimetype === 'image/png' && !isPng)) {
-      throw new BadRequestException('Avatar content does not match the declared image type');
+      throw new BadRequestException('Nội dung ảnh đại diện không khớp với định dạng đã khai báo.');
     }
     return { buffer: file.buffer, contentType: file.mimetype };
   }
 
-  private escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-
-  private isDuplicateKeyError(error: unknown): boolean {
-    return typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;
-  }
-
   private isDuplicateEmployeeCodeError(error: unknown): boolean {
-    return this.isDuplicateKeyError(error)
-      && 'keyPattern' in (error as Record<string, unknown>)
-      && typeof (error as { keyPattern?: Record<string, unknown> }).keyPattern?.employeeCode !== 'undefined';
+    return isMongoDuplicateKeyError(error)
+      && typeof error.keyPattern?.employeeCode !== 'undefined';
   }
 }

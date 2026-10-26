@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { deleteWorkflowDefinition, listWorkflowDefinitions } from '../../services/workflow-definitions.service'
 import { definitionStatuses, type DefinitionStatus, type WorkflowDefinition } from '../../types/workflow'
-import { formatDate } from '../../utils/formatters'
+import { formatDateTime } from '../../utils/formatters'
 import { DefinitionStatusBadge } from '../StatusBadge'
 import { ErrorState, LoadingState } from '../DataStates'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -31,7 +31,7 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<DefinitionStatus | ''>('')
   const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(20)
+  const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
@@ -98,14 +98,12 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
           <td>{item.formDefinition ? `v${item.formDefinition.version}` : '—'}</td>
           <td>v{item.version}</td>
           <td><DefinitionStatusBadge status={item.status} /></td>
-          <td>{formatDateTime(item.updatedAt)}</td>
+              <td>{formatDateTime(item.updatedAt, 'date-first')}</td>
           <td><div className="form-builder-row-actions">{item.status === 'DRAFT' && canDeleteDraft && <button className="icon-action danger-icon-action" type="button" title="Xóa bản nháp" aria-label={`Xóa ${item.name}`} onClick={(event) => { event.stopPropagation(); setDeleteTarget(item) }}>×</button>}</div></td>
         </tr>)}</tbody></DataTable>
         <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setIsLoading(true); setPage((value) => Math.max(1, value - 1)) }} onNext={() => { setIsLoading(true); setPage((value) => Math.min(totalPages, value + 1)) }} rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} Workflow`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
       </>}
     </SurfaceCard>
-    {deleteTarget && <ConfirmDialog title="Xóa Workflow nháp?" description={`${deleteTarget.code} phiên bản ${deleteTarget.version} sẽ bị xóa vĩnh viễn nếu chưa được phiếu tham chiếu.`} confirmLabel="Xóa bản nháp" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." />}
+    {deleteTarget && <ConfirmDialog title="Xóa Workflow nháp" description={`Bạn có chắc chắn muốn xóa Workflow ${deleteTarget.code} phiên bản ${deleteTarget.version}?`} confirmLabel="Xóa" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." compact />}
   </>
 }
-
-function formatDateTime(value: string): string { return `${formatDate(value)} ${new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(new Date(value))}` }

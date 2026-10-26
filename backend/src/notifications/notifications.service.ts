@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import type { SafeUser } from '../users/users.service.js';
 import { CreateNotificationDto, ListNotificationsDto } from './dto/notification.dto.js';
@@ -59,7 +60,7 @@ export class NotificationsService {
     const total = result?.total[0]?.value ?? 0;
     return {
       data: (result?.data ?? []).map((item) => this.toResponse(item, item.resolvedIsRead ?? false)),
-      pagination: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
+      pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
 

@@ -9,6 +9,7 @@ export interface User {
   roles?: UserRole[]
   roleIds?: string[]
   employeeId?: string
+  avatarUrl?: string
   isActive: boolean
   lastLoginAt?: string
   createdAt: string
@@ -34,6 +35,7 @@ export interface UserActivityLog {
   outcome: 'SUCCESS' | 'FAILED'
   description: string
   actorName?: string
+  actorEmployeeCode?: string
   changes?: { before?: Record<string, unknown>; after?: Record<string, unknown> }
 }
 

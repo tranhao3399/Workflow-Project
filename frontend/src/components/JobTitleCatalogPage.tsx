@@ -13,8 +13,8 @@ import { SurfaceCard } from './ui/SurfaceCard'
 import { TablePagination } from './ui/TablePagination'
 
 type StatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE'
-type PageSize = 5 | 10 | 20 | 50
-const pageSizes: PageSize[] = [5, 10, 20, 50]
+type PageSize = 10 | 20 | 50
+const pageSizes: PageSize[] = [10, 20, 50]
 
 interface JobTitleCatalogPageProps {
   onCreateJobTitle: () => void
@@ -92,7 +92,7 @@ export function JobTitleCatalogPage({ onCreateJobTitle, onOpenJobTitle, canCreat
   if (jobTitles === null) return <LoadingState />
 
   return <>
-    <PageHeader title="Chức danh" description="Quản lý danh mục chức danh dùng chung cho nhân viên và quy trình phê duyệt." actions={canCreateJobTitle ? <button className="primary-button compact-button" type="button" onClick={onCreateJobTitle}>Thêm chức danh</button> : undefined} />
+    <PageHeader className="catalog-page-header" title="Chức danh" actions={canCreateJobTitle ? <button className="primary-button compact-button" type="button" onClick={onCreateJobTitle}>Thêm chức danh</button> : undefined} />
     <SurfaceCard className="master-data-section">
       <ListToolbar>
         <div className="catalog-toolbar-main">

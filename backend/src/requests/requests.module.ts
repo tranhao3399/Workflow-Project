@@ -16,6 +16,11 @@ import { WorkflowDefinition, WorkflowDefinitionSchema } from '../workflow-defini
 import { WorkflowRuntimeModule } from '../workflow-runtime/workflow-runtime.module.js';
 import { WorkspaceModule, WorkspaceModuleSchema } from '../workspace-modules/schemas/workspace-module.schema.js';
 import { RequestsController } from './requests.controller.js';
+import { RequestAccessPolicy } from './request-access.policy.js';
+import { RequestActorContextService } from './request-actor-context.service.js';
+import { RequestDraftMigrationService } from './request-draft-migration.service.js';
+import { RequestQueryService } from './request-query.service.js';
+import { RequestSnapshotFactory } from './request-snapshot.factory.js';
 import { RequestsService } from './requests.service.js';
 import { Request, RequestSchema } from './schemas/request.schema.js';
 
@@ -41,6 +46,13 @@ import { Request, RequestSchema } from './schemas/request.schema.js';
     ]),
   ],
   controllers: [RequestsController],
-  providers: [RequestsService],
+  providers: [
+    RequestsService,
+    RequestQueryService,
+    RequestAccessPolicy,
+    RequestActorContextService,
+    RequestSnapshotFactory,
+    RequestDraftMigrationService,
+  ],
 })
 export class RequestsModule {}

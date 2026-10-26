@@ -4,7 +4,7 @@ export interface EmployeeAuditLog {
   _id?: string
   id?: string
   occurredAt: string
-  actor: { userId?: string; fullName?: string; rolesAtTime?: string[] }
+  actor: { userId?: string; fullName?: string; employeeCode?: string; rolesAtTime?: string[] }
   action: string
   resource: { type: string; id: string; code?: string }
   changes?: { before?: Record<string, unknown>; after?: Record<string, unknown> }

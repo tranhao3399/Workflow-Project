@@ -23,6 +23,7 @@ import type {
   FormDefinitionSnapshot,
   FormField,
 } from '../../types/workflow'
+import { formatFormDateValue } from '../../utils/formatters'
 import {
   activeFieldOptions,
   dynamicFieldError,
@@ -270,7 +271,7 @@ function ReadonlyField({ field, value, requestId }: { field: FormField; value: u
   }
   if (field.type === 'BOOLEAN') return <p className="dynamic-readonly-value">{value === true ? 'Có' : 'Không'}</p>
   if (field.type === 'NUMBER' || field.type === 'CURRENCY') return <p className="dynamic-readonly-value">{typeof value === 'number' ? new Intl.NumberFormat('vi-VN').format(value) : String(value)}</p>
-  if (field.type === 'DATE' || field.type === 'DATETIME') return <p className="dynamic-readonly-value">{formatDateTime(value, field.type === 'DATETIME')}</p>
+  if (field.type === 'DATE' || field.type === 'DATETIME') return <p className="dynamic-readonly-value">{formatFormDateValue(value, field.type === 'DATETIME')}</p>
   return <p className="dynamic-readonly-value preserve-lines">{String(value)}</p>
 }
 
@@ -449,15 +450,6 @@ function layoutSpan(field: FormField): number {
 
 function optionLabel(field: FormField, value: unknown): string {
   return field.options?.find((option) => option.value === value)?.label ?? String(value)
-}
-
-function formatDateTime(value: unknown, includeTime: boolean): string {
-  if (typeof value !== 'string') return String(value)
-  const date = new Date(includeTime ? value : `${value}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('vi-VN', includeTime
-    ? { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }
-    : { day: '2-digit', month: '2-digit', year: 'numeric' }).format(date)
 }
 
 function stringValue(value: unknown): string {

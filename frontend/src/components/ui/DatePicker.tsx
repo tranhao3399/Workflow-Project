@@ -45,7 +45,7 @@ export function DatePicker({ value, onChange, ariaLabel, placeholder = 'dd/MM/yy
   const rootRef = useRef<HTMLDivElement>(null)
   const popupRef = useRef<HTMLDivElement>(null)
   const selectedDate = dateFromValue(value)
-  const today = useMemo(() => new Date(), [])
+  const [today] = useState(() => new Date())
   const [displayValue, setDisplayValue] = useState(() => formatDate(value))
   const [visibleMonth, setVisibleMonth] = useState(() => selectedDate ?? today)
   const [isOpen, setIsOpen] = useState(false)

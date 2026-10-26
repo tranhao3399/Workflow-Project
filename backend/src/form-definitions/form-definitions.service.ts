@@ -8,7 +8,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { escapeRegExp } from '../common/text/escape-reg-exp.js';
 import { Request } from '../requests/schemas/request.schema.js';
 import { WorkflowDefinition } from '../workflow-definitions/schemas/workflow-definition.schema.js';
 import { User } from '../users/schemas/user.schema.js';
@@ -40,7 +43,7 @@ export class FormDefinitionsService {
     const filter: Record<string, unknown> = {};
     if (query.status) filter.status = query.status;
     if (query.search) {
-      const search = new RegExp(this.escapeRegExp(query.search), 'i');
+      const search = new RegExp(escapeRegExp(query.search), 'i');
       filter.$or = [{ code: search }, { name: search }];
     }
     const skip = (query.page - 1) * query.limit;
@@ -53,12 +56,7 @@ export class FormDefinitionsService {
     const updaterNames = await this.resolveUpdaterNames(items as StoredFormDefinition[]);
     return {
       data: items.map((item) => this.toResponse(item as StoredFormDefinition, updaterNames)),
-      pagination: {
-        page: query.page,
-        limit: query.limit,
-        total,
-        totalPages: Math.ceil(total / query.limit),
-      },
+      pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
 
@@ -108,7 +106,7 @@ export class FormDefinitionsService {
       });
       return this.toResponse(item);
     } catch (error) {
-      if (this.isDuplicateKey(error)) throw this.duplicateVersionError();
+      if (isMongoDuplicateKeyError(error)) throw this.duplicateVersionError();
       throw error;
     }
   }
@@ -224,7 +222,7 @@ export class FormDefinitionsService {
       });
       return this.toResponse(cloned);
     } catch (error) {
-      if (this.isDuplicateKey(error)) throw this.duplicateVersionError();
+      if (isMongoDuplicateKeyError(error)) throw this.duplicateVersionError();
       throw error;
     }
   }
@@ -299,10 +297,6 @@ export class FormDefinitionsService {
     return new ConflictException('Mã/version biểu mẫu đã tồn tại hoặc mã biểu mẫu đã có một DRAFT.');
   }
 
-  private isDuplicateKey(error: unknown): boolean {
-    return this.isRecord(error) && error.code === 11000;
-  }
-
   private toResponse(item: StoredFormDefinition | FormDefinitionDocument, updaterNames: ReadonlyMap<string, string> = new Map()) {
     const updaterId = item.updatedBy?.toString();
     return {
@@ -334,10 +328,6 @@ export class FormDefinitionsService {
       user._id.toString(),
       (user.employeeId ? employeeNames.get(user.employeeId.toString()) : undefined) ?? user.displayName ?? user.email,
     ]));
-  }
-
-  private escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

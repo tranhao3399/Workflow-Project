@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { listOwnRequests } from '../../services/requests.service'
 import { requestStatus, type RequestFilter, type RequestSummary } from '../../types/workflow'
+import { formatDateTime } from '../../utils/formatters'
 import { RequestStatusBadge } from '../StatusBadge'
 import { ErrorState, LoadingState } from '../DataStates'
 import { DataTable, EmptyTableRow } from '../ui/DataTable'
@@ -41,7 +42,7 @@ export function RequestCatalogPage({ canCreate, onCreate, onOpen }: RequestCatal
   const [tab, setTab] = useState<RequestTab>('ALL')
   const [sort, setSort] = useState('updatedAt:desc')
   const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(20)
+  const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
@@ -96,8 +97,4 @@ export function RequestCatalogPage({ canCreate, onCreate, onOpen }: RequestCatal
       {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : <><DataTable className="admin-table request-table" fixedLayout><thead><tr><th>Mã phiếu</th><th>Form</th><th>Tiêu đề</th><th>Trạng thái</th><th>Bước hiện tại</th><th>Ngày tạo</th><th>Cập nhật</th></tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={7} message="Không có phiếu phù hợp." /> : items.map((item) => <tr className="request-row" key={item.id} onClick={() => onOpen(item.id)}><td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpen(item.id) }}>{item.requestNo}</button></td><td>{item.form ? <><strong>{item.form.name}</strong><small className="request-form-version">{item.form.code} · v{item.form.version}</small></> : `Form v${item.formVersion}`}</td><td><strong>{item.title}</strong></td><td><RequestStatusBadge status={item.status} /></td><td>{item.currentStepName || item.currentStepKey || '—'}</td><td>{formatDateTime(item.createdAt)}</td><td>{formatDateTime(item.updatedAt)}</td></tr>)}</tbody></DataTable><TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} phiếu`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} /></>}
     </SurfaceCard>
   </>
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }

@@ -26,15 +26,25 @@ export function updateRoleStatusFromApi(id: string, isActive: boolean): Promise<
   return apiClient<ApiDataResponse<RoleRecord>>(`/roles/${id}/status`, { method: 'PATCH', body: JSON.stringify({ isActive }) }).then((response) => response.data)
 }
 
+export function deleteRoleFromApi(id: string): Promise<void> {
+  return apiClient(`/roles/${id}`, { method: 'DELETE' }).then(() => undefined)
+}
+
 interface AuditLogResponse {
-  data: Array<{ _id: string; action: string; occurredAt: string; actor: { fullName?: string } }>
+  data: Array<{
+    _id: string
+    action: string
+    occurredAt: string
+    actor: { userId?: string; fullName?: string; employeeCode?: string; rolesAtTime?: string[] }
+    changes?: { before?: Record<string, unknown>; after?: Record<string, unknown> }
+  }>
   pagination: { totalPages: number }
 }
 
 export async function getRoleAuditLogs(roleId: string, page = 1): Promise<{ items: RoleAuditLog[]; hasMore: boolean }> {
-  const response = await apiClient<AuditLogResponse>(`/audit-logs?resourceType=ROLE&resourceId=${encodeURIComponent(roleId)}&page=${page}&limit=10`)
+  const response = await apiClient<AuditLogResponse>(`/audit-logs?resourceType=ROLE&resourceId=${encodeURIComponent(roleId)}&page=${page}&limit=5`)
   return {
-    items: response.data.map((item) => ({ id: item._id, actorName: item.actor.fullName ?? 'Người dùng hệ thống', action: item.action, occurredAt: item.occurredAt })),
+    items: response.data.map((item) => ({ id: item._id, actor: item.actor, action: item.action, occurredAt: item.occurredAt, changes: item.changes })),
     hasMore: page < response.pagination.totalPages,
   }
 }

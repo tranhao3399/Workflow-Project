@@ -20,9 +20,14 @@ const request = { headers: { 'user-agent': 'vitest' }, ip: '127.0.0.1', socket: 
 
 function queryResult<T>(value: T) { return { exec: vi.fn().mockResolvedValue(value) }; }
 
-function createService(overrides: { sessionFindOne?: ReturnType<typeof vi.fn>; sessionFindOneAndUpdate?: ReturnType<typeof vi.fn>; sessionCreate?: ReturnType<typeof vi.fn> } = {}) {
+function createService(overrides: {
+  sessionFindOne?: ReturnType<typeof vi.fn>;
+  sessionFindOneAndUpdate?: ReturnType<typeof vi.fn>;
+  sessionCreate?: ReturnType<typeof vi.fn>;
+  userFindByEmail?: ReturnType<typeof vi.fn>;
+} = {}) {
   const users = {
-    findByEmailForAuth: vi.fn().mockResolvedValue(user),
+    findByEmailForAuth: overrides.userFindByEmail ?? vi.fn().mockResolvedValue(user),
     resetLoginFailures: vi.fn().mockResolvedValue(undefined),
     recordLogin: vi.fn().mockResolvedValue(undefined),
     toSafeUser: vi.fn().mockResolvedValue(safeUser),
@@ -44,8 +49,36 @@ function createService(overrides: { sessionFindOne?: ReturnType<typeof vi.fn>; s
   const mail = { sendPasswordResetOtp: vi.fn().mockResolvedValue(undefined) };
   const config = { get: vi.fn((key: string, fallback?: string) => key === 'SESSION_ABSOLUTE_TTL_HOURS' ? '24' : fallback) };
   const passwordResetRequest = {};
-  return { service: new AuthService(users as never, jwt as never, audit as never, mail as never, config as never, session as never, rateLimit as never, passwordResetRequest as never), users, session, jwt };
+  return { service: new AuthService(users as never, jwt as never, audit as never, mail as never, config as never, session as never, rateLimit as never, passwordResetRequest as never), users, session, rateLimit, mail, jwt };
 }
+
+describe('AuthService password reset eligibility', () => {
+  it('rejects an unregistered email without claiming a send slot or dispatching an email', async () => {
+    const { service, rateLimit, mail } = createService({ userFindByEmail: vi.fn().mockResolvedValue(null) });
+
+    await expect(service.requestPasswordReset(request as never, { email: 'missing@example.com' }))
+      .rejects.toMatchObject({
+        status: 404,
+        response: { code: 'PASSWORD_RESET_ACCOUNT_NOT_FOUND', message: 'Email này chưa được đăng ký tài khoản.' },
+      });
+    expect(rateLimit.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(mail.sendPasswordResetOtp).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inactive account without claiming a send slot or dispatching an email', async () => {
+    const { service, rateLimit, mail } = createService({
+      userFindByEmail: vi.fn().mockResolvedValue({ ...user, isActive: false }),
+    });
+
+    await expect(service.requestPasswordReset(request as never, { email: user.email }))
+      .rejects.toMatchObject({
+        status: 403,
+        response: { code: 'PASSWORD_RESET_ACCOUNT_INACTIVE', message: 'Tài khoản này đang ngưng hoạt động. Vui lòng liên hệ quản trị viên.' },
+      });
+    expect(rateLimit.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(mail.sendPasswordResetOtp).not.toHaveBeenCalled();
+  });
+});
 
 describe('AuthService session lifecycle', () => {
   it('creates a session that expires exactly 24 hours after a successful login', async () => {

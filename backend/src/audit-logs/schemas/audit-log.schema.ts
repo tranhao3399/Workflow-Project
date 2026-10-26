@@ -10,6 +10,9 @@ export class AuditActor {
   @Prop({ required: false, trim: true, maxlength: 100 })
   fullName?: string;
 
+  @Prop({ required: false, trim: true, maxlength: 64 })
+  employeeCode?: string;
+
   @Prop({ required: false, trim: true, lowercase: true, maxlength: 255 })
   email?: string;
 

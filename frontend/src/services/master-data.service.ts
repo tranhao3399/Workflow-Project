@@ -187,7 +187,7 @@ export interface DepartmentAuditLog {
   _id?: string
   id?: string
   occurredAt: string
-  actor: { fullName?: string; rolesAtTime?: string[] }
+  actor: { userId?: string; fullName?: string; employeeCode?: string; rolesAtTime?: string[] }
   action: string
   changes?: { before?: Record<string, unknown>; after?: Record<string, unknown> }
 }
@@ -196,7 +196,7 @@ export interface JobTitleAuditLog {
   _id?: string
   id?: string
   occurredAt: string
-  actor: { fullName?: string; rolesAtTime?: string[] }
+  actor: { userId?: string; fullName?: string; employeeCode?: string; rolesAtTime?: string[] }
   action: string
   changes?: { before?: Record<string, unknown>; after?: Record<string, unknown> }
 }

@@ -19,6 +19,20 @@ const ROLE_SEEDS: Array<Pick<Role, 'key' | 'name' | 'permissionKeys' | 'isSystem
   { key: UserRole.ADMIN, name: 'Quản trị viên', permissionKeys: ALL_PERMISSION_KEYS, isSystem: true, isActive: true },
 ];
 
+/** Permission module keys used before Request and Approval became separate plural modules. */
+const LEGACY_PERMISSION_KEY_MAP: Readonly<Record<string, string>> = {
+  'REQUEST.VIEW': 'REQUESTS.VIEW_OWN',
+  'REQUEST.CREATE': 'REQUESTS.CREATE',
+  'REQUEST.UPDATE': 'REQUESTS.UPDATE_OWN_DRAFT',
+  'REQUEST.DELETE': 'REQUESTS.DELETE_OWN_DRAFT',
+  'REQUEST.SUBMIT': 'REQUESTS.SUBMIT',
+  'REQUEST.CANCEL': 'REQUESTS.CANCEL_OWN',
+  'REQUEST.VOID': 'REQUESTS.VOID',
+  'APPROVAL.VIEW': 'APPROVALS.VIEW_ASSIGNED',
+  'APPROVAL.APPROVE_ASSIGNED': 'APPROVALS.APPROVE_ASSIGNED',
+  'APPROVAL.REASSIGN': 'APPROVALS.REASSIGN',
+};
+
 type StoredRole = Role & { _id: Types.ObjectId; createdAt?: Date; updatedAt?: Date };
 
 @Injectable()
@@ -30,7 +44,8 @@ export class RolesService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    await Promise.all(ROLE_SEEDS.map(async (role) => {
+    const hasSystemRoles = await this.model.exists({ isSystem: true });
+    if (!hasSystemRoles) await Promise.all(ROLE_SEEDS.map(async (role) => {
       const permissionKeys = this.normalizePermissionKeys(role.permissionKeys);
       const update = role.key === UserRole.ADMIN
         ? {
@@ -130,15 +145,12 @@ export class RolesService implements OnModuleInit {
     const nextIsActive = input.isActive === undefined ? current.isActive : input.isActive;
 
     if (input.key !== undefined) {
-      if (current.isSystem) throw new ConflictException({ message: 'Không thể đổi mã vai trò hệ thống.', field: 'key' });
+      if (current.key === UserRole.ADMIN) throw new ConflictException({ message: 'Không thể đổi mã vai trò ADMIN.', field: 'key' });
       if (await this.model.exists({ key: nextKey, _id: { $ne: current._id } })) {
         throw new ConflictException({ message: 'Mã vai trò đã tồn tại.', field: 'key' });
       }
     }
     if (input.name !== undefined) await this.ensureNameAvailable(nextName, id);
-    if (current.isActive && !nextIsActive && await this.assignedUserCount(current as StoredRole) > 0) {
-      throw new ConflictException('Không thể ngưng hoạt động vai trò đang được gán cho tài khoản.');
-    }
     if (current.key === UserRole.ADMIN && current.isActive && !nextIsActive) await this.ensureNotLastAdminRole();
 
     const hasKeyChange = nextKey !== current.key;
@@ -183,10 +195,10 @@ export class RolesService implements OnModuleInit {
   async remove(request: RequestWithContext, id: string): Promise<void> {
     const current = await this.model.findById(id).exec();
     if (!current) throw new NotFoundException('Không tìm thấy vai trò.');
-    if (current.isSystem) throw new ConflictException('Không thể xóa vai trò hệ thống.');
     if (await this.assignedUserCount(current as StoredRole) > 0) {
       throw new ConflictException('Không thể xóa vai trò đang được gán cho tài khoản.');
     }
+    if (current.isSystem) throw new ConflictException('Không thể xóa vai trò hệ thống.');
     await this.model.deleteOne({ _id: current._id }).exec();
     await this.record(request, 'ROLE.DELETED', current, this.snapshot(current), undefined);
   }
@@ -202,7 +214,7 @@ export class RolesService implements OnModuleInit {
   }
 
   private normalizePermissionKeys(values: string[]): string[] {
-    const selected = [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+    const selected = [...new Set(values.map((value) => this.mapLegacyPermissionKey(value)).filter(Boolean))];
     const invalidPermissionKeys = selected.filter((value) => !PERMISSION_KEYS.has(value));
     if (invalidPermissionKeys.length) {
       throw new ConflictException({
@@ -226,7 +238,16 @@ export class RolesService implements OnModuleInit {
   }
 
   private currentPermissionKeys(item: RoleDocument): string[] {
-    return [...new Set(item.permissionKeys ?? [])];
+    return [...new Set(
+      (item.permissionKeys ?? [])
+        .map((value) => this.mapLegacyPermissionKey(value))
+        .filter((value) => PERMISSION_KEYS.has(value)),
+    )];
+  }
+
+  private mapLegacyPermissionKey(value: string): string {
+    const key = value.trim();
+    return LEGACY_PERMISSION_KEY_MAP[key] ?? key;
   }
 
   private samePermissionKeys(first: string[], second: string[]): boolean {

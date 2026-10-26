@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError } from '../../services/api-client'
 import { cloneFormDefinition, deleteFormDefinition, listFormDefinitions } from '../../services/form-definitions.service'
 import { definitionStatuses, type DefinitionStatus, type FormDefinition } from '../../types/workflow'
-import { formatDate } from '../../utils/formatters'
+import { formatDateTime } from '../../utils/formatters'
 import { DefinitionStatusBadge } from '../StatusBadge'
 import { ErrorState, LoadingState } from '../DataStates'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -33,7 +33,7 @@ export function FormBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate, on
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<DefinitionStatus | ''>('')
   const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(20)
+  const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
@@ -143,7 +143,7 @@ export function FormBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate, on
             <td>v{item.version}</td>
             <td><DefinitionStatusBadge status={item.status} /></td>
             <td>{item.updatedBy?.name ?? '—'}</td>
-            <td>{formatDateTime(item.updatedAt)}</td>
+            <td>{formatDateTime(item.updatedAt, 'date-first')}</td>
             <td><div className="form-builder-row-actions">
               {item.status !== 'DRAFT' && canCreate && <button className="secondary-button" type="button" disabled={cloningId === item.id} onClick={(event) => { event.stopPropagation(); void clone(item) }}>{cloningId === item.id ? 'Đang tạo...' : 'Tạo bản nháp'}</button>}
               {item.status === 'DRAFT' && canDeleteDraft && <button className="icon-action danger-icon-action" type="button" title="Xóa bản nháp" aria-label={`Xóa ${item.name}`} onClick={(event) => { event.stopPropagation(); setDeleteTarget(item) }}>×</button>}
@@ -153,12 +153,8 @@ export function FormBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate, on
         <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setIsLoading(true); setPage((value) => Math.max(1, value - 1)) }} onNext={() => { setIsLoading(true); setPage((value) => Math.min(totalPages, value + 1)) }} rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} biểu mẫu`} pageSize={limit} pageSizes={pageSizes} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
       </>}
     </SurfaceCard>
-    {deleteTarget && <ConfirmDialog title="Xóa biểu mẫu nháp?" description={`Biểu mẫu ${deleteTarget.code} phiên bản ${deleteTarget.version} sẽ bị xóa. Thao tác này không thể hoàn tác.`} confirmLabel="Xóa bản nháp" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." />}
+    {deleteTarget && <ConfirmDialog title="Xóa biểu mẫu nháp" description={`Bạn có chắc chắn muốn xóa biểu mẫu ${deleteTarget.code} phiên bản ${deleteTarget.version}?`} confirmLabel="Xóa" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." compact />}
   </>
-}
-
-function formatDateTime(value: string): string {
-  return `${formatDate(value)} ${new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(new Date(value))}`
 }
 
 function statusLabel(status: DefinitionStatus): string {

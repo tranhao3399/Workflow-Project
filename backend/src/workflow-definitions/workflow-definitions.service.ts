@@ -3,7 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { escapeRegExp } from '../common/text/escape-reg-exp.js';
 import { FormDefinition } from '../form-definitions/schemas/form-definition.schema.js';
 import { Request } from '../requests/schemas/request.schema.js';
 import {
@@ -43,7 +46,7 @@ export class WorkflowDefinitionsService {
     if (query.status) filter.status = query.status;
     if (query.formDefinitionId) filter.formDefinitionId = new Types.ObjectId(query.formDefinitionId);
     if (query.search) {
-      const pattern = new RegExp(this.escapeRegExp(query.search), 'i');
+      const pattern = new RegExp(escapeRegExp(query.search), 'i');
       const matchingForms = await this.forms.find({ $or: [{ code: pattern }, { name: pattern }] }).select({ _id: 1 }).lean().exec();
       filter.$or = [{ code: pattern }, { name: pattern }, { formDefinitionId: { $in: matchingForms.map((item) => item._id) } }];
     }
@@ -56,7 +59,7 @@ export class WorkflowDefinitionsService {
     const forms = await this.formMap(items as StoredWorkflow[]);
     return {
       data: items.map((item) => this.toResponse(item as StoredWorkflow, forms, false)),
-      pagination: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
+      pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
 
@@ -117,7 +120,7 @@ export class WorkflowDefinitionsService {
       });
       return this.toResponse(item, new Map([[form._id.toString(), form as StoredForm]]));
     } catch (error) {
-      if (this.isDuplicateKey(error)) throw this.duplicateError();
+      if (isMongoDuplicateKeyError(error)) throw this.duplicateError();
       throw error;
     }
   }
@@ -188,7 +191,7 @@ export class WorkflowDefinitionsService {
       });
       return this.toResponse(cloned, new Map([[targetForm._id.toString(), targetForm as StoredForm]]));
     } catch (error) {
-      if (this.isDuplicateKey(error)) throw this.duplicateError();
+      if (isMongoDuplicateKeyError(error)) throw this.duplicateError();
       throw error;
     }
   }
@@ -291,9 +294,7 @@ export class WorkflowDefinitionsService {
   }
 
   private duplicateError(): ConflictException { return new ConflictException('Mã/version Workflow đã tồn tại hoặc Form đã có Workflow DRAFT.'); }
-  private isDuplicateKey(error: unknown): boolean { return this.isRecord(error) && error.code === 11000; }
   private isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null; }
-  private escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
   private stableSerialize(value: unknown): string {
     if (value === null || value === undefined) return String(value);

@@ -83,6 +83,12 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
     if (view === 'verify-reset') otpInputs.current[0]?.focus()
   }, [view])
 
+  useEffect(() => {
+    if (view !== 'request-reset' || !error) return
+    const timeoutId = window.setTimeout(() => setError(''), 4000)
+    return () => window.clearTimeout(timeoutId)
+  }, [error, view])
+
   function beginSubmit(): boolean {
     if (submittingRef.current) return false
     submittingRef.current = true
@@ -259,7 +265,8 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
 
   return <AuthLayout title={heading.title} description={heading.description}>
     {notice && view !== 'verify-reset' && <p className="feedback feedback-info" role="status">{notice}</p>}
-    {error && view !== 'login' && view !== 'verify-reset' && <p className="feedback feedback-error" role="alert">{error}</p>}
+    {error && view === 'reset-password' && <p className="feedback feedback-error" role="alert">{error}</p>}
+    {error && view === 'request-reset' && <div className="toast-message toast-error" role="alert">{error}</div>}
 
     {view === 'login' && <form className="auth-form" onSubmit={submitLogin}>
       <label htmlFor="auth-email">Email</label>
@@ -276,7 +283,7 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
 
     {view === 'request-reset' && <form className="auth-form" onSubmit={sendOtp}>
       <label htmlFor="reset-email">Email</label>
-      <input id="reset-email" type="email" autoComplete="email" value={resetEmail} onChange={(event) => setResetEmail(event.target.value)} placeholder="name@company.com" required />
+      <input id="reset-email" type="email" autoComplete="email" value={resetEmail} onChange={(event) => { setResetEmail(event.target.value); setError('') }} placeholder="name@company.com" required />
       <button className="primary-button auth-submit" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Đang gửi...' : 'Gửi mã xác minh'}</button>
       <button className="auth-link-button auth-back-button" type="button" onClick={returnToLogin} disabled={isSubmitting}>Quay lại đăng nhập</button>
     </form>}

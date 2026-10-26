@@ -15,7 +15,10 @@ import {
 } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { escapeRegExp } from '../common/text/escape-reg-exp.js';
 import { Department } from '../departments/schemas/department.schema.js';
 import { Employee } from '../employees/schemas/employee.schema.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
@@ -99,7 +102,7 @@ export class ApprovalsService {
       taskFilter.requestId = { $in: allowedRequestIds };
     }
     if (query.search) {
-      const search = new RegExp(this.escapeRegExp(query.search), 'i');
+      const search = new RegExp(escapeRegExp(query.search), 'i');
       const matchingRequests = await this.requests.find({
         ...(allowedRequestIds ? { _id: { $in: allowedRequestIds } } : {}),
         $or: [
@@ -132,12 +135,7 @@ export class ApprovalsService {
         task as StoredTask,
         requestsById.get(task.requestId.toString()),
       )),
-      pagination: {
-        page: query.page,
-        limit: query.limit,
-        total,
-        totalPages: Math.ceil(total / query.limit),
-      },
+      pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
 
@@ -276,7 +274,7 @@ export class ApprovalsService {
           dueAt: task.dueAt,
         }], { session });
       } catch (error) {
-        if (this.isDuplicateKey(error)) {
+        if (isMongoDuplicateKeyError(error)) {
           throw new ConflictException({
             code: 'ASSIGNEE_ALREADY_HAS_TASK',
             message: 'Người dùng này đã có task trong cùng bước xử lý.',
@@ -720,14 +718,6 @@ export class ApprovalsService {
     return Array.isArray(error.errorLabels) && error.errorLabels.some((label) => (
       label === 'TransientTransactionError' || label === 'UnknownTransactionCommitResult'
     ));
-  }
-
-  private isDuplicateKey(error: unknown): boolean {
-    return this.isRecord(error) && error.code === 11000;
-  }
-
-  private escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

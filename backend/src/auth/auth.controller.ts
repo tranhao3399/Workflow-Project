@@ -11,7 +11,7 @@ import { RegisterDto } from './dto/register.dto.js';
 import { ForgotPasswordRequestDto, ForgotPasswordResetDto, ForgotPasswordVerifyDto } from './dto/forgot-password.dto.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ApiAuthenticationErrors, ApiDataResponseDto, ApiResourceConflict, ApiValidationError } from '../common/http/swagger-response.dto.js';
 
 @Controller('auth')
@@ -42,10 +42,12 @@ export class AuthController {
 
   @Post('forgot-password/request')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Yêu cầu mã đặt lại mật khẩu', description: 'Gửi OTP qua SMTP nếu email thuộc một tài khoản đang hoạt động. Phản hồi luôn chung để không tiết lộ trạng thái email.' })
+  @ApiOperation({ summary: 'Yêu cầu mã đặt lại mật khẩu', description: 'Gửi OTP qua SMTP khi email thuộc một tài khoản đang hoạt động.' })
   @ApiConsumes('application/json')
   @ApiBody({ type: ForgotPasswordRequestDto })
   @ApiOkResponse({ description: 'Phản hồi chung cho yêu cầu gửi mã.', type: ApiDataResponseDto })
+  @ApiResponse({ status: HttpStatus.FORBIDDEN, description: 'Tài khoản đang ngưng hoạt động.' })
+  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Email chưa được đăng ký tài khoản.' })
   @ApiValidationError()
   async requestPasswordReset(@Req() request: RequestWithContext, @Body() input: ForgotPasswordRequestDto) {
     return dataResponse(await this.authService.requestPasswordReset(request, input));

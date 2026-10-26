@@ -16,6 +16,9 @@ import type { RequestWithContext } from '../common/http/request-context.interfac
 import { Department } from '../departments/schemas/department.schema.js';
 import { Position } from '../positions/schemas/position.schema.js';
 import { normalizeSearchText } from '../common/text/normalize-search-text.js';
+import { escapeRegExp } from '../common/text/escape-reg-exp.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 
 export interface SafeUser {
   id: string;
@@ -74,7 +77,7 @@ export class UsersService {
 
   async create(input: CreateUserInput): Promise<UserDocument> {
     const role = await this.roleModel.findOne({ key: input.role, isActive: true }).select({ _id: 1 }).lean().exec();
-    if (!role) throw new BadRequestException('Default role does not exist or is inactive');
+    if (!role) throw new BadRequestException('Vai trò mặc định không tồn tại hoặc đã ngưng hoạt động.');
     return this.userModel.create({
       displayName: input.fullName.trim(),
       email: input.email,
@@ -171,8 +174,8 @@ export class UsersService {
     }
     if (query.search?.trim()) {
       const rawSearch = query.search.trim();
-      const search = new RegExp(this.escapeRegExp(rawSearch), 'i');
-      const normalizedSearch = new RegExp(this.escapeRegExp(normalizeSearchText(rawSearch)), 'i');
+      const search = new RegExp(escapeRegExp(rawSearch), 'i');
+      const normalizedSearch = new RegExp(escapeRegExp(normalizeSearchText(rawSearch)), 'i');
       const employees = await this.employeeModel.find({
         $or: [{ employeeCode: search }, { fullNameNormalized: normalizedSearch }],
       }).select({ _id: 1 }).lean().exec();
@@ -189,19 +192,24 @@ export class UsersService {
     ]);
     return {
       data: users.map((user) => this.buildSafeUser(user, this.rolesForUser(user, roleMap), profileMap.get(user.id))),
-      pagination: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
+      pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
 
-  async findEmployeeOptions(): Promise<Array<{ id: string; employeeCode: string; fullName: string; department: string; isActive: boolean; userId?: string }>> {
+  async findEmployeeOptions(query: { availableOnly?: boolean; includeEmployeeId?: string } = {}): Promise<Array<{ id: string; employeeCode: string; fullName: string; department: string; isActive: boolean; userId?: string }>> {
     const [employees, users] = await Promise.all([
       this.employeeModel.find().select({ employeeCode: 1, fullName: 1, departmentId: 1, isActive: 1 }).sort({ employeeCode: 1 }).lean().exec(),
       this.userModel.find({ employeeId: { $exists: true } }).select({ _id: 1, employeeId: 1 }).lean().exec(),
     ]);
     const userIdByEmployeeId = new Map(users.flatMap((user) => user.employeeId ? [[user.employeeId.toString(), user._id.toString()] as const] : []));
-    const departments = await this.departmentModel.find({ _id: { $in: employees.map((employee) => employee.departmentId) } }).select({ name: 1 }).lean().exec();
+    const eligibleEmployees = employees.filter((employee) => {
+      if (!query.availableOnly) return true;
+      const employeeId = employee._id.toString();
+      return employee.isActive && (!userIdByEmployeeId.has(employeeId) || employeeId === query.includeEmployeeId);
+    });
+    const departments = await this.departmentModel.find({ _id: { $in: eligibleEmployees.map((employee) => employee.departmentId) } }).select({ name: 1 }).lean().exec();
     const departmentById = new Map(departments.map((department) => [department._id.toString(), department.name]));
-    return employees.map((employee) => ({
+    return eligibleEmployees.map((employee) => ({
       id: employee._id.toString(),
       employeeCode: employee.employeeCode,
       fullName: employee.fullName,
@@ -213,13 +221,13 @@ export class UsersService {
 
   async findSafeById(id: string): Promise<SafeUser> {
     const user = await this.findById(id);
-    if (!user) throw new NotFoundException('User account not found');
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     return this.toSafeUser(user);
   }
 
   async findSafeByIdWithPermissions(id: string): Promise<SafeUserWithPermissions> {
     const user = await this.findById(id);
-    if (!user) throw new NotFoundException('User account not found');
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     const roleIds = user.roleIds ?? [];
     const assignedRoles = roleIds.length
       ? await this.roleModel.find({ _id: { $in: roleIds } }).exec()
@@ -235,24 +243,29 @@ export class UsersService {
 
   async createManagedAccount(request: RequestWithContext, input: CreateManagedUserDto): Promise<SafeUser> {
     const roleReferences = await this.resolveRoleReferences(input.roleIds);
-    const employee = await this.employeeModel.findById(input.employeeId).exec();
-    if (!employee) throw new BadRequestException('Employee does not exist');
-    if (await this.userModel.exists({ employeeId: employee._id })) throw new ConflictException('Employee already has an account');
+    const employee = input.employeeId ? await this.employeeModel.findById(input.employeeId).exec() : null;
+    if (input.employeeId && !employee) throw new BadRequestException('Nhân viên không tồn tại.');
+    if (employee && await this.userModel.exists({ employeeId: employee._id })) throw new ConflictException('Nhân viên đã được liên kết với một tài khoản.');
     const email = input.email.toLowerCase();
-    if (await this.findByEmailForAuth(email)) throw new ConflictException('Email is already registered');
+    if (await this.findByEmailForAuth(email)) {
+      throw new ConflictException({
+        message: 'Email đã được sử dụng.',
+        code: 'EMAIL_ALREADY_EXISTS',
+        field: 'email',
+      });
+    }
     const passwordHash = await bcrypt.hash(input.temporaryPassword, 12);
     try {
       const user = await this.userModel.create({
-        displayName: employee.fullName,
+        ...(employee ? { displayName: employee.fullName, employeeId: employee._id } : {}),
         email,
         passwordHash,
         roleIds: roleReferences.ids,
-        employeeId: employee._id,
         isActive: input.isActive,
         createdBy: request.user?.id,
         updatedBy: request.user?.id,
       });
-      await this.auditLogService.record(request, {
+      if (employee) await this.auditLogService.record(request, {
         action: 'EMPLOYEE.USER_LINKED',
         outcome: AuditOutcome.SUCCESS,
         resource: { type: 'EMPLOYEE', id: employee._id.toString(), code: employee.employeeCode },
@@ -262,28 +275,35 @@ export class UsersService {
         action: 'USER.CREATED',
         outcome: AuditOutcome.SUCCESS,
         resource: { type: 'USER', id: user._id.toString(), code: user.email },
-        changes: { after: { email: user.email, roles: roleReferences.roles.map((role) => role.key), roleIds: user.roleIds.map((roleId) => roleId.toString()), isActive: user.isActive, employeeId: employee._id.toString() } },
+        changes: { after: { email: user.email, roles: roleReferences.roles.map((role) => role.key), roleIds: user.roleIds.map((roleId) => roleId.toString()), isActive: user.isActive, ...(employee ? { employeeId: employee._id.toString() } : {}) } },
       });
       return this.buildSafeUser(user, roleReferences.roles, await this.loadProfile(user));
     } catch (error) {
-      if (this.isDuplicateKeyError(error)) throw new ConflictException('Email or employee link already exists');
+      if (isMongoDuplicateKeyError(error) && typeof error.keyPattern?.email !== 'undefined') {
+        throw new ConflictException({
+          message: 'Email đã được sử dụng.',
+          code: 'EMAIL_ALREADY_EXISTS',
+          field: 'email',
+        });
+      }
+      if (isMongoDuplicateKeyError(error)) throw new ConflictException('Liên kết nhân viên đã tồn tại.');
       throw error;
     }
   }
 
   async updateManagedAccount(request: RequestWithContext, id: string, input: UpdateManagedUserDto): Promise<SafeUser> {
     const user = await this.findById(id);
-    if (!user) throw new NotFoundException('User account not found');
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     const currentRoles = await this.findAssignedRoles(user.roleIds ?? []);
     const roleReferences = input.roleIds ? await this.resolveRoleReferences(input.roleIds) : { ids: user.roleIds ?? [], roles: currentRoles };
-    if (!roleReferences.ids.length) throw new BadRequestException('At least one role is required');
+    if (!roleReferences.ids.length) throw new BadRequestException('Tài khoản phải có ít nhất một vai trò.');
     const hadAdminRole = await this.hasAdminRole(user.roleIds ?? []);
     const hasAdminRole = await this.hasAdminRole(roleReferences.ids);
     const removesAdmin = hadAdminRole && !hasAdminRole;
     const deactivatesAdmin = hadAdminRole && input.isActive === false;
     if (removesAdmin || deactivatesAdmin) await this.ensureNotLastAdmin(user.id);
     const email = input.email?.toLowerCase();
-    if (email && email !== user.email && await this.findByEmailForAuth(email)) throw new ConflictException('Email is already registered');
+    if (email && email !== user.email && await this.findByEmailForAuth(email)) throw new ConflictException('Email đã được sử dụng.');
     const updated = await this.userModel.findByIdAndUpdate(id, {
       $set: {
         ...(email ? { email } : {}),
@@ -294,7 +314,7 @@ export class UsersService {
         updatedBy: request.user?.id,
       },
     }, { returnDocument: 'after', runValidators: true }).exec();
-    if (!updated) throw new NotFoundException('User account not found');
+    if (!updated) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     if (input.isActive === false || input.newPassword) {
       await this.revokeActiveSessions(updated.id, input.newPassword ? 'PASSWORD_CHANGED' : 'ACCOUNT_DEACTIVATED');
     }
@@ -310,60 +330,60 @@ export class UsersService {
 
   async linkManagedEmployee(request: RequestWithContext, userId: string, employeeId: string): Promise<SafeUser> {
     const [user, employee] = await Promise.all([this.findById(userId), this.employeeModel.findById(employeeId).exec()]);
-    if (!user) throw new NotFoundException('User account not found');
-    if (!employee || !employee.isActive) throw new BadRequestException('Employee does not exist or is inactive');
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
+    if (!employee || !employee.isActive) throw new BadRequestException('Nhân viên không tồn tại hoặc đã ngưng hoạt động.');
     const linkedUser = await this.userModel.findOne({ employeeId: employee._id, _id: { $ne: user._id } }).select({ _id: 1 }).lean().exec();
-    if (linkedUser) throw new ConflictException('Employee already has an account');
+    if (linkedUser) throw new ConflictException('Nhân viên đã được liên kết với một tài khoản.');
     const previousEmployeeId = user.employeeId?.toString();
     if (previousEmployeeId === employeeId) return this.toSafeUser(user);
     const updated = await this.userModel.findByIdAndUpdate(userId, { $set: { employeeId: employee._id, updatedBy: request.user?.id } }, { returnDocument: 'after', runValidators: true }).exec();
-    if (!updated) throw new NotFoundException('User account not found');
+    if (!updated) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     await this.auditLogService.record(request, { action: 'USER.EMPLOYEE_LINKED', outcome: AuditOutcome.SUCCESS, resource: { type: 'USER', id: updated._id.toString(), code: updated.email }, changes: { before: { employeeId: previousEmployeeId }, after: { employeeId: employee._id.toString(), employeeCode: employee.employeeCode } } });
     return this.toSafeUser(updated);
   }
 
   async unlinkManagedEmployee(request: RequestWithContext, userId: string): Promise<SafeUser> {
     const user = await this.findById(userId);
-    if (!user) throw new NotFoundException('User account not found');
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     const employeeId = user.employeeId?.toString();
-    if (!employeeId) throw new BadRequestException('User account is not linked to an employee');
+    if (!employeeId) throw new BadRequestException('Tài khoản chưa được liên kết với nhân viên.');
     const employee = await this.employeeModel.findById(employeeId).exec();
     const updated = await this.userModel.findByIdAndUpdate(userId, { $unset: { employeeId: 1 }, $set: { updatedBy: request.user?.id } }, { returnDocument: 'after', runValidators: true }).exec();
-    if (!updated) throw new NotFoundException('User account not found');
+    if (!updated) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     await this.auditLogService.record(request, { action: 'USER.EMPLOYEE_UNLINKED', outcome: AuditOutcome.SUCCESS, resource: { type: 'USER', id: updated._id.toString(), code: updated.email }, changes: { before: { employeeId, employeeCode: employee?.employeeCode }, after: {} } });
     return this.toSafeUser(updated);
   }
 
   async addManagedRoles(request: RequestWithContext, userId: string, roleIds: string[]): Promise<SafeUser> {
     const user = await this.findById(userId);
-    if (!user) throw new NotFoundException('User account not found');
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     const uniqueRoleIds = [...new Set(roleIds)];
     const roles = await this.roleModel.find({ _id: { $in: uniqueRoleIds }, isActive: true }).exec();
-    if (roles.length !== uniqueRoleIds.length) throw new BadRequestException('One or more roles do not exist or are inactive');
+    if (roles.length !== uniqueRoleIds.length) throw new BadRequestException('Có vai trò không tồn tại hoặc đã ngưng hoạt động.');
     const existingIds = new Set((user.roleIds ?? []).map((roleId) => roleId.toString()));
     const rolesToAdd = roles.filter((role) => !existingIds.has(role._id.toString()));
-    if (rolesToAdd.length === 0) throw new ConflictException('Selected roles are already assigned to this user');
+    if (rolesToAdd.length === 0) throw new ConflictException('Các vai trò đã chọn đã được gán cho tài khoản.');
     const nextRoleIds = [...(user.roleIds ?? []), ...rolesToAdd.map((role) => role._id)];
     const updated = await this.userModel.findByIdAndUpdate(userId, { $set: { roleIds: nextRoleIds, updatedBy: request.user?.id } }, { returnDocument: 'after', runValidators: true }).exec();
-    if (!updated) throw new NotFoundException('User account not found');
+    if (!updated) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     await this.auditLogService.record(request, { action: 'USER.ROLES_ADDED', outcome: AuditOutcome.SUCCESS, resource: { type: 'USER', id: updated._id.toString(), code: updated.email }, changes: { after: { roleIds: rolesToAdd.map((role) => role._id.toString()), roles: rolesToAdd.map((role) => role.key) } } });
     return this.toSafeUser(updated);
   }
 
   async removeManagedRoles(request: RequestWithContext, userId: string, roleIds: string[]): Promise<SafeUser> {
     const user = await this.findById(userId);
-    if (!user) throw new NotFoundException('User account not found');
+    if (!user) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     const idsToRemove = new Set(roleIds);
     const currentIds = (user.roleIds ?? []).map((roleId) => roleId.toString());
-    if (roleIds.some((roleId) => !currentIds.includes(roleId))) throw new BadRequestException('One or more roles are not assigned to this user');
+    if (roleIds.some((roleId) => !currentIds.includes(roleId))) throw new BadRequestException('Có vai trò chưa được gán cho tài khoản.');
     const nextRoleIds = (user.roleIds ?? []).filter((roleId) => !idsToRemove.has(roleId.toString()));
-    if (nextRoleIds.length === 0) throw new BadRequestException('A user account must have at least one role');
+    if (nextRoleIds.length === 0) throw new BadRequestException('Tài khoản phải có ít nhất một vai trò.');
     const removedRoles = await this.roleModel.find({ _id: { $in: roleIds } }).exec();
     const remainingRoles = await this.roleModel.find({ _id: { $in: nextRoleIds } }).exec();
     const removesAdmin = await this.hasAdminRole(user.roleIds ?? []) && !await this.hasAdminRole(nextRoleIds);
     if (removesAdmin) await this.ensureNotLastAdmin(user.id);
     const updated = await this.userModel.findByIdAndUpdate(userId, { $set: { roleIds: nextRoleIds, updatedBy: request.user?.id } }, { returnDocument: 'after', runValidators: true }).exec();
-    if (!updated) throw new NotFoundException('User account not found');
+    if (!updated) throw new NotFoundException('Không tìm thấy tài khoản người dùng.');
     await this.auditLogService.record(request, { action: 'USER.ROLES_REMOVED', outcome: AuditOutcome.SUCCESS, resource: { type: 'USER', id: updated._id.toString(), code: updated.email }, changes: { before: { roleIds: removedRoles.map((role) => role._id.toString()), roles: removedRoles.map((role) => role.key) } } });
     return this.buildSafeUser(updated, this.orderRoles(nextRoleIds, remainingRoles));
   }
@@ -429,9 +449,9 @@ export class UsersService {
 
   private async ensureNotLastAdmin(userId: string): Promise<void> {
     const adminRole = await this.roleModel.findOne({ key: UserRole.ADMIN }).select({ _id: 1 }).lean().exec();
-    if (!adminRole) throw new BadRequestException('ADMIN role does not exist');
+    if (!adminRole) throw new BadRequestException('Vai trò ADMIN không tồn tại.');
     const activeAdmins = await this.userModel.countDocuments({ _id: { $ne: userId }, isActive: true, roleIds: adminRole._id }).exec();
-    if (activeAdmins === 0) throw new BadRequestException('The last active ADMIN account cannot be changed or deactivated');
+    if (activeAdmins === 0) throw new BadRequestException('Không thể thay đổi hoặc ngưng hoạt động tài khoản ADMIN cuối cùng.');
   }
 
   private primaryRole(roles: string[]): string {
@@ -468,9 +488,9 @@ export class UsersService {
 
   private async resolveRoleReferences(roleIds: string[]): Promise<{ ids: Types.ObjectId[]; roles: RoleDocument[] }> {
     const uniqueRoleIds = [...new Set(roleIds)];
-    if (!uniqueRoleIds.length) throw new BadRequestException('At least one role is required');
+    if (!uniqueRoleIds.length) throw new BadRequestException('Tài khoản phải có ít nhất một vai trò.');
     const roles = await this.roleModel.find({ _id: { $in: uniqueRoleIds }, isActive: true }).exec();
-    if (roles.length !== uniqueRoleIds.length) throw new BadRequestException('One or more roles do not exist or are inactive');
+    if (roles.length !== uniqueRoleIds.length) throw new BadRequestException('Có vai trò không tồn tại hoặc đã ngưng hoạt động.');
     const roleMap = new Map(roles.map((role) => [role._id.toString(), role]));
     const orderedRoles = uniqueRoleIds.map((roleId) => roleMap.get(roleId)).filter((role): role is typeof roles[number] => Boolean(role));
     return { ids: orderedRoles.map((role) => role._id), roles: orderedRoles };
@@ -481,11 +501,4 @@ export class UsersService {
     return Boolean(await this.roleModel.exists({ _id: { $in: roleIds }, key: UserRole.ADMIN }));
   }
 
-  private isDuplicateKeyError(error: unknown): boolean {
-    return typeof error === 'object' && error !== null && 'code' in error && error.code === 11000;
-  }
-
-  private escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
 }

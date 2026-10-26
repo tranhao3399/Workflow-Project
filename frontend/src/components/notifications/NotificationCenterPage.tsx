@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { listNotifications, markAllNotificationsRead, setNotificationRead, toSystemNotification } from '../../services/notifications.service'
 import type { NotificationRecord, NotificationType, SystemNotification } from '../../types/notifications'
 import { useVisiblePolling } from '../../hooks/useVisiblePolling'
+import { formatDateTime } from '../../utils/formatters'
 import { ErrorState, LoadingState } from '../DataStates'
 import { PageHeader } from '../ui/PageHeader'
 import { SurfaceCard } from '../ui/SurfaceCard'
@@ -32,7 +33,7 @@ export function NotificationCenterPage({ onOpenNotification, onNotify }: Notific
   const [items, setItems] = useState<NotificationRecord[]>([])
   const [tab, setTab] = useState<NotificationTab>('all')
   const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(20)
+  const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
@@ -125,8 +126,4 @@ export function NotificationCenterPage({ onOpenNotification, onNotify }: Notific
       </>}
     </SurfaceCard>
   </>
-}
-
-function formatDateTime(value: string): string {
-  return new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }

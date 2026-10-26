@@ -1,5 +1,6 @@
-import { IsArray, IsBoolean, IsEmail, IsMongoId, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsMongoId, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PASSWORD_COMPLEXITY_PATTERN, PASSWORD_POLICY_MESSAGE } from '../../common/validation/password-policy.js';
 
 export class UpdateManagedUserDto {
   @ApiPropertyOptional({ example: 'employee@workflow.local', format: 'email', maxLength: 255 })
@@ -21,6 +22,7 @@ export class UpdateManagedUserDto {
   @IsString()
   @MinLength(8)
   @MaxLength(128)
+  @Matches(PASSWORD_COMPLEXITY_PATTERN, { message: PASSWORD_POLICY_MESSAGE })
   newPassword?: string;
 }
 

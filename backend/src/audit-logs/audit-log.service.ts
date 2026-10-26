@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { ClientSession, Model } from 'mongoose';
 import type { QueryFilter } from 'mongoose';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { SafeUser } from '../users/users.service.js';
 import { ListAuditLogsDto } from './dto/list-audit-logs.dto.js';
 import { AuditOutcome } from './enums/audit-outcome.enum.js';
@@ -134,12 +135,7 @@ export class AuditLogService {
 
     return {
       data,
-      pagination: {
-        page: query.page,
-        limit: query.limit,
-        total,
-        totalPages: Math.ceil(total / query.limit),
-      },
+      pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
 
@@ -181,7 +177,13 @@ export class AuditLogService {
 
   private resolveActor(actor?: SafeUser): AuditActor {
     return actor
-      ? { userId: actor.id, fullName: actor.fullName, email: actor.email, rolesAtTime: actor.roles?.length ? actor.roles : [actor.role] }
+      ? {
+          userId: actor.id,
+          fullName: actor.fullName,
+          ...(actor.employeeCode ? { employeeCode: actor.employeeCode } : {}),
+          email: actor.email,
+          rolesAtTime: actor.roles?.length ? actor.roles : [actor.role],
+        }
       : { rolesAtTime: [] };
   }
 

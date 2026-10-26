@@ -13,8 +13,8 @@ import { SurfaceCard } from './ui/SurfaceCard'
 import { TablePagination } from './ui/TablePagination'
 
 type DepartmentStatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE'
-type PageSize = 5 | 10 | 20 | 50
-const pageSizes: PageSize[] = [5, 10, 20, 50]
+type PageSize = 10 | 20 | 50
+const pageSizes: PageSize[] = [10, 20, 50]
 
 interface DepartmentCatalogPageProps { onOpenDepartment: (departmentId: string) => void; onCreateDepartment: () => void; canCreateDepartment: boolean }
 
@@ -88,7 +88,7 @@ export function DepartmentCatalogPage({ onOpenDepartment, onCreateDepartment, ca
   if (hasError) return <ErrorState onRetry={() => void load(true)} />
 
   return <>
-    <PageHeader title="Phòng ban" description="Quản lý danh mục phòng ban và cơ cấu nhân sự trong tổ chức." actions={canCreateDepartment ? <button className="primary-button compact-button" type="button" onClick={onCreateDepartment}>Thêm phòng ban</button> : undefined} />
+    <PageHeader className="catalog-page-header" title="Phòng ban" actions={canCreateDepartment ? <button className="primary-button compact-button" type="button" onClick={onCreateDepartment}>Thêm phòng ban</button> : undefined} />
     <SurfaceCard className="master-data-section">
       <ListToolbar>
         <div className="catalog-toolbar-main">

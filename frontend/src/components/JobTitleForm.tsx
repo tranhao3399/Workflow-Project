@@ -3,15 +3,17 @@ import type { FormEvent } from 'react'
 import { ApiError } from '../services/api-client'
 import { createJobTitleFromApi, deleteJobTitleFromApi, getJobTitleAuditLogs, getJobTitleByIdFromApi, updateJobTitleFromApi, type JobTitleAuditLog } from '../services/master-data.service'
 import type { JobTitleInput } from '../types/master-data'
+import { auditActorLabel, auditChangeDetails as buildAuditChangeDetails, auditValue } from '../utils/audit-display'
+import { formatDateTime as dateTime } from '../utils/formatters'
 import { ErrorState, LoadingState } from './DataStates'
 import { ConfirmDialog } from './ui/ConfirmDialog'
 import { FilterSelect } from './ui/FilterSelect'
 import { ActiveStatusBadge } from './ui/MasterDataStatusBadge'
-import { PageHeader } from './ui/PageHeader'
 import { SurfaceCard } from './ui/SurfaceCard'
 
 interface JobTitleFormProps {
   jobTitleId?: string
+  currentUserId?: string
   onBack: () => void
   onSaved: () => void
   onDeleted?: () => void
@@ -36,36 +38,26 @@ function validate(form: JobTitleInput): FieldErrors {
   return errors
 }
 
-function auditActorName(log: JobTitleAuditLog): string {
-  return log.actor.fullName ?? (log.actor.rolesAtTime?.includes('ADMIN') ? 'Quản trị viên' : 'Người dùng hệ thống')
+function auditActorName(log: JobTitleAuditLog, currentUserId: string): string {
+  return auditActorLabel(log.actor, currentUserId)
 }
 
-function auditDescription(log: JobTitleAuditLog, jobTitleName: string): string {
-  const actor = auditActorName(log)
+function auditDescription(log: JobTitleAuditLog, jobTitleName: string, currentUserId: string): string {
+  const actor = auditActorName(log, currentUserId)
   if (log.action === 'POSITION.CREATED') return `${actor} đã tạo chức danh ${jobTitleName}.`
   if (log.action === 'POSITION.DEACTIVATED') return `${actor} đã ngưng hoạt động chức danh ${jobTitleName}.`
   return `${actor} đã cập nhật thông tin chức danh ${jobTitleName}.`
 }
 
 function auditChangeDetails(log: JobTitleAuditLog): string[] {
-  const before = log.changes?.before
-  const after = log.changes?.after
-  if (!before || !after) return []
-  return ([['code', 'Mã chức danh'], ['name', 'Tên chức danh'], ['isActive', 'Trạng thái']] as const).flatMap(([key, label]) => {
-    if (before[key] === after[key]) return []
-    const displayValue = (value: unknown): string => {
-      if (key === 'isActive') return value === true ? 'Hoạt động' : 'Ngưng hoạt động'
-      return typeof value === 'string' ? `“${value}”` : 'Chưa cập nhật'
-    }
-    return [`${label}: ${displayValue(before[key])} → ${displayValue(after[key])}`]
-  })
+  return buildAuditChangeDetails(log.changes, [
+    { key: 'code', label: 'Mã chức danh' },
+    { key: 'name', label: 'Tên chức danh' },
+    { key: 'isActive', label: 'Trạng thái', format: (value) => value === true ? 'Hoạt động' : value === false ? 'Ngưng hoạt động' : auditValue(value) },
+  ])
 }
 
-function dateTime(value: string): string {
-  return new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
-}
-
-export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdateJobTitle = false, canDeleteJobTitle = false, canChangeStatus = false }: JobTitleFormProps) {
+export function JobTitleForm({ jobTitleId, currentUserId = '', onBack, onSaved, onDeleted, canUpdateJobTitle = false, canDeleteJobTitle = false, canChangeStatus = false }: JobTitleFormProps) {
   const isEdit = Boolean(jobTitleId)
   const [form, setForm] = useState<JobTitleInput>(initialForm)
   const [original, setOriginal] = useState<JobTitleInput>(initialForm)
@@ -76,9 +68,11 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdate
   const [hasLoadError, setHasLoadError] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [formError, setFormError] = useState('')
+  const [validationToast, setValidationToast] = useState('')
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [auditLogs, setAuditLogs] = useState<JobTitleAuditLog[]>([])
+  const [visibleLogs, setVisibleLogs] = useState(5)
 
   const validation = useMemo(() => validate(form), [form])
   const isDirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(original), [form, original])
@@ -93,6 +87,7 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdate
       setForm(next)
       setOriginal(next)
       setAuditLogs(await getJobTitleAuditLogs(jobTitleId).catch(() => []))
+      setVisibleLogs(5)
       setHasLoadError(false)
     } catch {
       setHasLoadError(true)
@@ -108,6 +103,11 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdate
     window.dispatchEvent(new CustomEvent('workflow:unsaved-change', { detail: isEditing && isDirty }))
     return () => { window.dispatchEvent(new CustomEvent('workflow:unsaved-change', { detail: false })) }
   }, [isDirty, isEditing])
+  useEffect(() => {
+    if (!validationToast) return
+    const timeoutId = window.setTimeout(() => setValidationToast(''), 4000)
+    return () => window.clearTimeout(timeoutId)
+  }, [validationToast])
 
   function updateText(field: JobTitleField, value: string) {
     const next = { ...form, [field]: field === 'code' ? value.toUpperCase() : value }
@@ -144,8 +144,13 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdate
     const nextErrors = validate(form)
     setTouched({ name: true, code: true })
     setErrors(nextErrors)
-    setFormError('')
-    if (Object.keys(nextErrors).length > 0 || isSaving) return
+    const hasErrors = Object.keys(nextErrors).length > 0
+    setFormError(hasErrors ? 'Vui lòng nhập đầy đủ các thông tin bắt buộc.' : '')
+    if (hasErrors) {
+      setValidationToast('Vui lòng nhập đầy đủ các thông tin bắt buộc.')
+      return
+    }
+    if (isSaving) return
 
     setIsSaving(true)
     try {
@@ -160,6 +165,7 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdate
         setOriginal(next)
         setIsEditing(false)
         setAuditLogs(await getJobTitleAuditLogs(jobTitleId).catch(() => auditLogs))
+        setVisibleLogs(5)
       } else {
         await createJobTitleFromApi(form)
         onSaved()
@@ -197,18 +203,17 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdate
 
   const statusOptions = [{ value: 'true', label: 'Hoạt động' }, { value: 'false', label: 'Ngưng hoạt động' }]
   const title = isEdit ? original.name : 'Tạo chức danh'
-  const description = isEdit ? undefined : 'Tạo danh mục chức danh dùng chung cho hệ thống.'
-  const breadcrumbLabel = isEdit ? original.name : 'Thêm chức danh'
+  const breadcrumbLabel = isEdit ? original.name : 'Tạo chức danh'
 
   const actions = isEdit
     ? isEditing
-      ? <><button className="secondary-button compact-button" type="button" disabled={isSaving} onClick={cancelEditing}>Hủy</button><button className="primary-button compact-button" type="submit" form="job-title-form" disabled={!isValid || !isDirty || isSaving}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></>
+      ? <><button className="secondary-button compact-button" type="button" disabled={isSaving} onClick={cancelEditing}>Hủy</button><button className="primary-button compact-button" type="submit" form="job-title-form" disabled={!isDirty || isSaving}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></>
       : <><button className="secondary-button compact-button" type="button" onClick={requestBack} disabled={isSaving}>← Quay lại</button>{canUpdateJobTitle && <button className="secondary-button compact-button" type="button" onClick={() => setIsEditing(true)} disabled={isSaving}>Chỉnh sửa</button>}{canDeleteJobTitle && <button className="danger-button compact-button" type="button" onClick={() => setShowDeleteConfirm(true)} disabled={isSaving}>Xóa</button>}</>
-    : <><button className="secondary-button compact-button" type="button" onClick={requestBack} disabled={isSaving}>← Quay lại danh sách</button><button className="primary-button compact-button" type="submit" form="job-title-form" disabled={!isValid || !isDirty || isSaving}>{isSaving ? 'Đang tạo...' : 'Tạo chức danh'}</button></>
+    : <><button className="secondary-button compact-button" type="button" onClick={requestBack} disabled={isSaving}>Hủy</button><button className="primary-button compact-button" type="submit" form="job-title-form" disabled={!isValid || !isDirty || isSaving}>{isSaving ? 'Đang lưu...' : 'Lưu'}</button></>
 
   return <>
     <nav className="detail-breadcrumb" aria-label="Điều hướng chức danh"><button className="breadcrumb-link" type="button" onClick={requestBack}>Chức danh</button><span aria-hidden="true">/</span><strong>{breadcrumbLabel}</strong></nav>
-    {isEdit ? <section className="department-detail-summary job-title-detail-summary"><div className="department-detail-summary-main"><h1>{title}</h1></div><div className="department-detail-actions">{actions}</div></section> : <PageHeader title={title} description={description} actions={actions} />}
+    <section className="department-detail-summary job-title-detail-summary"><div className="department-detail-summary-main"><h1>{title}</h1></div><div className="department-detail-actions">{actions}</div></section>
     <SurfaceCard className={isEdit ? 'department-info-card job-title-form-card' : 'job-title-form-card'}>
       <div className={isEdit ? 'department-info-heading' : 'job-title-form-heading'}><h2>Thông tin chức danh</h2></div>
       <form id="job-title-form" className={isEdit ? 'job-title-form job-title-detail-form' : 'job-title-form'} onSubmit={(event) => void submit(event)} noValidate>
@@ -216,8 +221,9 @@ export function JobTitleForm({ jobTitleId, onBack, onSaved, onDeleted, canUpdate
         {formError && <p className="job-title-form-server-error" role="alert">{formError}</p>}
       </form>
     </SurfaceCard>
-    {isEdit && <section className="employee-activity-section job-title-audit-section"><div className="employee-activity-heading"><div><h2>Nhật ký thay đổi</h2></div></div><SurfaceCard className="employee-activity-card">{auditLogs.length === 0 ? <p className="employee-activity-empty">Chưa có nhật ký thay đổi liên quan đến chức danh này.</p> : <div className="employee-activity-list">{auditLogs.map((log) => { const changeDetails = auditChangeDetails(log); return <article className="activity-log-row" key={log._id ?? log.id ?? `${log.occurredAt}-${log.action}`}><div><strong>{auditDescription(log, original.name)}</strong>{changeDetails.length > 0 && <small>{changeDetails.join(' · ')}</small>}</div><time>{dateTime(log.occurredAt)}</time></article> })}</div>}</SurfaceCard></section>}
-    {showDeleteConfirm && <ConfirmDialog title="Xóa chức danh?" description="Chức danh sẽ bị xóa vĩnh viễn và không thể khôi phục. Hệ thống chỉ cho phép xóa khi chức danh chưa được gán cho dữ liệu nào." confirmLabel="Xóa chức danh" confirmingLabel="Đang xóa..." tone="danger" onCancel={() => setShowDeleteConfirm(false)} onConfirm={() => void deleteJobTitle()} isConfirming={isSaving} />}
+    {isEdit && <section className="employee-activity-section job-title-audit-section"><div className="employee-activity-heading"><div><h2>Lịch sử</h2></div></div><SurfaceCard className="employee-activity-card">{auditLogs.length === 0 ? <p className="employee-activity-empty">Chưa có lịch sử liên quan đến chức danh này.</p> : <><div className="employee-activity-list">{auditLogs.slice(0, visibleLogs).map((log) => { const changeDetails = auditChangeDetails(log); return <article className="activity-log-row" key={log._id ?? log.id ?? `${log.occurredAt}-${log.action}`}><div><strong>{auditDescription(log, original.name, currentUserId)}</strong>{changeDetails.length > 0 && <p>Thay đổi: {changeDetails.join(' · ')}</p>}</div><time>{dateTime(log.occurredAt)}</time></article> })}</div>{visibleLogs < auditLogs.length && <div className="employee-activity-more"><button className="secondary-button" type="button" onClick={() => setVisibleLogs((count) => count + 5)}>Xem thêm</button></div>}</>}</SurfaceCard></section>}
+    {showDeleteConfirm && <ConfirmDialog title="Xóa chức danh" description="Bạn có chắc chắn muốn xóa chức danh này?" confirmLabel="Xóa" confirmingLabel="Đang xóa..." tone="danger" onCancel={() => setShowDeleteConfirm(false)} onConfirm={() => void deleteJobTitle()} isConfirming={isSaving} compact />}
+    {validationToast && <div className="toast-message toast-error" role="alert">{validationToast}</div>}
     {showLeaveConfirm && <ConfirmDialog title="Chưa lưu thay đổi" description="Thông tin chức danh đang chỉnh sửa sẽ bị hủy nếu bạn rời khỏi trang." confirmLabel="Rời khỏi trang" tone="danger" onCancel={() => setShowLeaveConfirm(false)} onConfirm={onBack} />}
   </>
 }

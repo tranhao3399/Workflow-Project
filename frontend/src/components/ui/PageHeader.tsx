@@ -5,11 +5,12 @@ interface PageHeaderProps {
   description?: string
   actions?: ReactNode
   children?: ReactNode
+  className?: string
 }
 
-export function PageHeader({ title, description, actions, children }: PageHeaderProps) {
+export function PageHeader({ title, description, actions, children, className }: PageHeaderProps) {
   return (
-    <header className="page-header">
+    <header className={className ? `page-header ${className}` : 'page-header'}>
       <div>
         <h1>{title}</h1>
         {description && <p>{description}</p>}

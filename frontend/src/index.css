@@ -39,7 +39,9 @@
   text-rendering: optimizeLegibility;
 }
 
-html { overflow-y: auto; }
+/* The document is the application scroll container. App.tsx synchronizes the
+   inner shell spacing only while this scrollbar is absent. */
+html { overflow-y: auto; --app-scrollbar-compensation: 0px; }
 * { box-sizing: border-box; }
 body { min-width: 320px; margin: 0; }
 button, input, select { font: inherit; }

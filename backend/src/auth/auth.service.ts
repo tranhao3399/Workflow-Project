@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
@@ -7,6 +7,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { Model } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
+import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
 import { MailService } from '../mail/mail.service.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import { UsersService } from '../users/users.service.js';
@@ -65,9 +66,9 @@ export class AuthService {
   ) {}
 
   async register(request: RequestWithContext, registerDto: RegisterDto): Promise<SafeUser> {
-    if (registerDto.role === UserRole.ADMIN) throw new BadRequestException('Public registration cannot assign the ADMIN role');
+    if (registerDto.role === UserRole.ADMIN) throw new BadRequestException('Không thể gán vai trò ADMIN qua đăng ký công khai.');
     const email = registerDto.email.toLowerCase();
-    if (await this.usersService.findByEmailForAuth(email)) throw new ConflictException('Email is already registered');
+    if (await this.usersService.findByEmailForAuth(email)) throw new ConflictException('Email đã được sử dụng.');
     const passwordHash = await bcrypt.hash(registerDto.password, 12);
     try {
       const user = await this.usersService.create({ fullName: registerDto.fullName, email, passwordHash, role: registerDto.role });
@@ -78,7 +79,7 @@ export class AuthService {
       });
       return safeUser;
     } catch (error) {
-      if (this.isDuplicateKeyError(error)) throw new ConflictException('Email is already registered');
+      if (isMongoDuplicateKeyError(error)) throw new ConflictException('Email đã được sử dụng.');
       throw error;
     }
   }
@@ -86,11 +87,22 @@ export class AuthService {
   async requestPasswordReset(_request: RequestWithContext, input: ForgotPasswordRequestDto): Promise<PasswordResetRequestResult> {
     const now = new Date();
     const email = input.email.trim().toLowerCase();
+    const user = await this.usersService.findByEmailForAuth(email);
+    if (!user) {
+      throw new NotFoundException({
+        code: 'PASSWORD_RESET_ACCOUNT_NOT_FOUND',
+        message: 'Email này chưa được đăng ký tài khoản.',
+      });
+    }
+    if (!user.isActive) {
+      throw new ForbiddenException({
+        code: 'PASSWORD_RESET_ACCOUNT_INACTIVE',
+        message: 'Tài khoản này đang ngưng hoạt động. Vui lòng liên hệ quản trị viên.',
+      });
+    }
+
     const sendClaim = await this.claimPasswordResetSend(email, now);
     if (!sendClaim.shouldSend) return this.passwordResetRequestResponse(sendClaim);
-
-    const user = await this.usersService.findByEmailForAuth(email);
-    if (!user || !user.isActive) return this.passwordResetRequestResponse(sendClaim);
 
     const otp = this.createPasswordResetOtp();
     await this.passwordResetRequestModel.findOneAndUpdate(
@@ -115,7 +127,7 @@ export class AuthService {
       },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     ).exec();
-    await this.mailService.sendPasswordResetOtp(email, otp);
+    this.dispatchPasswordResetOtp(email, otp);
     return this.passwordResetRequestResponse(sendClaim);
   }
 
@@ -355,7 +367,7 @@ export class AuthService {
       await this.rateLimitModel.create({ action, subjectHash, count: 1, windowStartedAt: now, expiresAt: new Date(now.getTime() + windowMs), updatedAt: now });
       return false;
     } catch (error) {
-      if (this.isDuplicateKeyError(error)) return this.consumeRateLimit(action, subject, limit, windowMs, now);
+      if (isMongoDuplicateKeyError(error)) return this.consumeRateLimit(action, subject, limit, windowMs, now);
       throw error;
     }
   }
@@ -418,7 +430,7 @@ export class AuthService {
             updatedAt: now,
           });
         } catch (error) {
-          if (this.isDuplicateKeyError(error)) continue;
+          if (isMongoDuplicateKeyError(error)) continue;
           throw error;
         }
       }
@@ -455,6 +467,12 @@ export class AuthService {
     return randomInt(0, 1_000_000).toString().padStart(6, '0');
   }
 
+  private dispatchPasswordResetOtp(email: string, otp: string): void {
+    // SMTP delivery is external I/O. The reset request is already persisted, so
+    // the API can respond without making the user wait for the mail server.
+    void this.mailService.sendPasswordResetOtp(email, otp).catch(() => undefined);
+  }
+
   private createResetToken(): string { return randomBytes(48).toString('base64url'); }
   private hashResetToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
   private createRefreshToken(): string { return randomBytes(64).toString('base64url'); }
@@ -478,5 +496,4 @@ export class AuthService {
   private invalidCredentials(): UnauthorizedException { return new UnauthorizedException('Email hoặc mật khẩu không chính xác'); }
   private tooManyLoginAttempts(): HttpException { return new HttpException('Không thể đăng nhập. Vui lòng thử lại sau ít phút.', HttpStatus.TOO_MANY_REQUESTS); }
   private sessionError(code: 'SESSION_EXPIRED' | 'SESSION_REVOKED'): UnauthorizedException { return new UnauthorizedException({ message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', code }); }
-  private isDuplicateKeyError(error: unknown): boolean { return typeof error === 'object' && error !== null && 'code' in error && error.code === 11000; }
 }
