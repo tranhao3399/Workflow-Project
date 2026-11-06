@@ -12,10 +12,12 @@ import { StoredFile, StoredFileSchema } from './schemas/stored-file.schema.js';
 import { LocalPrivateStorageAdapter } from './storage/local-private-storage.adapter.js';
 import { FILE_STORAGE } from './storage/storage-adapter.js';
 import { TemporaryFileCleanupService } from './temporary-file-cleanup.service.js';
+import { OrganizationScopeModule } from '../common/organization/organization-scope.module.js';
 
 @Module({
   imports: [
     AuditLogModule,
+    OrganizationScopeModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     MongooseModule.forFeature([
       { name: StoredFile.name, schema: StoredFileSchema },

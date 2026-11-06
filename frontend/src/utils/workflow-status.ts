@@ -10,7 +10,7 @@ export type WorkflowEntityStatus = DefinitionStatus | RequestStatus | ApprovalTa
 
 const labels: Record<WorkflowEntityStatus, string> = {
   DRAFT: 'Nháp',
-  PUBLISHED: 'Đã xuất bản',
+  PUBLISHED: 'Đã phát hành',
   INACTIVE: 'Ngưng hoạt động',
   ARCHIVED: 'Đã lưu trữ',
   IN_PROGRESS: 'Đang xử lý',

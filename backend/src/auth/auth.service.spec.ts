@@ -41,7 +41,7 @@ function createService(overrides: {
     create: overrides.sessionCreate ?? vi.fn(),
   };
   const rateLimit = {
-    findOneAndUpdate: vi.fn().mockReturnValueOnce(queryResult(null)).mockReturnValueOnce(queryResult(null)),
+    findOneAndUpdate: vi.fn().mockReturnValue(queryResult(null)),
     create: vi.fn().mockResolvedValue(undefined),
   };
   const jwt = { signAsync: vi.fn().mockResolvedValue('access-token') };
@@ -81,6 +81,18 @@ describe('AuthService password reset eligibility', () => {
 });
 
 describe('AuthService session lifecycle', () => {
+  it('returns unauthorized and records the failure when an existing user enters a wrong password', async () => {
+    user.passwordHash = await bcrypt.hash('correct-password', 4);
+    const { service, users } = createService();
+
+    await expect(service.login(request as never, { email: user.email, password: 'wrong-password' }))
+      .rejects.toMatchObject({
+        status: 401,
+        response: { message: 'Email hoặc mật khẩu không chính xác', statusCode: 401 },
+      });
+    expect(users.recordLoginFailure).toHaveBeenCalledOnce();
+  });
+
   it('creates a session that expires exactly 24 hours after a successful login', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);

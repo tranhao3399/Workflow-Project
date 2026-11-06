@@ -13,9 +13,9 @@ import { normalizeSearchText } from '../common/text/normalize-search-text.js';
 
 const ROLE_SEEDS: Array<Pick<Role, 'key' | 'name' | 'permissionKeys' | 'isSystem' | 'isActive'>> = [
   { key: UserRole.EMPLOYEE, name: 'Nhân viên', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'REQUESTS.CREATE'], isSystem: true, isActive: true },
-  { key: UserRole.MANAGER, name: 'Quản lý', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.MANAGER, name: 'Quản lý', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
   { key: UserRole.ACCOUNTANT, name: 'Kế toán', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
-  { key: UserRole.DIRECTOR, name: 'Giám đốc', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.DIRECTOR, name: 'Giám đốc', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
   { key: UserRole.ADMIN, name: 'Quản trị viên', permissionKeys: ALL_PERMISSION_KEYS, isSystem: true, isActive: true },
 ];
 
@@ -69,6 +69,20 @@ export class RolesService implements OnModuleInit {
       { permissionKeys: 'APPROVALS.APPROVE_ASSIGNED' },
       { $addToSet: { permissionKeys: 'APPROVALS.VIEW_ASSIGNED' } },
     ).exec();
+    await Promise.all([
+      this.model.updateOne(
+        { key: UserRole.MANAGER, isSystem: true },
+        { $addToSet: { permissionKeys: { $each: ['REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW'] } } },
+      ).exec(),
+      this.model.updateOne(
+        { key: UserRole.DIRECTOR, isSystem: true },
+        { $addToSet: { permissionKeys: { $each: ['REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW'] } } },
+      ).exec(),
+      this.model.updateOne(
+        { key: UserRole.ADMIN, isSystem: true },
+        { $set: { permissionKeys: ALL_PERMISSION_KEYS, isActive: true } },
+      ).exec(),
+    ]);
   }
 
   permissionRegistry() {

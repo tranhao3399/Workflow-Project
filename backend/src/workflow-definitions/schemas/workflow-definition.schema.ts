@@ -11,6 +11,8 @@ export type ApprovalMode = (typeof approvalModes)[number];
 export const assigneeRuleTypes = [
   'REQUESTER_DIRECT_MANAGER',
   'REQUESTER_DEPARTMENT_MANAGER',
+  'REQUESTER_PARENT_DEPARTMENT_MANAGER',
+  'COMPANY_MANAGER',
   'ROLE',
   'ROLE_IN_REQUESTER_DEPARTMENT',
   'POSITION_IN_REQUESTER_DEPARTMENT',

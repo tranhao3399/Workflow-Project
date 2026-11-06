@@ -8,10 +8,21 @@ import { Position } from '../positions/schemas/position.schema.js';
 import { User } from '../users/schemas/user.schema.js';
 import type { RequesterSnapshot } from './schemas/request.schema.js';
 
+export interface RequestActorAutoFillProfile {
+  employeeCode: string;
+  fullName: string;
+  email: string;
+  phone?: string;
+  departmentName: string;
+  workUnitName: string;
+  positionName: string;
+}
+
 export interface RequestActorContext {
   userId: Types.ObjectId;
   employeeId: Types.ObjectId;
   requesterSnapshot: RequesterSnapshot;
+  autoFillProfile: RequestActorAutoFillProfile;
 }
 
 @Injectable()
@@ -19,28 +30,67 @@ export class RequestActorContextService {
   constructor(
     @InjectModel(User.name) private readonly users: Model<User>,
     @InjectModel(Employee.name) private readonly employees: Model<Employee>,
-    @InjectModel(Department.name) private readonly departments: Model<Department>,
+    @InjectModel(Department.name)
+    private readonly departments: Model<Department>,
     @InjectModel(Position.name) private readonly positions: Model<Position>,
   ) {}
 
-  async resolve(userId: string, session: ClientSession): Promise<RequestActorContext> {
-    const user = await this.users.findOne({ _id: userId, isActive: true })
-      .select({ _id: 1, employeeId: 1 }).session(session).lean().exec();
+  async resolve(
+    userId: string,
+    session: ClientSession,
+  ): Promise<RequestActorContext> {
+    const user = await this.users
+      .findOne({ _id: userId, isActive: true })
+      .select({ _id: 1, email: 1, employeeId: 1 })
+      .session(session)
+      .lean()
+      .exec();
     if (!user?.employeeId) throw this.activeEmployeeRequired();
 
-    const employee = await this.employees.findOne({ _id: user.employeeId, isActive: true })
-      .select({ employeeCode: 1, fullName: 1, departmentId: 1, positionId: 1, managerId: 1 })
-      .session(session).lean().exec();
+    const employee = await this.employees
+      .findOne({ _id: user.employeeId, isActive: true })
+      .select({
+        employeeCode: 1,
+        fullName: 1,
+        workEmail: 1,
+        phone: 1,
+        departmentId: 1,
+        workUnitId: 1,
+        positionId: 1,
+        managerId: 1,
+      })
+      .session(session)
+      .lean()
+      .exec();
     if (!employee) throw this.activeEmployeeRequired();
 
-    const [department, position] = await Promise.all([
-      this.departments.findById(employee.departmentId).select({ name: 1 }).session(session).lean().exec(),
-      this.positions.findById(employee.positionId).select({ name: 1 }).session(session).lean().exec(),
+    const [department, position, workUnit] = await Promise.all([
+      this.departments
+        .findById(employee.departmentId)
+        .select({ name: 1 })
+        .session(session)
+        .lean()
+        .exec(),
+      this.positions
+        .findById(employee.positionId)
+        .select({ name: 1 })
+        .session(session)
+        .lean()
+        .exec(),
+      employee.workUnitId
+        ? this.departments
+            .findById(employee.workUnitId)
+            .select({ name: 1 })
+            .session(session)
+            .lean()
+            .exec()
+        : Promise.resolve(null),
     ]);
     if (!department || !position) {
       throw new ConflictException({
         code: 'EMPLOYEE_ORGANIZATION_INVALID',
-        message: 'Thông tin phòng ban hoặc chức danh của nhân viên không hợp lệ.',
+        message:
+          'Thông tin phòng ban hoặc chức danh của nhân viên không hợp lệ.',
       });
     }
     return {
@@ -51,9 +101,21 @@ export class RequestActorContextService {
         fullName: employee.fullName,
         departmentId: employee.departmentId,
         departmentName: department.name,
+        ...(employee.workUnitId && workUnit
+          ? { workUnitId: employee.workUnitId, workUnitName: workUnit.name }
+          : {}),
         positionId: employee.positionId,
         positionName: position.name,
         managerEmployeeId: employee.managerId,
+      },
+      autoFillProfile: {
+        employeeCode: employee.employeeCode,
+        fullName: employee.fullName,
+        email: employee.workEmail || user.email,
+        ...(employee.phone ? { phone: employee.phone } : {}),
+        departmentName: department.name,
+        workUnitName: workUnit?.name ?? department.name,
+        positionName: position.name,
       },
     };
   }

@@ -4,6 +4,7 @@ import {
   useEffect,
   useImperativeHandle,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ChangeEvent,
@@ -21,6 +22,7 @@ import type {
   FileMetadata,
   FormDefinition,
   FormDefinitionSnapshot,
+  FormAutoFillSource,
   FormField,
 } from '../../types/workflow'
 import { formatFormDateValue } from '../../utils/formatters'
@@ -34,6 +36,8 @@ import {
   supportedFormFields,
   validateDynamicFormData,
 } from '../../utils/dynamic-form'
+import { autoFillFieldPlaceholder, defaultFieldPlaceholder } from '../../utils/form-builder'
+import { DatePicker } from '../ui/DatePicker'
 import { FilterSelect } from '../ui/FilterSelect'
 
 export type DynamicFormMode = 'edit' | 'readonly' | 'preview'
@@ -48,6 +52,7 @@ export interface DynamicFormRendererProps {
   formDefinition?: FormDefinition | null
   formSnapshot?: FormDefinitionSnapshot | null
   initialValues?: Record<string, unknown>
+  systemAutoFillValues?: Partial<Record<FormAutoFillSource, unknown>>
   mode: DynamicFormMode
   requestId?: string
   allowFileDelete?: boolean
@@ -69,12 +74,14 @@ interface ValueState {
 }
 
 const emptyValues: Record<string, unknown> = {}
+const emptySystemAutoFillValues: Partial<Record<FormAutoFillSource, unknown>> = {}
 const emptyTouched: Record<string, boolean> = {}
 
 export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, DynamicFormRendererProps>(function DynamicFormRenderer({
   formDefinition,
   formSnapshot,
   initialValues = emptyValues,
+  systemAutoFillValues = emptySystemAutoFillValues,
   mode,
   requestId,
   allowFileDelete = false,
@@ -95,9 +102,18 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
   const [valueState, setValueState] = useState<ValueState>(() => ({ sourceKey, values: seededValues }))
   const [touchedState, setTouchedState] = useState<TouchedState>(() => ({ sourceKey, fields: {} }))
   const values = valueState.sourceKey === sourceKey ? valueState.values : seededValues
+  const displayValues = useMemo(() => {
+    const next = { ...values }
+    for (const field of fields) {
+      const source = field.autoFill?.source
+      if (!source || systemAutoFillValues[source] === undefined) continue
+      next[field.key] = systemAutoFillValues[source]
+    }
+    return next
+  }, [fields, systemAutoFillValues, values])
   const touched = touchedState.sourceKey === sourceKey ? touchedState.fields : emptyTouched
-  const visibility = useMemo(() => dynamicFieldVisibility(fields, values), [fields, values])
-  const validation = useMemo(() => validateDynamicFormData(fields, values), [fields, values])
+  const visibility = useMemo(() => dynamicFieldVisibility(fields, displayValues), [displayValues, fields])
+  const validation = useMemo(() => validateDynamicFormData(fields, displayValues), [displayValues, fields])
   const interactive = mode !== 'readonly'
 
   useEffect(() => {
@@ -117,10 +133,10 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
   }
 
   const focusError = useCallback((result: DynamicFormValidationResult) => {
-    const firstVisibleError = result.errors.find((error) => visibility.get(error.fieldKey) !== false)
+    const firstVisibleError = result.errors.find((error) => visibility.get(rootFieldKey(error.fieldKey)) !== false)
     if (!firstVisibleError) return
     window.requestAnimationFrame(() => {
-      const field = document.querySelector<HTMLElement>(`[data-dynamic-field="${firstVisibleError.fieldKey}"]`)
+      const field = document.querySelector<HTMLElement>(`[data-dynamic-field="${rootFieldKey(firstVisibleError.fieldKey)}"]`)
       field?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       field?.querySelector<HTMLElement>('input, textarea, button, select, [tabindex]:not([tabindex="-1"])')?.focus()
     })
@@ -131,8 +147,8 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
     validate: () => {
       const nextTouched = Object.fromEntries(
         validation.errors
-          .filter((error) => visibility.get(error.fieldKey) !== false)
-          .map((error) => [error.fieldKey, true]),
+          .filter((error) => visibility.get(rootFieldKey(error.fieldKey)) !== false)
+          .map((error) => [rootFieldKey(error.fieldKey), true]),
       )
       setTouchedState({ sourceKey, fields: { ...touched, ...nextTouched } })
       focusError(validation)
@@ -157,7 +173,26 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
         {fields.map((field) => {
           if (visibility.get(field.key) === false) return null
           const error = interactive && touched[field.key] ? dynamicFieldError(validation, field.key) : undefined
-          const style = { gridColumn: `span ${layoutSpan(field)}` } satisfies CSSProperties
+          const span = layoutSpan(field)
+          const startsNewRow = field.layout?.newRow === true && span < 12
+          const style = { gridColumn: startsNewRow ? `1 / span ${span}` : `span ${span}` } satisfies CSSProperties
+          if (field.type === 'SECTION') {
+            return (
+              <section
+                className="dynamic-form-section"
+                data-dynamic-field={field.key}
+                key={field.key}
+                style={style}
+              >
+                <h3>{field.label}</h3>
+                {field.helpText && <p>{field.helpText}</p>}
+              </section>
+            )
+          }
+          const fieldValue = displayValues[field.key]
+          const isAutoFillLocked = Boolean(
+            field.autoFill?.readOnly && (mode === 'preview' || stringValue(fieldValue) !== ''),
+          )
           return (
             <div
               className={`dynamic-form-field dynamic-form-field-${field.type.toLowerCase()}${error ? ' has-error' : ''}`}
@@ -167,13 +202,19 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
             >
               <div className="dynamic-form-label-row">
                 <span className={field.required ? 'required-field-label' : undefined}>{field.label}</span>
+                {field.autoFill && (
+                  <small className="dynamic-autofill-badge">
+                    {field.autoFill.readOnly ? 'Tự động điền · Khóa sửa' : 'Tự động điền'}
+                  </small>
+                )}
               </div>
               {mode === 'readonly'
-                ? <ReadonlyField field={field} value={values[field.key]} requestId={requestId} />
+                ? <ReadonlyField field={field} value={fieldValue} requestId={requestId} />
                 : <EditableField
                     field={field}
-                    value={values[field.key]}
+                    value={fieldValue}
                     mode={mode}
+                    locked={isAutoFillLocked}
                     requestId={requestId}
                     allowFileDelete={allowFileDelete}
                     errorId={error ? `${field.key}-error` : undefined}
@@ -194,6 +235,7 @@ interface EditableFieldProps {
   field: FormField
   value: unknown
   mode: DynamicFormMode
+  locked?: boolean
   requestId?: string
   allowFileDelete: boolean
   errorId?: string
@@ -201,41 +243,98 @@ interface EditableFieldProps {
   onBlur: () => void
 }
 
-function EditableField({ field, value, mode, requestId, allowFileDelete, errorId, onChange, onBlur }: EditableFieldProps) {
+function EditableField({ field, value, mode, locked = false, requestId, allowFileDelete, errorId, onChange, onBlur }: EditableFieldProps) {
+  const effectivePlaceholder = field.autoFill
+    ? autoFillFieldPlaceholder
+    : defaultFieldPlaceholder(field.type)
   const common = {
     'aria-label': field.label,
     'aria-required': field.required,
     'aria-invalid': Boolean(errorId),
     'aria-describedby': errorId,
-    placeholder: field.placeholder,
+    placeholder: effectivePlaceholder,
+    readOnly: locked,
+    className: locked ? 'is-autofill-locked' : undefined,
     onBlur,
   }
   if (field.type === 'TEXTAREA') {
-    return <textarea {...common} rows={4} value={stringValue(value)} onChange={(event) => onChange(event.target.value)} />
+    return <textarea {...common} rows={4} value={stringValue(value)} onChange={(event) => { if (!locked) onChange(event.target.value) }} />
   }
-  if (field.type === 'TEXT' || field.type === 'EMAIL' || field.type === 'PHONE') {
-    const type = field.type === 'EMAIL' ? 'email' : field.type === 'PHONE' ? 'tel' : 'text'
-    return <input {...common} type={type} value={stringValue(value)} onChange={(event) => onChange(event.target.value)} />
+  if (field.type === 'PHONE') {
+    return <input {...common} type="tel" inputMode="tel" maxLength={16} value={stringValue(value)} onChange={(event) => { if (!locked) onChange(sanitizePhoneInput(event.target.value)) }} />
   }
-  if (field.type === 'NUMBER' || field.type === 'CURRENCY') {
-    return <input {...common} type="number" inputMode="decimal" min={field.validation?.min} max={field.validation?.max} value={numberInputValue(value)} onChange={(event) => onChange(event.target.value === '' ? undefined : Number(event.target.value))} />
+  if (field.type === 'TEXT' || field.type === 'EMAIL') {
+    const type = field.type === 'EMAIL' ? 'email' : 'text'
+    return <input {...common} type={type} value={stringValue(value)} onChange={(event) => { if (!locked) onChange(event.target.value) }} />
   }
-  if (field.type === 'DATE' || field.type === 'DATETIME') {
-    return <input {...common} type={field.type === 'DATE' ? 'date' : 'datetime-local'} value={stringValue(value)} onChange={(event) => onChange(event.target.value)} />
+  if (field.type === 'CURRENCY') {
+    return <CurrencyInput ariaLabel={field.label} ariaDescribedBy={errorId} ariaInvalid={Boolean(errorId)} placeholder={effectivePlaceholder} value={value} locked={locked} onChange={onChange} onBlur={onBlur} />
+  }
+  if (field.type === 'NUMBER') {
+    return <LocalizedNumberInput ariaLabel={field.label} ariaDescribedBy={errorId} ariaInvalid={Boolean(errorId)} placeholder={effectivePlaceholder} value={value} locked={locked} onChange={onChange} onBlur={onBlur} />
+  }
+  if (field.type === 'DATE') {
+    return <DatePicker value={stringValue(value) || undefined} ariaLabel={field.label} ariaDescribedBy={errorId} ariaInvalid={Boolean(errorId)} placeholder={effectivePlaceholder} disabled={locked} onChange={(nextValue) => { if (!locked) onChange(nextValue); onBlur() }} />
+  }
+  if (field.type === 'DATETIME') {
+    return <DateTimeInput value={value} placeholder={effectivePlaceholder} ariaLabel={field.label} ariaDescribedBy={errorId} ariaInvalid={Boolean(errorId)} locked={locked} onChange={onChange} onBlur={onBlur} />
   }
   if (field.type === 'SELECT') {
-    return <FilterSelect ariaLabel={field.label} value={stringValue(value)} options={[{ value: '', label: field.placeholder || 'Chọn giá trị' }, ...activeFieldOptions(field)]} onChange={(nextValue) => { onChange(nextValue || undefined); onBlur() }} />
+    return <FilterSelect ariaLabel={field.label} value={stringValue(value)} options={[{ value: '', label: effectivePlaceholder || 'Chọn một giá trị' }, ...activeFieldOptions(field)]} onChange={(nextValue) => { onChange(nextValue || undefined); onBlur() }} />
   }
   if (field.type === 'RADIO') {
     return <OptionGroup field={field} value={value} kind="radio" errorId={errorId} onChange={onChange} onBlur={onBlur} />
   }
-  if (field.type === 'MULTI_SELECT' || field.type === 'CHECKBOX') {
+  if (field.type === 'MULTI_SELECT') {
+    return <MultiSelectControl field={field} value={value} errorId={errorId} onChange={onChange} onBlur={onBlur} />
+  }
+  if (field.type === 'CHECKBOX') {
     return <OptionGroup field={field} value={value} kind="checkbox" errorId={errorId} onChange={onChange} onBlur={onBlur} />
   }
   if (field.type === 'BOOLEAN') {
-    return <label className="dynamic-boolean-control"><input type="checkbox" checked={value === true} aria-label={field.label} aria-required={field.required} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onChange={(event) => onChange(event.target.checked)} onBlur={onBlur} /><span>{value === true ? 'Có' : 'Không'}</span></label>
+    return <label className="dynamic-boolean-control"><input type="checkbox" checked={value === true} aria-label={field.label} aria-required={field.required} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onChange={(event) => onChange(event.target.checked)} onBlur={onBlur} /><i aria-hidden="true"><span /></i><b>{value === true ? 'Có' : 'Không'}</b></label>
+  }
+  if (field.type === 'TABLE') {
+    return <EditableTableField field={field} value={value} errorId={errorId} onChange={onChange} onBlur={onBlur} />
   }
   return <DynamicFileField field={field} value={value} mode={mode} requestId={requestId} allowDelete={allowFileDelete} errorId={errorId} onChange={onChange} onBlur={onBlur} />
+}
+
+function EditableTableField({ field, value, errorId, onChange, onBlur }: Pick<EditableFieldProps, 'field' | 'value' | 'errorId' | 'onChange' | 'onBlur'>) {
+  const config = field.tableConfig
+  if (!config) return <p className="dynamic-form-error">Cấu hình bảng không hợp lệ.</p>
+  const rows = tableRows(value)
+  const columns = config.columns.toSorted((left, right) => left.order - right.order)
+  const updateCell = (rowIndex: number, columnKey: string, cellValue: unknown) => {
+    onChange(rows.map((row, index) => index === rowIndex ? { ...row, [columnKey]: cellValue } : row))
+  }
+  const addRow = () => {
+    if (rows.length >= config.maxRows) return
+    onChange([...rows, Object.fromEntries(columns.map((column) => [column.key, column.type === 'BOOLEAN' ? false : undefined]))])
+    onBlur()
+  }
+  const removeRow = (rowIndex: number) => {
+    if (rows.length <= config.minRows) return
+    onChange(rows.filter((_, index) => index !== rowIndex))
+    onBlur()
+  }
+  return <div className="dynamic-table-field" aria-describedby={errorId}>
+    <div className="dynamic-table-scroll"><table><thead><tr><th className="dynamic-table-index">#</th>{columns.map((column) => <th key={column.key} className={column.required ? 'required-field-label' : undefined}>{column.label}</th>)}{config.allowRemoveRows && <th className="dynamic-table-action">Thao tác</th>}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}><td className="dynamic-table-index">{rowIndex + 1}</td>{columns.map((column) => <td key={column.key}><TableCell column={column} value={row[column.key]} onChange={(cellValue) => updateCell(rowIndex, column.key, cellValue)} onBlur={onBlur} /></td>)}{config.allowRemoveRows && <td className="dynamic-table-action"><button type="button" className="text-action-button is-danger" disabled={rows.length <= config.minRows} onClick={() => removeRow(rowIndex)}>Xóa</button></td>}</tr>)}</tbody></table></div>
+    {rows.length === 0 && <p className="dynamic-table-empty">Chưa có dòng dữ liệu.</p>}
+    {config.allowAddRows && <button type="button" className="secondary-button dynamic-table-add" disabled={rows.length >= config.maxRows} onClick={addRow}>+ Thêm dòng</button>}
+    <small className="dynamic-table-limit">{rows.length}/{config.maxRows} dòng</small>
+  </div>
+}
+
+function TableCell({ column, value, onChange, onBlur }: { column: NonNullable<FormField['tableConfig']>['columns'][number]; value: unknown; onChange: (value: unknown) => void; onBlur: () => void }) {
+  const label = column.label
+  const placeholder = defaultFieldPlaceholder(column.type)
+  if (column.type === 'CURRENCY') return <CurrencyInput ariaLabel={label} placeholder={placeholder} value={value} onChange={onChange} onBlur={onBlur} />
+  if (column.type === 'NUMBER') return <LocalizedNumberInput ariaLabel={label} placeholder={placeholder} value={value} onChange={onChange} onBlur={onBlur} />
+  if (column.type === 'DATE') return <DatePicker ariaLabel={label} placeholder={placeholder} value={stringValue(value) || undefined} onChange={(nextValue) => { onChange(nextValue); onBlur() }} />
+  if (column.type === 'SELECT') return <FilterSelect ariaLabel={label} value={stringValue(value)} options={[{ value: '', label: placeholder || 'Chọn một giá trị' }, ...(column.options ?? []).filter((option) => option.isActive !== false).toSorted((left, right) => left.order - right.order).map((option) => ({ value: option.value, label: option.label }))]} onChange={(nextValue) => { onChange(nextValue || undefined); onBlur() }} />
+  if (column.type === 'BOOLEAN') return <label className="dynamic-table-boolean"><input aria-label={label} type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} onBlur={onBlur} /><span>{value === true ? 'Có' : 'Không'}</span></label>
+  return <input aria-label={label} type="text" value={stringValue(value)} placeholder={placeholder} minLength={column.validation?.minLength} maxLength={column.validation?.maxLength} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} />
 }
 
 interface OptionGroupProps {
@@ -262,17 +361,288 @@ function OptionGroup({ field, value, kind, errorId, onChange, onBlur }: OptionGr
   )
 }
 
+function MultiSelectControl({ field, value, errorId, onChange, onBlur }: Omit<OptionGroupProps, 'kind'>) {
+  const [isOpen, setIsOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const selected = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
+  const options = activeFieldOptions(field)
+
+  useEffect(() => {
+    if (!isOpen) return
+    const close = (event: MouseEvent) => {
+      if (rootRef.current?.contains(event.target as Node)) return
+      setIsOpen(false)
+      onBlur()
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [isOpen, onBlur])
+
+  return (
+    <div className={isOpen ? 'dynamic-multi-select is-open' : 'dynamic-multi-select'} ref={rootRef}>
+      <button type="button" className="dynamic-multi-select-trigger" aria-label={field.label} aria-expanded={isOpen} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onClick={() => setIsOpen((current) => !current)}>
+        <span className={selected.length ? 'dynamic-multi-select-values' : 'dynamic-multi-select-placeholder'}>
+          {selected.length
+            ? selected.map((item) => <em key={item}>{optionLabel(field, item)}</em>)
+            : defaultFieldPlaceholder('MULTI_SELECT')}
+        </span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
+      </button>
+      {isOpen && (
+        <div className="dynamic-multi-select-menu" role="group" aria-label={field.label}>
+          {options.map((option) => {
+            const checked = selected.includes(option.value)
+            return (
+              <label key={option.value}>
+                <input type="checkbox" checked={checked} onChange={() => onChange(checked ? selected.filter((item) => item !== option.value) : [...selected, option.value])} />
+                <span>{option.label}</span>
+              </label>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ReadonlyField({ field, value, requestId }: { field: FormField; value: unknown; requestId?: string }) {
   if (field.type === 'FILE') return <DynamicFileField field={field} value={value} mode="readonly" requestId={requestId} allowDelete={false} onChange={() => undefined} onBlur={() => undefined} />
   if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) return <p className="dynamic-readonly-value is-empty">Chưa cập nhật</p>
+  if (field.type === 'TABLE') return <ReadonlyTableField field={field} value={value} />
   if (field.type === 'SELECT' || field.type === 'RADIO') return <p className="dynamic-readonly-value">{optionLabel(field, value)}</p>
   if (field.type === 'MULTI_SELECT' || field.type === 'CHECKBOX') {
     return <div className="dynamic-readonly-options">{(Array.isArray(value) ? value : []).map((item) => <span key={String(item)}>{optionLabel(field, item)}</span>)}</div>
   }
   if (field.type === 'BOOLEAN') return <p className="dynamic-readonly-value">{value === true ? 'Có' : 'Không'}</p>
-  if (field.type === 'NUMBER' || field.type === 'CURRENCY') return <p className="dynamic-readonly-value">{typeof value === 'number' ? new Intl.NumberFormat('vi-VN').format(value) : String(value)}</p>
+  if (field.type === 'NUMBER') return <p className="dynamic-readonly-value">{typeof value === 'number' ? formatLocalizedNumber(value) : String(value)}</p>
+  if (field.type === 'CURRENCY') return <p className="dynamic-readonly-value">{typeof value === 'number' ? `${formatLocalizedCurrency(value)} VNĐ` : String(value)}</p>
   if (field.type === 'DATE' || field.type === 'DATETIME') return <p className="dynamic-readonly-value">{formatFormDateValue(value, field.type === 'DATETIME')}</p>
   return <p className="dynamic-readonly-value preserve-lines">{String(value)}</p>
+}
+
+function ReadonlyTableField({ field, value }: { field: FormField; value: unknown }) {
+  const rows = tableRows(value)
+  const columns = field.tableConfig?.columns.toSorted((left, right) => left.order - right.order) ?? []
+  return <div className="dynamic-table-field is-readonly"><div className="dynamic-table-scroll"><table><thead><tr><th className="dynamic-table-index">#</th>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}><td className="dynamic-table-index">{rowIndex + 1}</td>{columns.map((column) => <td key={column.key}>{formatTableCell(column, row[column.key])}</td>)}</tr>)}</tbody></table></div></div>
+}
+
+function formatTableCell(column: NonNullable<FormField['tableConfig']>['columns'][number], value: unknown): string {
+  if (value === undefined || value === null || value === '') return '—'
+  if (column.type === 'BOOLEAN') return value === true ? 'Có' : 'Không'
+  if (column.type === 'SELECT') return column.options?.find((option) => option.value === value)?.label ?? String(value)
+  if (column.type === 'NUMBER') return typeof value === 'number' ? formatLocalizedNumber(value) : String(value)
+  if (column.type === 'CURRENCY') return typeof value === 'number' ? `${formatLocalizedCurrency(value)} VNĐ` : String(value)
+  if (column.type === 'DATE') return formatFormDateValue(value, false)
+  return String(value)
+}
+
+function tableRows(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null && !Array.isArray(row)) : []
+}
+
+function CurrencyInput({
+  value,
+  ariaLabel,
+  ariaDescribedBy,
+  ariaInvalid = false,
+  placeholder,
+  locked = false,
+  onChange,
+  onBlur,
+}: {
+  value: unknown
+  ariaLabel: string
+  ariaDescribedBy?: string
+  ariaInvalid?: boolean
+  placeholder?: string
+  locked?: boolean
+  onChange: (value: unknown) => void
+  onBlur: () => void
+}) {
+  const formattedValue = typeof value === 'number' && Number.isFinite(value)
+    ? formatLocalizedCurrency(value)
+    : ''
+  return (
+    <span className={locked ? 'dynamic-currency-control is-locked' : 'dynamic-currency-control'}>
+      <input
+        className="dynamic-currency-input"
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        value={formattedValue}
+        placeholder={placeholder}
+        readOnly={locked}
+        aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid}
+        onChange={(event) => {
+          if (locked) return
+          const digits = event.target.value.replace(/\D/g, '').slice(0, 15)
+          onChange(digits ? Number(digits) : undefined)
+        }}
+        onBlur={onBlur}
+      />
+      <span aria-hidden="true">VNĐ</span>
+    </span>
+  )
+}
+
+function DateTimeInput({
+  value,
+  placeholder,
+  ariaLabel,
+  ariaDescribedBy,
+  ariaInvalid = false,
+  locked = false,
+  onChange,
+  onBlur,
+}: {
+  value: unknown
+  placeholder?: string
+  ariaLabel: string
+  ariaDescribedBy?: string
+  ariaInvalid?: boolean
+  locked?: boolean
+  onChange: (value: unknown) => void
+  onBlur: () => void
+}) {
+  const currentValue = stringValue(value)
+  const parts = dateTimeParts(currentValue)
+
+  return (
+    <div className={locked ? 'dynamic-datetime-control is-autofill-locked' : 'dynamic-datetime-control'}>
+      <DatePicker
+        value={parts.date}
+        placeholder={placeholder}
+        ariaLabel={ariaLabel}
+        ariaDescribedBy={ariaDescribedBy}
+        ariaInvalid={ariaInvalid}
+        disabled={locked}
+        onChange={(nextDate) => {
+          if (locked) return
+          onChange(nextDate ? `${nextDate}T${parts.time || '00:00'}` : undefined)
+          onBlur()
+        }}
+      />
+      <input
+        className="dynamic-datetime-time"
+        type="time"
+        value={parts.time}
+        disabled={locked || !parts.date}
+        aria-label={`${ariaLabel} - giờ`}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid}
+        onChange={(event) => {
+          if (locked || !parts.date) return
+          onChange(`${parts.date}T${event.target.value || '00:00'}`)
+        }}
+        onBlur={onBlur}
+      />
+    </div>
+  )
+}
+
+function dateTimeParts(value: string): { date?: string; time: string } {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(value)
+  return match ? { date: match[1], time: `${match[2]}:${match[3]}` } : { time: '' }
+}
+
+function sanitizePhoneInput(value: string): string {
+  const international = value.trimStart().startsWith('+')
+  const digits = value.replace(/\D/g, '').slice(0, 15)
+  return `${international ? '+' : ''}${digits}`
+}
+
+function LocalizedNumberInput({
+  value,
+  ariaLabel,
+  ariaDescribedBy,
+  ariaInvalid = false,
+  placeholder,
+  locked = false,
+  onChange,
+  onBlur,
+}: {
+  value: unknown
+  ariaLabel: string
+  ariaDescribedBy?: string
+  ariaInvalid?: boolean
+  placeholder?: string
+  locked?: boolean
+  onChange: (value: unknown) => void
+  onBlur: () => void
+}) {
+  const initialValue = typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  const [editState, setEditState] = useState<{
+    sourceValue?: number
+    draft: string
+    focused: boolean
+  }>(() => ({ sourceValue: initialValue, draft: initialValue === undefined ? '' : formatLocalizedNumber(initialValue), focused: false }))
+  const state = Object.is(editState.sourceValue, initialValue)
+    ? editState
+    : { sourceValue: initialValue, draft: initialValue === undefined ? '' : formatLocalizedNumber(initialValue), focused: false }
+
+  return (
+    <input
+      className={locked ? 'dynamic-number-input is-autofill-locked' : 'dynamic-number-input'}
+      type="text"
+      inputMode="decimal"
+      pattern="[0-9]*([.,][0-9]*)?"
+      value={state.draft}
+      placeholder={placeholder}
+      readOnly={locked}
+      aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
+      aria-invalid={ariaInvalid}
+      onFocus={() => {
+        if (locked) return
+        setEditState({ sourceValue: initialValue, draft: initialValue === undefined ? '' : String(initialValue), focused: true })
+      }}
+      onChange={(event) => {
+        if (locked) return
+        const draft = sanitizeDecimalDraft(event.target.value)
+        if (!draft) {
+          setEditState({ sourceValue: undefined, draft: '', focused: true })
+          onChange(undefined)
+          return
+        }
+        const parsed = Number(draft.replace(',', '.'))
+        if (!Number.isFinite(parsed) || parsed < 0) return
+        setEditState({ sourceValue: parsed, draft, focused: true })
+        onChange(parsed)
+      }}
+      onBlur={() => {
+        const parsed = state.draft ? Number(state.draft.replace(',', '.')) : undefined
+        const nextValue = parsed !== undefined && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+        setEditState({ sourceValue: nextValue, draft: nextValue === undefined ? '' : formatLocalizedNumber(nextValue), focused: false })
+        onChange(nextValue)
+        onBlur()
+      }}
+    />
+  )
+}
+
+function sanitizeDecimalDraft(value: string): string {
+  const normalized = value.replace(',', '.').replace(/[^0-9.]/g, '')
+  const decimalIndex = normalized.indexOf('.')
+  if (decimalIndex < 0) return normalized.slice(0, 15)
+  const whole = normalized.slice(0, decimalIndex).slice(0, 15) || '0'
+  const fraction = normalized.slice(decimalIndex + 1).replace(/\./g, '').slice(0, 6)
+  return `${whole}.${fraction}`
+}
+
+function formatLocalizedNumber(value: number): string {
+  return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 6 }).format(value)
+}
+
+function formatLocalizedCurrency(value: number): string {
+  return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(value)
+}
+
+function rootFieldKey(fieldKey: string): string {
+  return fieldKey.split('.')[0] ?? fieldKey
 }
 
 interface DynamicFileFieldProps {
@@ -353,7 +723,7 @@ function DynamicFileField({ field, value, mode, requestId, allowDelete, errorId,
       {mode !== 'readonly' && (
         <div className="dynamic-file-upload">
           <label className={`secondary-button dynamic-file-picker${canUpload ? '' : ' is-disabled'}`}>
-            <span>Chọn tệp</span>
+            <span>{field.placeholder?.trim() || defaultFieldPlaceholder('FILE')}</span>
             <input type="file" aria-label={`Chọn tệp cho ${field.label}`} aria-required={field.required} accept={config.allowedMimeTypes.join(',')} multiple={config.multiple} disabled={!canUpload || Boolean(uploadState)} onChange={(event) => void selectFiles(event)} />
           </label>
           <span className="dynamic-file-policy">Tối đa {config.maxFiles} tệp, {humanFileSize(config.maxFileSizeBytes)}/tệp</span>
@@ -438,6 +808,7 @@ function DynamicFormError({ message, onRetry }: { message: string; onRetry?: () 
 }
 
 function layoutSpan(field: FormField): number {
+  if (field.type === 'TABLE' || field.type === 'SECTION') return 12
   const layout = field.layout ?? {}
   if (layout.fullWidth === true || layout.width === 'full') return 12
   if (layout.width === 'half') return 6
@@ -445,7 +816,7 @@ function layoutSpan(field: FormField): number {
   if (layout.width === 'quarter') return 3
   const requested = typeof layout.columnSpan === 'number' ? layout.columnSpan : layout.colSpan
   if (typeof requested === 'number' && Number.isFinite(requested)) return Math.min(12, Math.max(1, Math.round(requested)))
-  return ['TEXTAREA', 'FILE', 'MULTI_SELECT', 'CHECKBOX', 'RADIO'].includes(field.type) ? 12 : 6
+  return 12
 }
 
 function optionLabel(field: FormField, value: unknown): string {
@@ -454,10 +825,6 @@ function optionLabel(field: FormField, value: unknown): string {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
-}
-
-function numberInputValue(value: unknown): string | number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : ''
 }
 
 function normalizeMimeType(value: string): string {

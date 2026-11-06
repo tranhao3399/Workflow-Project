@@ -9,6 +9,7 @@ import { FilterSelect } from './ui/FilterSelect'
 import { ListToolbar } from './ui/ListToolbar'
 import { PageHeader } from './ui/PageHeader'
 import { SurfaceCard } from './ui/SurfaceCard'
+import { SortableTableHeader } from './ui/SortableTableHeader'
 import { TablePagination } from './ui/TablePagination'
 
 type StatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE'
@@ -37,6 +38,9 @@ export function PermissionPage({ onCreateRole, onOpenRole, canCreateRole }: Perm
   const [openSelect, setOpenSelect] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<PageSize>(10)
+  const [sortBy, setSortBy] = useState<'authority' | 'key' | 'name' | 'status'>('authority')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [hasUserSorted, setHasUserSorted] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
   async function load(showRefresh = false) {
@@ -67,11 +71,20 @@ export function PermissionPage({ onCreateRole, onOpenRole, canCreateRole }: Perm
       return matchesSearch && matchesStatus
     })
   }, [roles, searchQuery, status])
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const sorted = useMemo(() => [...filtered].sort((left, right) => {
+    let comparison = 0
+    if (sortBy === 'authority') comparison = roleAuthorityScore(left) - roleAuthorityScore(right)
+    else if (sortBy === 'key') comparison = left.key.localeCompare(right.key, 'vi')
+    else if (sortBy === 'name') comparison = left.name.localeCompare(right.name, 'vi')
+    else comparison = Number(left.isActive) - Number(right.isActive)
+    if (comparison === 0) comparison = left.name.localeCompare(right.name, 'vi')
+    return sortOrder === 'asc' ? comparison : -comparison
+  }), [filtered, sortBy, sortOrder])
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
   const currentPage = Math.min(page, totalPages)
-  const rows = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  const rangeStart = filtered.length ? (currentPage - 1) * pageSize + 1 : 0
-  const rangeEnd = Math.min(currentPage * pageSize, filtered.length)
+  const rows = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const rangeStart = sorted.length ? (currentPage - 1) * pageSize + 1 : 0
+  const rangeEnd = Math.min(currentPage * pageSize, sorted.length)
   const activeFilterCount = Number(status !== 'ALL')
 
   function resetAndLoad() {
@@ -80,9 +93,20 @@ export function PermissionPage({ onCreateRole, onOpenRole, canCreateRole }: Perm
     setStatus('ALL')
     setPage(1)
     setPageSize(10)
+    setSortBy('authority')
+    setSortOrder('desc')
+    setHasUserSorted(false)
     setIsFilterOpen(false)
     setOpenSelect(false)
     void load(true)
+  }
+
+  function changeSort(column: string) {
+    const nextColumn = column as 'key' | 'name' | 'status'
+    setSortOrder((current) => sortBy === nextColumn ? (current === 'asc' ? 'desc' : 'asc') : 'asc')
+    setSortBy(nextColumn)
+    setHasUserSorted(true)
+    setPage(1)
   }
 
   if (hasError) return <ErrorState onRetry={() => void load(true)} />
@@ -101,8 +125,23 @@ export function PermissionPage({ onCreateRole, onOpenRole, canCreateRole }: Perm
           <AdvancedFilterPanel id="role-filters" label="Bộ lọc vai trò" isOpen={isFilterOpen}><div className="advanced-filter-content master-filter-content"><label><span>Trạng thái</span><FilterSelect ariaLabel="Lọc theo trạng thái vai trò" value={status} options={[{ value: 'ALL', label: 'Tất cả trạng thái' }, { value: 'ACTIVE', label: 'Hoạt động' }, { value: 'INACTIVE', label: 'Ngưng hoạt động' }]} isOpen={openSelect} onOpenChange={setOpenSelect} onChange={(value) => { setStatus(value as StatusFilter); setPage(1) }} /></label></div></AdvancedFilterPanel>
         </div>
       </ListToolbar>
-      <DataTable className="admin-table master-data-table role-catalog-table" fixedLayout><thead><tr><th>Mã vai trò</th><th>Vai trò</th><th>Trạng thái</th></tr></thead><tbody>{rows.length === 0 ? <EmptyTableRow colSpan={3} message="Không tìm thấy vai trò phù hợp." /> : rows.map((role) => <tr key={role.id}><td><button className="master-code-link" type="button" onClick={() => onOpenRole(role.id)}>{role.key}</button></td><td><strong className="master-primary-text">{role.name}</strong></td><td><RoleStatusBadge isActive={role.isActive} /></td></tr>)}</tbody></DataTable>
+      <DataTable className="admin-table master-data-table role-catalog-table" fixedLayout><thead><tr>
+        <SortableTableHeader column="key" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã vai trò</SortableTableHeader>
+        <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Vai trò</SortableTableHeader>
+        <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
+      </tr></thead><tbody>{rows.length === 0 ? <EmptyTableRow colSpan={3} message="Không tìm thấy vai trò phù hợp." /> : rows.map((role) => <tr key={role.id}><td><button className="master-code-link" type="button" onClick={() => onOpenRole(role.id)}>{role.key}</button></td><td><strong className="master-primary-text">{role.name}</strong></td><td><RoleStatusBadge isActive={role.isActive} /></td></tr>)}</tbody></DataTable>
       <TablePagination currentPage={currentPage} totalPages={totalPages} onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)} rangeLabel={`${rangeStart}–${rangeEnd} trên ${filtered.length} vai trò`} pageSize={pageSize} pageSizes={pageSizes} onPageSizeChange={(value) => { setPageSize(value as PageSize); setPage(1) }} />
     </SurfaceCard>
   </>
+}
+
+function roleAuthorityScore(role: RoleRecord): number {
+  const fixedPriority: Record<string, number> = {
+    ADMIN: 100_000,
+    DIRECTOR: 90_000,
+    MANAGER: 80_000,
+    APPROVER: 70_000,
+    EMPLOYEE: 0,
+  }
+  return (fixedPriority[role.key] ?? 50_000) + role.permissionKeys.length
 }

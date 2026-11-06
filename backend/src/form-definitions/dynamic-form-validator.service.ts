@@ -1,11 +1,29 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
 import {
+  formAutoFillSources,
   formFieldTypes,
+  tableColumnTypes,
   visibilityOperators,
+  type FormAutoFillSource,
+  type FormField,
   type FormFieldType,
+  type TableColumnType,
   type VisibilityOperator,
 } from './schemas/form-definition.schema.js';
+
+const AUTO_FILL_ALLOWED_FIELD_TYPES: Readonly<Record<FormAutoFillSource, ReadonlySet<FormFieldType>>> = {
+  REQUEST_CODE: new Set(['TEXT']),
+  REQUEST_STATUS: new Set(['TEXT']),
+  REQUESTER_EMPLOYEE_CODE: new Set(['TEXT', 'TEXTAREA']),
+  REQUESTER_FULL_NAME: new Set(['TEXT', 'TEXTAREA']),
+  REQUESTER_EMAIL: new Set(['EMAIL', 'TEXT', 'TEXTAREA']),
+  REQUESTER_PHONE: new Set(['PHONE', 'TEXT', 'TEXTAREA']),
+  REQUESTER_DEPARTMENT_NAME: new Set(['TEXT', 'TEXTAREA']),
+  REQUESTER_WORK_UNIT_NAME: new Set(['TEXT', 'TEXTAREA']),
+  REQUESTER_POSITION_NAME: new Set(['TEXT', 'TEXTAREA']),
+  CURRENT_DATE: new Set(['DATE', 'DATETIME', 'TEXT']),
+};
 
 const OPTION_FIELD_TYPES = new Set<FormFieldType>(['SELECT', 'MULTI_SELECT', 'RADIO', 'CHECKBOX']);
 const TEXT_FIELD_TYPES = new Set<FormFieldType>(['TEXT', 'TEXTAREA', 'EMAIL', 'PHONE']);
@@ -13,7 +31,13 @@ const NUMBER_FIELD_TYPES = new Set<FormFieldType>(['NUMBER', 'CURRENCY']);
 const MAX_PATTERN_LENGTH = 200;
 const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 const MAX_FILES_PER_FIELD = 100;
+const MAX_TABLE_ROWS = 100;
+const MAX_TABLE_COLUMNS = 30;
 const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i;
+const SYSTEM_REQUEST_FIELDS = [
+  { key: 'request_code', label: 'Mã phiếu', source: 'REQUEST_CODE' },
+  { key: 'request_status', label: 'Trạng thái', source: 'REQUEST_STATUS' },
+] as const;
 
 export interface DefinitionValidationError {
   path: string;
@@ -38,6 +62,73 @@ export interface DynamicFormSource {
 
 @Injectable()
 export class DynamicFormValidatorService {
+  ensureSystemRequestFields(fields: readonly FormField[]): FormField[];
+  ensureSystemRequestFields(fields: readonly unknown[]): unknown[];
+  ensureSystemRequestFields(fields: readonly unknown[]): unknown[] {
+    const seen = new Set<FormAutoFillSource>();
+    const normalized = fields.flatMap((field) => {
+      if (!this.isRecord(field)) return [field];
+      const plainField = this.toPlainRecord(field);
+      const autoFill = this.isRecord(field.autoFill) ? field.autoFill : undefined;
+      const source = autoFill?.source;
+      const template = SYSTEM_REQUEST_FIELDS.find((item) => item.source === source);
+      if (!template) {
+        if (this.isRecord(plainField.autoFill) && plainField.autoFill.readOnly === true) {
+          plainField.required = false;
+        }
+        return [plainField];
+      }
+      if (seen.has(template.source)) return [];
+      seen.add(template.source);
+      return [{
+        ...plainField,
+        key: template.key,
+        label: template.label,
+        type: 'TEXT',
+        required: false,
+        autoFill: { source: template.source, readOnly: true },
+      }];
+    });
+    const missing = SYSTEM_REQUEST_FIELDS
+      .filter((template) => !seen.has(template.source))
+      .map((template) => ({
+        key: template.key,
+        label: template.label,
+        type: 'TEXT',
+        required: false,
+        placeholder: 'Dữ liệu được tự động điền khi tạo phiếu',
+        layout: { columnSpan: 6 },
+        autoFill: { source: template.source, readOnly: true },
+      }));
+    return [...missing, ...normalized].map((field, index) => (
+      this.isRecord(field) ? { ...field, order: (index + 1) * 10 } : field
+    ));
+  }
+
+  assertSystemRequestFieldsValid(fields: readonly unknown[]): void {
+    for (const template of SYSTEM_REQUEST_FIELDS) {
+      const matches = fields.filter((field) => {
+        if (!this.isRecord(field) || !this.isRecord(field.autoFill)) return false;
+        return field.autoFill.source === template.source;
+      });
+      const field = matches[0];
+      if (
+        matches.length !== 1 ||
+        !this.isRecord(field) ||
+        field.key !== template.key ||
+        field.type !== 'TEXT' ||
+        field.required === true ||
+        !this.isRecord(field.autoFill) ||
+        field.autoFill.readOnly !== true
+      ) {
+        throw new BadRequestException({
+          message: `Biểu mẫu phải có đúng một trường hệ thống ${template.label} và không được thay đổi cấu hình trường này.`,
+          field: 'fields',
+        });
+      }
+    }
+  }
+
   validateDefinition(fields: readonly unknown[]): DefinitionValidationError[] {
     const errors: DefinitionValidationError[] = [];
     const fieldsByKey = new Map<string, Record<string, unknown>>();
@@ -68,8 +159,11 @@ export class DynamicFormValidatorService {
       }
       this.validateOptions(value, path, errors);
       this.validateFieldRules(value, path, errors);
+      this.validateAutoFill(value, path, errors);
       this.validateFileConfig(value, path, errors);
-      if (value.defaultValue !== undefined) {
+      this.validateTableConfig(value, path, errors);
+      this.validateSectionConfig(value, path, errors);
+      if (value.defaultValue !== undefined && value.type !== 'SECTION') {
         const defaultErrors: DynamicFormValidationError[] = [];
         this.validateFieldValue(value, value.defaultValue, defaultErrors);
         for (const error of defaultErrors) {
@@ -144,15 +238,21 @@ export class DynamicFormValidatorService {
 
     const fields = source.fields.filter((field): field is Record<string, unknown> => this.isRecord(field));
     const fieldsByKey = new Map(fields.map((field) => [String(field.key), field]));
+    const inputFieldKeys = new Set(
+      fields
+        .filter((field) => field.type !== 'SECTION')
+        .map((field) => String(field.key)),
+    );
     const errors: DynamicFormValidationError[] = [];
     for (const key of Object.keys(formData)) {
-      if (!fieldsByKey.has(key)) {
+      if (!inputFieldKeys.has(key)) {
         errors.push({ fieldKey: key, code: 'UNKNOWN_FIELD', message: `Trường ${key} không được khai báo trong biểu mẫu.` });
       }
     }
 
     const visibility = new Map<string, boolean>();
     for (const field of fields) {
+      if (field.type === 'SECTION') continue;
       const key = String(field.key);
       const visible = this.isFieldVisible(key, fieldsByKey, formData, visibility, new Set());
       const value = formData[key];
@@ -274,6 +374,45 @@ export class DynamicFormValidatorService {
     }
   }
 
+  private validateAutoFill(
+    field: Record<string, unknown>,
+    path: string,
+    errors: DefinitionValidationError[],
+  ): void {
+    if (!this.isFormFieldType(field.type) || field.autoFill === undefined) return;
+    if (!this.isRecord(field.autoFill)) {
+      errors.push({
+        path: `${path}.autoFill`,
+        code: 'INVALID_AUTO_FILL',
+        message: 'Cấu hình tự động điền không hợp lệ.',
+      });
+      return;
+    }
+    const source = field.autoFill.source;
+    if (!this.isAutoFillSource(source)) {
+      errors.push({
+        path: `${path}.autoFill.source`,
+        code: 'INVALID_AUTO_FILL_SOURCE',
+        message: 'Nguồn tự động điền không hợp lệ.',
+      });
+      return;
+    }
+    if (!AUTO_FILL_ALLOWED_FIELD_TYPES[source].has(field.type)) {
+      errors.push({
+        path: `${path}.autoFill.source`,
+        code: 'INCOMPATIBLE_AUTO_FILL_SOURCE',
+        message: `Loại trường ${field.type} không hỗ trợ nguồn tự động điền ${source}.`,
+      });
+    }
+    if (typeof field.autoFill.readOnly !== 'boolean') {
+      errors.push({
+        path: `${path}.autoFill.readOnly`,
+        code: 'INVALID_AUTO_FILL_READ_ONLY',
+        message: 'Cấu hình khóa trường tự động điền phải là kiểu boolean.',
+      });
+    }
+  }
+
   private validateFileConfig(
     field: Record<string, unknown>,
     path: string,
@@ -321,6 +460,65 @@ export class DynamicFormValidatorService {
     }
   }
 
+  private validateTableConfig(
+    field: Record<string, unknown>,
+    path: string,
+    errors: DefinitionValidationError[],
+  ): void {
+    if (!this.isFormFieldType(field.type)) return;
+    if (field.type !== 'TABLE') {
+      if (field.tableConfig !== undefined) {
+        errors.push({ path: `${path}.tableConfig`, code: 'TABLE_CONFIG_NOT_ALLOWED', message: 'tableConfig chỉ dùng cho trường TABLE.' });
+      }
+      return;
+    }
+    if (!this.isRecord(field.tableConfig) || Array.isArray(field.tableConfig)) {
+      errors.push({ path: `${path}.tableConfig`, code: 'TABLE_CONFIG_REQUIRED', message: 'Trường TABLE cần tableConfig hợp lệ.' });
+      return;
+    }
+    const config = field.tableConfig;
+    if (!Array.isArray(config.columns) || config.columns.length === 0 || config.columns.length > MAX_TABLE_COLUMNS) {
+      errors.push({ path: `${path}.tableConfig.columns`, code: 'INVALID_TABLE_COLUMNS', message: `Bảng cần từ 1 đến ${MAX_TABLE_COLUMNS} cột.` });
+    } else {
+      const keys = new Set<string>();
+      for (const [columnIndex, column] of config.columns.entries()) {
+        const columnPath = `${path}.tableConfig.columns.${columnIndex}`;
+        if (!this.isRecord(column) || Array.isArray(column)) {
+          errors.push({ path: columnPath, code: 'INVALID_TABLE_COLUMN', message: 'Cấu hình cột bảng không hợp lệ.' });
+          continue;
+        }
+        if (typeof column.key !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*$/.test(column.key)) {
+          errors.push({ path: `${columnPath}.key`, code: 'INVALID_TABLE_COLUMN_KEY', message: 'Mã cột bảng không đúng định dạng.' });
+        } else if (keys.has(column.key)) {
+          errors.push({ path: `${columnPath}.key`, code: 'DUPLICATE_TABLE_COLUMN_KEY', message: `Mã cột ${column.key} bị trùng.` });
+        } else {
+          keys.add(column.key);
+        }
+        if (typeof column.label !== 'string' || !column.label.trim()) {
+          errors.push({ path: `${columnPath}.label`, code: 'TABLE_COLUMN_LABEL_REQUIRED', message: 'Tên cột bảng là bắt buộc.' });
+        }
+        if (!this.isTableColumnType(column.type)) {
+          errors.push({ path: `${columnPath}.type`, code: 'INVALID_TABLE_COLUMN_TYPE', message: 'Kiểu cột bảng không được hỗ trợ.' });
+          continue;
+        }
+        this.validateOptions(column, columnPath, errors);
+        this.validateFieldRules(column, columnPath, errors);
+      }
+    }
+    if (!this.isNonNegativeInteger(config.minRows) || config.minRows > MAX_TABLE_ROWS) {
+      errors.push({ path: `${path}.tableConfig.minRows`, code: 'INVALID_TABLE_MIN_ROWS', message: `Số dòng tối thiểu phải từ 0 đến ${MAX_TABLE_ROWS}.` });
+    }
+    if (!this.isPositiveInteger(config.maxRows) || config.maxRows > MAX_TABLE_ROWS) {
+      errors.push({ path: `${path}.tableConfig.maxRows`, code: 'INVALID_TABLE_MAX_ROWS', message: `Số dòng tối đa phải từ 1 đến ${MAX_TABLE_ROWS}.` });
+    }
+    if (typeof config.minRows === 'number' && typeof config.maxRows === 'number' && config.minRows > config.maxRows) {
+      errors.push({ path: `${path}.tableConfig.maxRows`, code: 'INVALID_TABLE_ROW_RANGE', message: 'Số dòng tối đa phải lớn hơn hoặc bằng số dòng tối thiểu.' });
+    }
+    if (typeof config.allowAddRows !== 'boolean' || typeof config.allowRemoveRows !== 'boolean') {
+      errors.push({ path: `${path}.tableConfig`, code: 'INVALID_TABLE_ACTION_CONFIG', message: 'Cấu hình thêm, xóa dòng của bảng không hợp lệ.' });
+    }
+  }
+
   private validateVisibilityCycles(
     fieldsByKey: Map<string, Record<string, unknown>>,
     errors: DefinitionValidationError[],
@@ -352,6 +550,35 @@ export class DynamicFormValidatorService {
     for (const key of fieldsByKey.keys()) visit(key, []);
   }
 
+  private validateSectionConfig(
+    field: Record<string, unknown>,
+    path: string,
+    errors: DefinitionValidationError[],
+  ): void {
+    if (field.type !== 'SECTION') return;
+    if (field.required === true) {
+      errors.push({
+        path: `${path}.required`,
+        code: 'SECTION_CANNOT_BE_REQUIRED',
+        message: 'Tiêu đề phân đoạn không phải trường nhập liệu nên không thể bắt buộc.',
+      });
+    }
+    if (field.defaultValue !== undefined) {
+      errors.push({
+        path: `${path}.defaultValue`,
+        code: 'SECTION_DEFAULT_NOT_ALLOWED',
+        message: 'Tiêu đề phân đoạn không hỗ trợ giá trị mặc định.',
+      });
+    }
+    if (field.validation !== undefined) {
+      errors.push({
+        path: `${path}.validation`,
+        code: 'SECTION_VALIDATION_NOT_ALLOWED',
+        message: 'Tiêu đề phân đoạn không hỗ trợ quy tắc kiểm tra dữ liệu.',
+      });
+    }
+  }
+
   private validateFieldValue(
     field: Record<string, unknown>,
     value: unknown,
@@ -360,11 +587,22 @@ export class DynamicFormValidatorService {
     const key = String(field.key);
     if (!this.isFormFieldType(field.type)) return;
     const type = field.type;
+    if (type === 'SECTION') {
+      errors.push({ fieldKey: key, code: 'INVALID_TYPE', message: `${this.fieldLabel(field)} không nhận dữ liệu nhập.` });
+      return;
+    }
+    if (type === 'TABLE') {
+      this.validateTableValue(field, value, errors);
+      return;
+    }
     let typeValid = true;
     if (TEXT_FIELD_TYPES.has(type)) {
       typeValid = typeof value === 'string';
       if (type === 'EMAIL' && typeValid && !this.isEmail(value as string)) {
         errors.push({ fieldKey: key, code: 'INVALID_EMAIL', message: `${this.fieldLabel(field)} không phải email hợp lệ.` });
+      }
+      if (type === 'PHONE' && typeValid && !/^\+?\d{1,15}$/.test(value as string)) {
+        errors.push({ fieldKey: key, code: 'INVALID_PHONE', message: `${this.fieldLabel(field)} chỉ được gồm tối đa 15 chữ số và có thể bắt đầu bằng dấu +.` });
       }
     } else if (NUMBER_FIELD_TYPES.has(type)) {
       typeValid = typeof value === 'number' && Number.isFinite(value);
@@ -388,7 +626,62 @@ export class DynamicFormValidatorService {
       errors.push({ fieldKey: key, code: 'INVALID_TYPE', message: `${this.fieldLabel(field)} không đúng kiểu ${type}.` });
       return;
     }
+    if (NUMBER_FIELD_TYPES.has(type) && typeof value === 'number' && value < 0) {
+      errors.push({ fieldKey: key, code: 'NON_NEGATIVE_REQUIRED', message: `${this.fieldLabel(field)} phải lớn hơn hoặc bằng 0.` });
+      return;
+    }
+    if (type === 'CURRENCY' && typeof value === 'number' && !Number.isInteger(value)) {
+      errors.push({ fieldKey: key, code: 'CURRENCY_INTEGER_REQUIRED', message: `${this.fieldLabel(field)} phải là số nguyên.` });
+      return;
+    }
     this.validateValueAgainstRules(field, value, errors);
+  }
+
+  private validateTableValue(
+    field: Record<string, unknown>,
+    value: unknown,
+    errors: DynamicFormValidationError[],
+  ): void {
+    const fieldKey = String(field.key);
+    const fieldLabel = this.fieldLabel(field);
+    const config = this.isRecord(field.tableConfig) && !Array.isArray(field.tableConfig) ? field.tableConfig : undefined;
+    if (!Array.isArray(value) || !config || !Array.isArray(config.columns)) {
+      errors.push({ fieldKey, code: 'INVALID_TYPE', message: `${fieldLabel} không đúng định dạng bảng.` });
+      return;
+    }
+    const minRows = typeof config.minRows === 'number' ? config.minRows : 0;
+    const maxRows = typeof config.maxRows === 'number' ? config.maxRows : MAX_TABLE_ROWS;
+    if (value.length < minRows) {
+      errors.push({ fieldKey, code: 'TABLE_MIN_ROWS', message: `${fieldLabel} cần ít nhất ${minRows} dòng.` });
+    }
+    if (value.length > maxRows) {
+      errors.push({ fieldKey, code: 'TABLE_MAX_ROWS', message: `${fieldLabel} chỉ được có tối đa ${maxRows} dòng.` });
+    }
+    const columns = config.columns.filter((column): column is Record<string, unknown> => this.isRecord(column) && !Array.isArray(column));
+    const columnKeys = new Set(columns.map((column) => String(column.key)));
+    for (const [rowIndex, row] of value.entries()) {
+      if (!this.isRecord(row) || Array.isArray(row)) {
+        errors.push({ fieldKey: `${fieldKey}.${rowIndex}`, code: 'INVALID_TABLE_ROW', message: `Dòng ${rowIndex + 1} của ${fieldLabel} không hợp lệ.` });
+        continue;
+      }
+      for (const key of Object.keys(row)) {
+        if (!columnKeys.has(key)) {
+          errors.push({ fieldKey: `${fieldKey}.${rowIndex}.${key}`, code: 'UNKNOWN_TABLE_COLUMN', message: `Cột ${key} không được khai báo trong ${fieldLabel}.` });
+        }
+      }
+      for (const column of columns) {
+        const columnKey = String(column.key);
+        const valuePath = `${fieldKey}.${rowIndex}.${columnKey}`;
+        const cellValue = row[columnKey];
+        if (column.required === true && this.isEmpty(cellValue)) {
+          errors.push({ fieldKey: valuePath, code: 'REQUIRED', message: `Dòng ${rowIndex + 1} - ${this.fieldLabel(column)} là bắt buộc.` });
+          continue;
+        }
+        if (!this.isEmpty(cellValue)) {
+          this.validateFieldValue({ ...column, key: valuePath, label: `Dòng ${rowIndex + 1} - ${this.fieldLabel(column)}` }, cellValue, errors);
+        }
+      }
+    }
   }
 
   private validateValueAgainstRules(
@@ -580,11 +873,27 @@ export class DynamicFormValidatorService {
     return typeof value === 'string' && formFieldTypes.some((type) => type === value);
   }
 
+  private isTableColumnType(value: unknown): value is TableColumnType {
+    return typeof value === 'string' && tableColumnTypes.some((type) => type === value);
+  }
+
   private isVisibilityOperator(value: unknown): value is VisibilityOperator {
     return typeof value === 'string' && visibilityOperators.some((operator) => operator === value);
   }
 
+  private isAutoFillSource(value: unknown): value is FormAutoFillSource {
+    return typeof value === 'string' && formAutoFillSources.some((source) => source === value);
+  }
+
   private isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+  }
+
+  private toPlainRecord(value: Record<string, unknown>): Record<string, unknown> {
+    const toObject = value.toObject;
+    if (typeof toObject === 'function') {
+      return toObject.call(value) as Record<string, unknown>;
+    }
+    return structuredClone(value);
   }
 }

@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import { OrganizationUnitType } from '../enums/organization-unit-type.enum.js';
 
 export type DepartmentDocument = HydratedDocument<Department>;
 
@@ -20,6 +21,14 @@ export class Department {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Employee', required: false })
   managerEmployeeId?: Types.ObjectId;
 
+  @Prop({
+    type: String,
+    enum: Object.values(OrganizationUnitType),
+    default: OrganizationUnitType.UNCLASSIFIED,
+    index: true,
+  })
+  unitType: OrganizationUnitType;
+
   @Prop({ required: true, default: true, index: true })
   isActive: boolean;
 
@@ -39,4 +48,5 @@ export class Department {
 export const DepartmentSchema = SchemaFactory.createForClass(Department);
 DepartmentSchema.index({ isActive: 1, sortOrder: 1, name: 1 });
 DepartmentSchema.index({ parentId: 1, isActive: 1 });
+DepartmentSchema.index({ unitType: 1, parentId: 1, isActive: 1 });
 DepartmentSchema.index({ managerEmployeeId: 1 });

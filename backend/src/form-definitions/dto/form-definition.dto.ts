@@ -17,15 +17,22 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   definitionStatuses,
+  formAutoFillSources,
+  formCategories,
   formFieldTypes,
+  tableColumnTypes,
   visibilityOperators,
   type DefinitionStatus,
+  type FormAutoFillSource,
+  type FormCategory,
   type FormFieldType,
+  type TableColumnType,
   type VisibilityOperator,
 } from '../schemas/form-definition.schema.js';
 
@@ -89,6 +96,16 @@ export class FormFieldVisibilityConditionDto {
   value: unknown;
 }
 
+export class FormFieldAutoFillDto {
+  @ApiProperty({ enum: formAutoFillSources, example: 'REQUESTER_EMPLOYEE_CODE' })
+  @IsIn(formAutoFillSources)
+  source: FormAutoFillSource;
+
+  @ApiProperty({ example: true, default: true })
+  @IsBoolean()
+  readOnly: boolean;
+}
+
 export class FormFileConfigDto {
   @ApiProperty({ example: true })
   @IsBoolean()
@@ -105,6 +122,62 @@ export class FormFileConfigDto {
   @ApiProperty({ example: 5, minimum: 1, maximum: 100 })
   @Type(() => Number) @IsInt() @Min(1) @Max(100)
   maxFiles: number;
+}
+
+export class FormTableColumnDto {
+  @ApiProperty({ example: 'description', pattern: '^[A-Za-z][A-Za-z0-9_]*$', maxLength: 80 })
+  @Transform(trim) @IsString() @Matches(/^[A-Za-z][A-Za-z0-9_]*$/) @MaxLength(80)
+  key: string;
+
+  @ApiProperty({ example: 'Nội dung', maxLength: 160 })
+  @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
+  label: string;
+
+  @ApiProperty({ enum: tableColumnTypes, example: 'TEXT' })
+  @IsIn(tableColumnTypes)
+  type: TableColumnType;
+
+  @ApiProperty({ example: true })
+  @IsBoolean()
+  required: boolean;
+
+  @ApiProperty({ example: 10, minimum: 0 })
+  @Type(() => Number) @IsInt() @Min(0)
+  order: number;
+
+  @ApiPropertyOptional({ maxLength: 300 })
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(300)
+  placeholder?: string;
+
+  @ApiPropertyOptional({ type: [FormFieldOptionDto] })
+  @IsOptional() @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => FormFieldOptionDto)
+  options?: FormFieldOptionDto[];
+
+  @ApiPropertyOptional({ type: FormFieldValidationDto })
+  @IsOptional() @ValidateNested() @Type(() => FormFieldValidationDto)
+  validation?: FormFieldValidationDto;
+}
+
+export class FormTableConfigDto {
+  @ApiProperty({ type: [FormTableColumnDto] })
+  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => FormTableColumnDto)
+  columns: FormTableColumnDto[];
+
+  @ApiProperty({ example: 1, minimum: 0, maximum: 100 })
+  @Type(() => Number) @IsInt() @Min(0) @Max(100)
+  minRows: number;
+
+  @ApiProperty({ example: 50, minimum: 1, maximum: 100 })
+  @Type(() => Number) @IsInt() @Min(1) @Max(100)
+  maxRows: number;
+
+  @ApiProperty({ example: true })
+  @IsBoolean()
+  allowAddRows: boolean;
+
+  @ApiProperty({ example: true })
+  @IsBoolean()
+  allowRemoveRows: boolean;
 }
 
 export class FormFieldDto {
@@ -152,6 +225,10 @@ export class FormFieldDto {
   @IsOptional() @ValidateNested() @Type(() => FormFieldVisibilityConditionDto)
   visibilityCondition?: FormFieldVisibilityConditionDto;
 
+  @ApiPropertyOptional({ type: FormFieldAutoFillDto })
+  @IsOptional() @ValidateNested() @Type(() => FormFieldAutoFillDto)
+  autoFill?: FormFieldAutoFillDto;
+
   @ApiPropertyOptional({ type: 'object', additionalProperties: true })
   @IsOptional() @IsObject()
   layout?: Record<string, unknown>;
@@ -159,6 +236,10 @@ export class FormFieldDto {
   @ApiPropertyOptional({ type: FormFileConfigDto })
   @IsOptional() @ValidateNested() @Type(() => FormFileConfigDto)
   fileConfig?: FormFileConfigDto;
+
+  @ApiPropertyOptional({ type: FormTableConfigDto })
+  @IsOptional() @ValidateNested() @Type(() => FormTableConfigDto)
+  tableConfig?: FormTableConfigDto;
 }
 
 export class FormSettingsDto {
@@ -189,6 +270,16 @@ export class CreateFormDefinitionDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
   name: string;
 
+  @ApiPropertyOptional({ description: 'Nhóm biểu mẫu được gán.' })
+  @IsOptional() @IsMongoId()
+  groupId?: string;
+
+  @ApiPropertyOptional({ enum: formCategories, example: 'HR' })
+  @IsOptional()
+  @Transform(({ value }) => (value === '' ? undefined : value))
+  @IsIn(formCategories)
+  category?: FormCategory;
+
   @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional() @Transform(trim) @IsString() @MaxLength(2000)
   description?: string;
@@ -207,6 +298,18 @@ export class UpdateFormDefinitionDto {
   @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
   name?: string;
 
+  @ApiPropertyOptional({ description: 'Nhóm biểu mẫu được gán; null để bỏ gán.', nullable: true })
+  @Transform(({ value }) => (value === '' ? null : value))
+  @ValidateIf((_, value) => value !== undefined && value !== null)
+  @IsMongoId()
+  groupId?: string | null;
+
+  @ApiPropertyOptional({ enum: formCategories, nullable: true, example: 'HR' })
+  @Transform(({ value }) => (value === '' ? null : value))
+  @ValidateIf((_, value) => value !== undefined && value !== null)
+  @IsIn(formCategories)
+  category?: FormCategory | null;
+
   @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional() @Transform(trim) @IsString() @MaxLength(2000)
   description?: string;
@@ -220,6 +323,13 @@ export class UpdateFormDefinitionDto {
   settings?: FormSettingsDto;
 }
 
+export class UpdateFormDefinitionGroupDto {
+  @ApiPropertyOptional({ description: 'Nhóm mới; null để chuyển về Chưa phân nhóm.', nullable: true })
+  @ValidateIf((_, value) => value !== null)
+  @IsMongoId()
+  groupId: string | null;
+}
+
 export class CloneFormDefinitionDto {
   @ApiPropertyOptional({ example: 'Phiếu xin nghỉ - phiên bản mới', maxLength: 160 })
   @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
@@ -228,6 +338,17 @@ export class CloneFormDefinitionDto {
   @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional() @Transform(trim) @IsString() @MaxLength(2000)
   description?: string;
+}
+
+export class DuplicateFormDefinitionDto {
+  @ApiProperty({ example: 'LEAVE_REQUEST_COPY', pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 80 })
+  @Transform(({ value }) => typeof value === 'string' ? value.trim().toUpperCase() : value)
+  @IsString() @IsNotEmpty() @MaxLength(80) @Matches(/^[A-Z][A-Z0-9_]*$/)
+  code: string;
+
+  @ApiProperty({ example: 'Phiếu xin nghỉ - Bản sao', maxLength: 160 })
+  @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
+  name: string;
 }
 
 export class ValidateDynamicFormDto {
@@ -254,6 +375,18 @@ export class ListFormDefinitionsDto {
   @IsOptional() @IsIn(definitionStatuses)
   status?: DefinitionStatus;
 
+  @ApiPropertyOptional({ enum: formCategories })
+  @IsOptional() @IsIn(formCategories)
+  category?: FormCategory;
+
+  @ApiPropertyOptional({ description: 'Lọc theo nhóm biểu mẫu.' })
+  @IsOptional() @IsMongoId()
+  groupId?: string;
+
+  @ApiPropertyOptional({ enum: ['true'], description: 'Chỉ lấy biểu mẫu chưa được gán nhóm.' })
+  @IsOptional() @IsIn(['true'])
+  ungrouped?: 'true';
+
   @ApiPropertyOptional({ enum: formDefinitionSortFields, default: 'updatedAt' })
   @IsOptional() @IsIn(formDefinitionSortFields)
   sortBy: FormDefinitionSortField = 'updatedAt';
@@ -276,6 +409,9 @@ export class FormDefinitionResponseDto {
   @ApiProperty() code: string;
   @ApiProperty() version: number;
   @ApiProperty() name: string;
+  @ApiPropertyOptional({ example: { id: '66d0f0b74d5b5d4e65e75123', code: 'HR', name: 'Nhân sự', isActive: true } })
+  group?: { id: string; code: string; name: string; isActive: boolean };
+  @ApiPropertyOptional({ enum: formCategories }) category?: FormCategory;
   @ApiPropertyOptional() description?: string;
   @ApiProperty({ enum: definitionStatuses }) status: DefinitionStatus;
   @ApiProperty({ type: [FormFieldDto] }) fields: FormFieldDto[];

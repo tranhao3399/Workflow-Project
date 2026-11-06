@@ -1,6 +1,9 @@
 export const definitionStatuses = ['DRAFT', 'PUBLISHED', 'INACTIVE', 'ARCHIVED'] as const
 export type DefinitionStatus = (typeof definitionStatuses)[number]
 
+export const formCategories = ['HR', 'ADMIN', 'FINANCE', 'PROCUREMENT', 'IT', 'OTHER'] as const
+export type FormCategory = (typeof formCategories)[number]
+
 export const formFieldTypes = [
   'TEXT',
   'TEXTAREA',
@@ -16,11 +19,35 @@ export const formFieldTypes = [
   'CHECKBOX',
   'BOOLEAN',
   'FILE',
+  'TABLE',
+  'SECTION',
 ] as const
 export type FormFieldType = (typeof formFieldTypes)[number]
 
+export const tableColumnTypes = ['TEXT', 'NUMBER', 'CURRENCY', 'DATE', 'SELECT', 'BOOLEAN'] as const
+export type TableColumnType = (typeof tableColumnTypes)[number]
+
 export const conditionOperators = ['EQUALS', 'NOT_EQUALS', 'IN', 'GREATER_THAN', 'LESS_THAN'] as const
 export type ConditionOperator = (typeof conditionOperators)[number]
+
+export const formAutoFillSources = [
+  'REQUEST_CODE',
+  'REQUEST_STATUS',
+  'REQUESTER_EMPLOYEE_CODE',
+  'REQUESTER_FULL_NAME',
+  'REQUESTER_EMAIL',
+  'REQUESTER_PHONE',
+  'REQUESTER_DEPARTMENT_NAME',
+  'REQUESTER_WORK_UNIT_NAME',
+  'REQUESTER_POSITION_NAME',
+  'CURRENT_DATE',
+] as const
+export type FormAutoFillSource = (typeof formAutoFillSources)[number]
+
+export interface FormFieldAutoFill {
+  source: FormAutoFillSource
+  readOnly: boolean
+}
 
 export interface FormFieldOption {
   value: string
@@ -51,6 +78,25 @@ export interface FormFileConfig {
   maxFiles: number
 }
 
+export interface FormTableColumn {
+  key: string
+  label: string
+  type: TableColumnType
+  required: boolean
+  order: number
+  placeholder?: string
+  options?: FormFieldOption[]
+  validation?: FormFieldValidation
+}
+
+export interface FormTableConfig {
+  columns: FormTableColumn[]
+  minRows: number
+  maxRows: number
+  allowAddRows: boolean
+  allowRemoveRows: boolean
+}
+
 export interface FormField {
   key: string
   label: string
@@ -63,8 +109,10 @@ export interface FormField {
   options?: FormFieldOption[]
   validation?: FormFieldValidation
   visibilityCondition?: FormFieldVisibilityCondition
+  autoFill?: FormFieldAutoFill
   layout?: Record<string, unknown>
   fileConfig?: FormFileConfig
+  tableConfig?: FormTableConfig
 }
 
 export interface DynamicFormValidationError {
@@ -85,11 +133,28 @@ export interface FormSettings {
   instructions?: string
 }
 
+export interface FormGroupSummary {
+  id: string
+  code: string
+  name: string
+  isActive: boolean
+}
+
+export interface FormGroup extends FormGroupSummary {
+  description?: string
+  sortOrder: number
+  formCount: number
+  createdAt: string
+  updatedAt: string
+}
+
 export interface FormDefinition {
   id: string
   code: string
   version: number
   name: string
+  group?: FormGroupSummary
+  category?: FormCategory
   description?: string
   status: DefinitionStatus
   fields: FormField[]
@@ -111,6 +176,8 @@ export type ApprovalMode = (typeof approvalModes)[number]
 export const assigneeRuleTypes = [
   'REQUESTER_DIRECT_MANAGER',
   'REQUESTER_DEPARTMENT_MANAGER',
+  'REQUESTER_PARENT_DEPARTMENT_MANAGER',
+  'COMPANY_MANAGER',
   'ROLE',
   'ROLE_IN_REQUESTER_DEPARTMENT',
   'POSITION_IN_REQUESTER_DEPARTMENT',
@@ -327,6 +394,7 @@ export interface AvailableFormDefinition {
   code: string
   version: number
   name: string
+  group?: FormGroupSummary & { sortOrder: number }
   description?: string
   category?: string
   icon?: string
@@ -507,6 +575,9 @@ export type FormDefinitionSortField = (typeof formDefinitionSortFields)[number]
 export interface FormDefinitionFilter extends PaginationFilter {
   search?: string
   status?: DefinitionStatus
+  category?: FormCategory
+  groupId?: string
+  ungrouped?: true
   sortBy?: FormDefinitionSortField
   sortOrder?: SortDirection
 }

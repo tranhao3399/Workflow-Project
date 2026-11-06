@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { deleteWorkflowDefinition, listWorkflowDefinitions } from '../../services/workflow-definitions.service'
-import { definitionStatuses, type DefinitionStatus, type WorkflowDefinition } from '../../types/workflow'
+import { definitionStatuses, type DefinitionStatus, type WorkflowDefinition, type WorkflowDefinitionSortField } from '../../types/workflow'
 import { formatDateTime } from '../../utils/formatters'
 import { DefinitionStatusBadge } from '../StatusBadge'
 import { ErrorState, LoadingState } from '../DataStates'
@@ -10,6 +10,7 @@ import { FilterSelect } from '../ui/FilterSelect'
 import { ListToolbar } from '../ui/ListToolbar'
 import { PageHeader } from '../ui/PageHeader'
 import { SurfaceCard } from '../ui/SurfaceCard'
+import { SortableTableHeader } from '../ui/SortableTableHeader'
 import { TablePagination } from '../ui/TablePagination'
 
 interface WorkflowBuilderCatalogPageProps {
@@ -30,6 +31,9 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<DefinitionStatus | ''>('')
+  const [sortBy, setSortBy] = useState<WorkflowDefinitionSortField>('updatedAt')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [hasUserSorted, setHasUserSorted] = useState(false)
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
@@ -48,7 +52,7 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
   const load = useCallback(async (refreshVersion: number) => {
     if (refreshVersion < 0) return
     try {
-      const result = await listWorkflowDefinitions({ page, limit, ...(search ? { search } : {}), ...(status ? { status } : {}), sortBy: 'updatedAt', sortOrder: 'desc' })
+      const result = await listWorkflowDefinitions({ page, limit, ...(search ? { search } : {}), ...(status ? { status } : {}), sortBy, sortOrder })
       setItems(result.data)
       setTotal(result.pagination.total)
       setTotalPages(Math.max(1, result.pagination.totalPages))
@@ -59,7 +63,7 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
     } finally {
       setIsLoading(false)
     }
-  }, [limit, page, search, status])
+  }, [limit, page, search, sortBy, sortOrder, status])
 
   useEffect(() => { const id = window.setTimeout(() => { void load(reloadVersion) }, 0); return () => window.clearTimeout(id) }, [load, reloadVersion])
 
@@ -82,6 +86,17 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
   const rangeStart = total ? (page - 1) * limit + 1 : 0
   const rangeEnd = Math.min(page * limit, total)
 
+  function changeSort(column: string) {
+    const nextColumn = column as WorkflowDefinitionSortField
+    setSortOrder((currentOrder) => sortBy === nextColumn
+      ? (currentOrder === 'asc' ? 'desc' : 'asc')
+      : (nextColumn === 'updatedAt' || nextColumn === 'version' ? 'desc' : 'asc'))
+    setSortBy(nextColumn)
+    setHasUserSorted(true)
+    setPage(1)
+    setIsLoading(true)
+  }
+
   return <>
     <PageHeader title="Workflow Builder" description="Thiết kế luồng xử lý, nhánh điều kiện và người phê duyệt theo từng phiên bản Form." actions={canCreate ? <button className="primary-button compact-button" type="button" onClick={onCreate}>+ Tạo Workflow</button> : undefined} />
     <SurfaceCard className="admin-section workflow-builder-catalog">
@@ -91,7 +106,15 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
         <button className="secondary-button catalog-refresh-button" type="button" disabled={isLoading} onClick={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }}>↻ {isLoading ? 'Đang tải...' : 'Làm mới'}</button>
       </div></ListToolbar>
       {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }} /> : <>
-        <DataTable className="admin-table workflow-builder-table" fixedLayout><thead><tr><th>Mã Workflow</th><th>Tên Workflow</th><th>Form</th><th>Form version</th><th>Workflow version</th><th>Trạng thái</th><th>Ngày cập nhật</th><th aria-label="Thao tác" /></tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không tìm thấy Workflow phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id} onClick={() => onOpen(item.id)}>
+        <DataTable className="admin-table workflow-builder-table" fixedLayout><thead><tr>
+          <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã Workflow</SortableTableHeader>
+          <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Tên Workflow</SortableTableHeader>
+          <th>Form</th><th>Form version</th>
+          <SortableTableHeader column="version" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Workflow version</SortableTableHeader>
+          <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
+          <SortableTableHeader column="updatedAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Ngày cập nhật</SortableTableHeader>
+          <th aria-label="Thao tác" />
+        </tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không tìm thấy Workflow phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id} onClick={() => onOpen(item.id)}>
           <td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpen(item.id) }}>{item.code}</button></td>
           <td><strong>{item.name}</strong></td>
           <td>{item.formDefinition ? <><strong>{item.formDefinition.name}</strong><small className="workflow-form-code">{item.formDefinition.code}</small></> : '—'}</td>

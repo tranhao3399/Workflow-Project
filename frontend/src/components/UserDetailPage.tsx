@@ -10,12 +10,14 @@ import { ConfirmDialog } from './ui/ConfirmDialog'
 import { DataTable } from './ui/DataTable'
 import { FilterSelect } from './ui/FilterSelect'
 import { SurfaceCard } from './ui/SurfaceCard'
+import { UserPasswordResetDialog } from './users/UserPasswordResetDialog'
 
 interface UserDetailPageProps {
   userId: string
   currentUserId: string
   onBack: () => void
   onOpenEmployee: (employeeId: string) => void
+  canResetPassword: boolean
 }
 
 type PendingConfirmation = 'INACTIVE' | 'REMOVE_ROLES' | null
@@ -56,7 +58,7 @@ function userChangeDetails(log: UserActivityLog): string[] {
   ])
 }
 
-export function UserDetailPage({ userId, currentUserId, onBack, onOpenEmployee }: UserDetailPageProps) {
+export function UserDetailPage({ userId, currentUserId, onBack, onOpenEmployee, canResetPassword }: UserDetailPageProps) {
   const [user, setUser] = useState<User | null>(null)
   const [employees, setEmployees] = useState<UserEmployeeOption[]>([])
   const [roles, setRoles] = useState<UserRoleOption[]>([])
@@ -73,10 +75,13 @@ export function UserDetailPage({ userId, currentUserId, onBack, onOpenEmployee }
   const [isRoleDialogOpen, setIsRoleDialogOpen] = useState(false)
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([])
   const [roleIdsToRemove, setRoleIdsToRemove] = useState<string[]>([])
+  const [isActionMenuOpen, setIsActionMenuOpen] = useState(false)
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false)
   const [toast, setToast] = useState<{ message: string; isError: boolean } | null>(null)
   const [emailError, setEmailError] = useState('')
   const selectAllRolesRef = useRef<HTMLInputElement>(null)
   const emailInputRef = useRef<HTMLInputElement>(null)
+  const actionMenuRef = useRef<HTMLDivElement>(null)
 
   async function load() {
     setIsLoading(true)
@@ -108,6 +113,21 @@ export function UserDetailPage({ userId, currentUserId, onBack, onOpenEmployee }
     const timer = window.setTimeout(() => setToast(null), 4000)
     return () => window.clearTimeout(timer)
   }, [toast])
+  useEffect(() => {
+    if (!isActionMenuOpen) return
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!actionMenuRef.current?.contains(event.target as Node)) setIsActionMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsActionMenuOpen(false)
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [isActionMenuOpen])
   const isDirty = useMemo(() => Boolean(user && form && (
     user.email !== form.email
     || (user.employeeId ?? '') !== form.employeeId
@@ -207,6 +227,22 @@ export function UserDetailPage({ userId, currentUserId, onBack, onOpenEmployee }
     setPendingConfirmation(null)
   }
 
+  function openPasswordDialog() {
+    setIsActionMenuOpen(false)
+    setIsPasswordDialogOpen(true)
+  }
+
+  function handlePasswordResetSuccess(updated: User) {
+    setUser(updated)
+    setForm(toForm(updated))
+    setIsPasswordDialogOpen(false)
+    setToast({ message: 'Đã đặt lại mật khẩu tài khoản.', isError: false })
+    void getUserActivity(updated.id).then((logs) => {
+      setActivity(logs)
+      setVisibleLogs(5)
+    }).catch(() => undefined)
+  }
+
   if (isLoading) return <LoadingState />
   if (hasError) return <ErrorState onRetry={() => void load()} />
   if (!user || !form) return <EmptyState title="Không tìm thấy tài khoản" description="Tài khoản này không còn trong dữ liệu hiện có." />
@@ -217,7 +253,7 @@ export function UserDetailPage({ userId, currentUserId, onBack, onOpenEmployee }
     <nav className="detail-breadcrumb" aria-label="Điều hướng tài khoản"><button className="breadcrumb-link" type="button" onClick={requestBack}>Tài khoản người dùng</button><span aria-hidden="true">/</span><strong>{user.email}</strong></nav>
     <section className="user-profile-header user-detail-header">
       <div className="user-profile-main">{avatarSource ? <img className="profile-avatar" src={avatarSource} alt={`Ảnh đại diện ${linkedEmployee?.fullName ?? user.fullName}`} onError={() => setAvatarFailed(true)} /> : <span className="profile-avatar" aria-hidden="true">{initial(linkedEmployee?.fullName ?? user.fullName)}</span>}<div><h1>{linkedEmployee?.fullName ?? user.fullName}</h1><p>{user.email}</p></div></div>
-      <div className="user-profile-actions">{isEditing ? <><button className="secondary-button" type="button" onClick={cancelEditing} disabled={isSaving}>Hủy</button><button className="primary-button" type="button" onClick={save} disabled={!isDirty || isSaving}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></> : <><button className="secondary-button" type="button" onClick={requestBack}>← Quay lại</button><button className="secondary-button" type="button" onClick={() => setIsEditing(true)}>Chỉnh sửa</button></>}</div>
+      <div className="user-profile-actions">{isEditing ? <><button className="secondary-button" type="button" onClick={cancelEditing} disabled={isSaving}>Hủy</button><button className="primary-button" type="button" onClick={save} disabled={!isDirty || isSaving}>{isSaving ? 'Đang lưu...' : 'Lưu thay đổi'}</button></> : <><button className="secondary-button" type="button" onClick={requestBack}>← Quay lại</button><button className="secondary-button" type="button" onClick={() => setIsEditing(true)}>Chỉnh sửa</button>{canResetPassword && <div className="user-action-menu" ref={actionMenuRef}><button className="secondary-button" type="button" aria-haspopup="menu" aria-expanded={isActionMenuOpen} onClick={() => setIsActionMenuOpen((open) => !open)}>⋯ Thao tác</button>{isActionMenuOpen && <div className="user-action-menu-popover" role="menu"><button type="button" role="menuitem" onClick={openPasswordDialog}>Đặt lại mật khẩu</button></div>}</div>}</>}</div>
     </section>
 
     <SurfaceCard className="user-detail-section user-information-card">
@@ -232,6 +268,8 @@ export function UserDetailPage({ userId, currentUserId, onBack, onOpenEmployee }
     <section className="employee-activity-section user-audit-section"><div className="employee-activity-heading"><div><h2>Lịch sử</h2></div></div><SurfaceCard className="employee-activity-card">{activity.length ? <><div className="employee-activity-list">{activity.slice(0, visibleLogs).map((log) => { const changes = userChangeDetails(log); return <article className="activity-log-row" key={log.id}><div><strong>{auditDescription(log, user.email, currentUserId)}</strong>{changes.length > 0 && <p>Thay đổi: {changes.join(' · ')}</p>}</div><time>{formatDateTime(log.occurredAt)}</time></article> })}</div>{visibleLogs < activity.length && <div className="employee-activity-more"><button className="secondary-button" type="button" onClick={() => setVisibleLogs((count) => count + 5)}>Xem thêm</button></div>}</> : <p className="employee-activity-empty">Chưa có lịch sử liên quan đến tài khoản này.</p>}</SurfaceCard></section>
 
     {isRoleDialogOpen && <div className="modal-backdrop department-job-title-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setIsRoleDialogOpen(false) }}><section className="modal-panel department-job-title-modal" role="dialog" aria-modal="true" aria-labelledby="user-role-dialog-title"><header className="modal-header"><div><h2 id="user-role-dialog-title">Thêm vai trò</h2></div><button className="icon-button" type="button" aria-label="Đóng hộp thoại" onClick={() => setIsRoleDialogOpen(false)} disabled={isSaving}>×</button></header><div className="department-job-title-modal-content">{availableRoles.length === 0 ? <p className="department-job-title-modal-empty">Tất cả vai trò hoạt động đã được gán cho tài khoản này.</p> : <DataTable className="department-job-title-selection-table"><thead><tr><th><input type="checkbox" aria-label="Chọn tất cả vai trò" checked={availableRoles.length > 0 && availableRoles.every((role) => selectedRoleIds.includes(role.id))} onChange={() => setSelectedRoleIds(availableRoles.every((role) => selectedRoleIds.includes(role.id)) ? [] : availableRoles.map((role) => role.id))} disabled={isSaving} /></th><th>Mã vai trò</th><th>Tên vai trò</th></tr></thead><tbody>{availableRoles.map((role) => <tr className={selectedRoleIds.includes(role.id) ? 'is-selected' : ''} key={role.id}><td><input type="checkbox" checked={selectedRoleIds.includes(role.id)} aria-label={`Chọn ${role.name}`} onChange={() => setSelectedRoleIds((current) => current.includes(role.id) ? current.filter((id) => id !== role.id) : [...current, role.id])} disabled={isSaving} /></td><td><span>{role.key}</span></td><td><strong>{role.name}</strong></td></tr>)}</tbody></DataTable>}</div><footer className="modal-actions"><button className="secondary-button" type="button" onClick={() => setIsRoleDialogOpen(false)} disabled={isSaving}>Hủy</button><button className="primary-button" type="button" onClick={applyRoles} disabled={selectedRoleIds.length === 0 || isSaving}>Áp dụng{selectedRoleIds.length ? ` (${selectedRoleIds.length})` : ''}</button></footer></section></div>}
+
+    {isPasswordDialogOpen && <UserPasswordResetDialog userId={user.id} email={user.email} onClose={() => setIsPasswordDialogOpen(false)} onSuccess={handlePasswordResetSuccess} />}
 
     {showLeaveConfirm && <ConfirmDialog title="Chưa lưu thay đổi" description="Thông tin tài khoản đang chỉnh sửa sẽ bị hủy nếu bạn rời khỏi trang." confirmLabel="Rời khỏi trang" tone="danger" onCancel={() => setShowLeaveConfirm(false)} onConfirm={() => { cancelEditing(); setShowLeaveConfirm(false); onBack() }} />}
     {pendingConfirmation === 'INACTIVE' && <ConfirmDialog title="Ngưng hoạt động tài khoản?" description="Tài khoản sẽ không thể đăng nhập cho đến khi được hoạt động lại. Trạng thái nhân viên không tự thay đổi." confirmLabel="Ngưng hoạt động" tone="danger" onCancel={() => setPendingConfirmation(null)} onConfirm={() => void persistChanges()} isConfirming={isSaving} />}

@@ -11,11 +11,13 @@ import { Position, PositionSchema } from '../positions/schemas/position.schema.j
 import { DepartmentPosition, DepartmentPositionSchema } from '../departments/schemas/department-position.schema.js';
 import { AVATAR_STORAGE } from './avatar-storage/avatar-storage.adapter.js';
 import { LocalAvatarStorageAdapter } from './avatar-storage/local-avatar-storage.adapter.js';
+import { OrganizationScopeModule } from '../common/organization/organization-scope.module.js';
 
 @Module({
   imports: [
     AuditLogModule,
     UsersModule,
+    OrganizationScopeModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     MongooseModule.forFeature([{ name: Employee.name, schema: EmployeeSchema }, { name: Department.name, schema: DepartmentSchema }, { name: Position.name, schema: PositionSchema }, { name: DepartmentPosition.name, schema: DepartmentPositionSchema }]),
   ],

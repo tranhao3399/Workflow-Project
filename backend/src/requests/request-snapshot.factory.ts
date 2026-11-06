@@ -1,19 +1,34 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import type { Types } from 'mongoose';
 import type { FormDefinition } from '../form-definitions/schemas/form-definition.schema.js';
+import { DynamicFormValidatorService } from '../form-definitions/dynamic-form-validator.service.js';
 import type { WorkflowDefinition } from '../workflow-definitions/schemas/workflow-definition.schema.js';
 import { isRecord } from './request-data.helpers.js';
 
 @Injectable()
 export class RequestSnapshotFactory {
+  constructor(private readonly dynamicFormValidator: DynamicFormValidatorService) {}
+
   createFormSnapshot(form: FormDefinition & { _id: Types.ObjectId }): Record<string, unknown> {
     return {
       id: form._id.toString(),
       code: form.code,
       version: form.version,
       name: form.name,
-      fields: form.fields,
+      fields: this.normalizedFormFields(form.fields),
       settings: form.settings,
+    };
+  }
+
+  normalizedFormFields(fields: FormDefinition['fields']): FormDefinition['fields'] {
+    return this.dynamicFormValidator.ensureSystemRequestFields(fields);
+  }
+
+  normalizeFormSnapshot(value: unknown): unknown {
+    if (!isRecord(value) || !Array.isArray(value.fields)) return value;
+    return {
+      ...value,
+      fields: this.dynamicFormValidator.ensureSystemRequestFields(value.fields),
     };
   }
 

@@ -24,10 +24,12 @@ import {
 import {
   CloneFormDefinitionDto,
   CreateFormDefinitionDto,
+  DuplicateFormDefinitionDto,
   DynamicFormValidationResponseDto,
   FormDefinitionIdParamDto,
   FormDefinitionResponseDto,
   ListFormDefinitionsDto,
+  UpdateFormDefinitionGroupDto,
   UpdateFormDefinitionDto,
   ValidateDynamicFormDto,
   formDefinitionSortFields,
@@ -48,6 +50,8 @@ export class FormDefinitionsController {
   @ApiOperation({ summary: 'Danh sách biểu mẫu', description: 'Yêu cầu quyền: FORM_BUILDER.VIEW.' })
   @ApiQuery({ name: 'search', required: false, description: 'Tìm theo mã hoặc tên.' })
   @ApiQuery({ name: 'status', required: false, enum: definitionStatuses })
+  @ApiQuery({ name: 'groupId', required: false, description: 'Lọc theo nhóm biểu mẫu.' })
+  @ApiQuery({ name: 'ungrouped', required: false, enum: ['true'] })
   @ApiQuery({ name: 'sortBy', required: false, enum: formDefinitionSortFields })
   @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'] })
   @ApiQuery({ name: 'page', required: false, type: Number })
@@ -97,6 +101,17 @@ export class FormDefinitionsController {
     return dataResponse(await this.service.update(request, params.id, input));
   }
 
+  @Patch(':id/group')
+  @RequirePermissions('FORM_BUILDER.UPDATE')
+  @ApiOperation({ summary: 'Chuyển biểu mẫu sang nhóm khác', description: 'Áp dụng cho toàn bộ phiên bản có cùng mã biểu mẫu.' })
+  async updateGroup(
+    @Req() request: RequestWithContext,
+    @Param() params: FormDefinitionIdParamDto,
+    @Body() input: UpdateFormDefinitionGroupDto,
+  ) {
+    return dataResponse(await this.service.updateGroup(request, params.id, input.groupId));
+  }
+
   @Post(':id/validate')
   @RequirePermissions('FORM_BUILDER.VIEW')
   @ApiOperation({ summary: 'Validate dữ liệu động', description: 'Backend kiểm tra formData theo đúng Form Definition, không tin validation frontend.' })
@@ -124,6 +139,26 @@ export class FormDefinitionsController {
     @Body() input: CloneFormDefinitionDto,
   ) {
     return dataResponse(await this.service.clone(request, params.id, input));
+  }
+
+  @Post(':id/duplicate')
+  @RequirePermissions('FORM_BUILDER.CREATE')
+  @ApiOperation({
+    summary: 'Tạo bản sao biểu mẫu độc lập',
+    description: 'Yêu cầu quyền: FORM_BUILDER.CREATE. Bản sao có mã mới, version 1, trạng thái DRAFT và không thuộc chuỗi phiên bản của biểu mẫu nguồn.',
+  })
+  @ApiParam({ name: 'id', description: 'MongoDB ObjectId của biểu mẫu nguồn.' })
+  @ApiBody({ type: DuplicateFormDefinitionDto })
+  @ApiCreatedResponse({ description: 'Biểu mẫu DRAFT độc lập vừa được tạo.', type: FormDefinitionResponseDto })
+  @ApiResourceConflict()
+  @ApiResourceNotFound()
+  @ApiValidationError()
+  async duplicate(
+    @Req() request: RequestWithContext,
+    @Param() params: FormDefinitionIdParamDto,
+    @Body() input: DuplicateFormDefinitionDto,
+  ) {
+    return dataResponse(await this.service.duplicate(request, params.id, input));
   }
 
   @Delete(':id')

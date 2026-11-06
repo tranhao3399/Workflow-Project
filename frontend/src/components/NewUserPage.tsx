@@ -42,9 +42,20 @@ export function NewUserPage({ onBack, onCreated, initialEmployeeId }: NewUserPag
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([])
   const [roleIdsToRemove, setRoleIdsToRemove] = useState<string[]>([])
   const selectAllRolesRef = useRef<HTMLInputElement>(null)
-  useEffect(() => { void getUserEmployeeOptions({ availableOnly: true, includeEmployeeId: initialEmployeeId }).then(setEmployees).catch(() => setError('Không thể tải danh sách nhân viên.')).finally(() => setIsLoading(false)) }, [initialEmployeeId])
+  useEffect(() => {
+    void getUserEmployeeOptions({ availableOnly: true, includeEmployeeId: initialEmployeeId })
+      .then((employeeOptions) => {
+        setEmployees(employeeOptions)
+        if (!initialEmployeeId) return
+        const initialEmployee = employeeOptions.find((employee) => employee.id === initialEmployeeId)
+        if (initialEmployee) setForm((current) => ({ ...current, email: initialEmployee.workEmail }))
+      })
+      .catch(() => setError('Không thể tải danh sách nhân viên.'))
+      .finally(() => setIsLoading(false))
+  }, [initialEmployeeId])
   useEffect(() => { void getReferenceData().then((result) => setRoles(result.data.roles)) }, [])
-  const isDirty = useMemo(() => form.employeeId !== (initialEmployeeId ?? '') || form.email !== '' || temporaryPassword !== '' || form.roleIds.length > 0 || !form.isActive, [form, initialEmployeeId, temporaryPassword])
+  const initialEmployeeEmail = useMemo(() => employees.find((employee) => employee.id === initialEmployeeId)?.workEmail ?? '', [employees, initialEmployeeId])
+  const isDirty = useMemo(() => form.employeeId !== (initialEmployeeId ?? '') || form.email !== initialEmployeeEmail || temporaryPassword !== '' || form.roleIds.length > 0 || !form.isActive, [form, initialEmployeeEmail, initialEmployeeId, temporaryPassword])
   const selectedEmployee = useMemo(() => employees.find((employee) => employee.id === form.employeeId) ?? null, [employees, form.employeeId])
   const activeRoles = useMemo(() => roles.flatMap((role) => {
     const id = role.id ?? role._id
@@ -70,6 +81,18 @@ export function NewUserPage({ onBack, onCreated, initialEmployeeId }: NewUserPag
     setRoleIdsToRemove([])
   }
   function requestBack() { if (isDirty) setShowDiscardConfirm(true); else onBack() }
+  function selectEmployee(employeeId: string) {
+    const currentEmployee = employees.find((employee) => employee.id === form.employeeId)
+    const nextEmployee = employees.find((employee) => employee.id === employeeId)
+    setEmailConflict('')
+    setFieldErrors((current) => ({ ...current, email: undefined }))
+    setForm((current) => ({
+      ...current,
+      employeeId,
+      email: nextEmployee?.workEmail
+        ?? (currentEmployee?.workEmail === current.email ? '' : current.email),
+    }))
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const nextFieldErrors: NewUserFieldErrors = {
@@ -109,8 +132,8 @@ export function NewUserPage({ onBack, onCreated, initialEmployeeId }: NewUserPag
       <SurfaceCard className="user-detail-section user-information-card">
         <div className="user-section-heading"><h2>Thông tin tài khoản</h2></div>
         <div className="detail-facts user-detail-form user-information-grid new-user-information-grid">
-          <label><span className="required-field-label">Email</span><input type="email" value={form.email} onChange={(event) => { const email = event.target.value; setEmailConflict(''); setForm((current) => ({ ...current, email })); if (fieldErrors.email) setFieldErrors((current) => ({ ...current, email: emailErrorMessage(email) })) }} onBlur={() => setFieldErrors((current) => ({ ...current, email: emailErrorMessage(form.email) }))} autoComplete="email" aria-invalid={Boolean(emailConflict || fieldErrors.email)} disabled={isSaving} />{(emailConflict || fieldErrors.email) && <small className="field-error" role="alert">{emailConflict || fieldErrors.email}</small>}</label>
-          <label><span>Mã nhân viên</span><FilterSelect ariaLabel="Chọn mã nhân viên" value={form.employeeId} options={[{ value: '', label: 'Không liên kết nhân viên' }, ...employees.map((employee) => ({ value: employee.id, label: employee.employeeCode }))]} onChange={(employeeId) => setForm((current) => ({ ...current, employeeId }))} disabled={isSaving} /></label>
+          <label><span>Mã nhân viên</span><FilterSelect ariaLabel="Chọn mã nhân viên" value={form.employeeId} options={[{ value: '', label: 'Không liên kết nhân viên' }, ...employees.map((employee) => ({ value: employee.id, label: employee.employeeCode }))]} onChange={selectEmployee} disabled={isSaving} /></label>
+          <label><span className="required-field-label">Email</span><input className={selectedEmployee ? 'readonly-field' : undefined} type="email" value={form.email} onChange={(event) => { const email = event.target.value; setEmailConflict(''); setForm((current) => ({ ...current, email })); if (fieldErrors.email) setFieldErrors((current) => ({ ...current, email: emailErrorMessage(email) })) }} onBlur={() => setFieldErrors((current) => ({ ...current, email: emailErrorMessage(form.email) }))} autoComplete="email" aria-invalid={Boolean(emailConflict || fieldErrors.email)} readOnly={Boolean(selectedEmployee)} disabled={isSaving} />{(emailConflict || fieldErrors.email) && <small className="field-error" role="alert">{emailConflict || fieldErrors.email}</small>}</label>
           <label><span>Họ tên</span><input className="readonly-field" value={selectedEmployee?.fullName ?? 'Chưa liên kết nhân viên'} readOnly disabled /></label>
           <div className="detail-status"><span>Trạng thái</span><FilterSelect ariaLabel="Trạng thái tài khoản" value={String(form.isActive)} options={[{ value: 'true', label: 'Hoạt động' }, { value: 'false', label: 'Ngưng hoạt động' }]} onChange={(value) => setForm((current) => ({ ...current, isActive: value === 'true' }))} disabled={isSaving} /></div>
           <label className="new-user-password-field"><span className="required-field-label">Mật khẩu</span><input type="password" value={temporaryPassword} onChange={(event) => { const password = event.target.value; setTemporaryPassword(password); if (fieldErrors.password) setFieldErrors((current) => ({ ...current, password: passwordErrorMessage(password) })) }} onBlur={() => setFieldErrors((current) => ({ ...current, password: passwordErrorMessage(temporaryPassword) }))} autoComplete="new-password" aria-invalid={Boolean(fieldErrors.password)} disabled={isSaving} />{fieldErrors.password && <small className="field-error" role="alert">{fieldErrors.password}</small>}</label>

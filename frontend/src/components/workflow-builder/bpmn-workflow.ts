@@ -152,6 +152,8 @@ export const defaultWorkflowBpmnXml = `<?xml version="1.0" encoding="UTF-8"?>
 export const assigneeRuleLabels: Record<AssigneeRuleType, string> = {
   REQUESTER_DIRECT_MANAGER: 'Quản lý trực tiếp của người gửi',
   REQUESTER_DEPARTMENT_MANAGER: 'Trưởng phòng của người gửi',
+  REQUESTER_PARENT_DEPARTMENT_MANAGER: 'Quản lý đơn vị cấp trên',
+  COMPANY_MANAGER: 'Giám đốc / người quản lý cấp công ty',
   ROLE: 'Theo vai trò',
   ROLE_IN_REQUESTER_DEPARTMENT: 'Vai trò trong phòng ban người gửi',
   POSITION_IN_REQUESTER_DEPARTMENT: 'Chức danh trong phòng ban người gửi',

@@ -127,6 +127,10 @@ export class WorkflowGraphValidatorService {
         this.add(errors, 'FORM_FIELD_NOT_FOUND', `${path}.condition.fieldKey`, step.stepKey, 'Trường Form dùng trong điều kiện không tồn tại.');
         return;
       }
+      if (field.type === 'FILE' || field.type === 'TABLE' || field.type === 'SECTION') {
+        this.add(errors, 'CONDITION_FIELD_TYPE_UNSUPPORTED', `${path}.condition.fieldKey`, step.stepKey, 'Trường tệp, bảng dữ liệu hoặc tiêu đề phân đoạn không thể dùng trực tiếp làm điều kiện Workflow.');
+        return;
+      }
       const ordered = new Set(['NUMBER', 'CURRENCY', 'DATE', 'DATETIME']);
       if ((condition.operator === 'GREATER_THAN' || condition.operator === 'LESS_THAN') && !ordered.has(field.type)) {
         this.add(errors, 'CONDITION_OPERATOR_TYPE_MISMATCH', `${path}.condition.operator`, step.stepKey, 'Toán tử so sánh lớn/nhỏ không phù hợp với kiểu trường này.');

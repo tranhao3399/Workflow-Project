@@ -9,7 +9,10 @@ import { Employee, EmployeeSchema } from '../employees/schemas/employee.schema.j
 import { DynamicFormValidatorService } from './dynamic-form-validator.service.js';
 import { FormDefinitionsController } from './form-definitions.controller.js';
 import { FormDefinitionsService } from './form-definitions.service.js';
+import { FormGroupsController } from './form-groups.controller.js';
+import { FormGroupsService } from './form-groups.service.js';
 import { FormDefinition, FormDefinitionSchema } from './schemas/form-definition.schema.js';
+import { FormGroup, FormGroupSchema } from './schemas/form-group.schema.js';
 
 @Module({
   imports: [
@@ -17,14 +20,15 @@ import { FormDefinition, FormDefinitionSchema } from './schemas/form-definition.
     PassportModule.register({ defaultStrategy: 'jwt' }),
     MongooseModule.forFeature([
       { name: FormDefinition.name, schema: FormDefinitionSchema },
+      { name: FormGroup.name, schema: FormGroupSchema },
       { name: WorkflowDefinition.name, schema: WorkflowDefinitionSchema },
       { name: Request.name, schema: RequestSchema },
       { name: User.name, schema: UserSchema },
       { name: Employee.name, schema: EmployeeSchema },
     ]),
   ],
-  controllers: [FormDefinitionsController],
-  providers: [FormDefinitionsService, DynamicFormValidatorService],
+  controllers: [FormDefinitionsController, FormGroupsController],
+  providers: [FormDefinitionsService, FormGroupsService, DynamicFormValidatorService],
   exports: [MongooseModule, DynamicFormValidatorService],
 })
 export class FormDefinitionsModule {}

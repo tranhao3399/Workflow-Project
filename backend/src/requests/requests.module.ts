@@ -19,10 +19,13 @@ import { RequestsController } from './requests.controller.js';
 import { RequestAccessPolicy } from './request-access.policy.js';
 import { RequestActorContextService } from './request-actor-context.service.js';
 import { RequestDraftMigrationService } from './request-draft-migration.service.js';
+import { RequestNumberService } from './request-number.service.js';
 import { RequestQueryService } from './request-query.service.js';
 import { RequestSnapshotFactory } from './request-snapshot.factory.js';
 import { RequestsService } from './requests.service.js';
 import { Request, RequestSchema } from './schemas/request.schema.js';
+import { RequestSequence, RequestSequenceSchema } from './schemas/request-sequence.schema.js';
+import { OrganizationScopeModule } from '../common/organization/organization-scope.module.js';
 
 @Module({
   imports: [
@@ -32,8 +35,10 @@ import { Request, RequestSchema } from './schemas/request.schema.js';
     FormDefinitionsModule,
     FilesModule,
     WorkflowRuntimeModule,
+    OrganizationScopeModule,
     MongooseModule.forFeature([
       { name: Request.name, schema: RequestSchema },
+      { name: RequestSequence.name, schema: RequestSequenceSchema },
       { name: FormDefinition.name, schema: FormDefinitionSchema },
       { name: WorkflowDefinition.name, schema: WorkflowDefinitionSchema },
       { name: User.name, schema: UserSchema },
@@ -53,6 +58,7 @@ import { Request, RequestSchema } from './schemas/request.schema.js';
     RequestActorContextService,
     RequestSnapshotFactory,
     RequestDraftMigrationService,
+    RequestNumberService,
   ],
 })
 export class RequestsModule {}

@@ -13,19 +13,22 @@ interface ConfirmDialogProps {
   isConfirming?: boolean
   confirmingLabel?: string
   compact?: boolean
+  hideCancel?: boolean
 }
 
-export function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, tone = 'primary', children, confirmDisabled = false, isConfirming = false, confirmingLabel = 'Đang cập nhật...', compact = false }: ConfirmDialogProps) {
+export function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, tone = 'primary', children, confirmDisabled = false, isConfirming = false, confirmingLabel = 'Đang cập nhật...', compact = false, hideCancel = false }: ConfirmDialogProps) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null)
+  const confirmButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    cancelButtonRef.current?.focus()
+    if (hideCancel) confirmButtonRef.current?.focus()
+    else cancelButtonRef.current?.focus()
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') onCancel()
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onCancel])
+  }, [hideCancel, onCancel])
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -34,7 +37,7 @@ export function ConfirmDialog({ title, description, confirmLabel, onCancel, onCo
         <h2 id="confirm-dialog-title">{title}</h2>
         <p className={compact ? 'confirm-panel-message' : undefined}>{description}</p>
         {children}
-        <div className="modal-actions"><button className="secondary-button" ref={cancelButtonRef} type="button" onClick={onCancel} disabled={isConfirming}>Hủy</button><button className={tone === 'danger' ? 'danger-button' : 'primary-button'} type="button" onClick={onConfirm} disabled={confirmDisabled || isConfirming}>{isConfirming ? confirmingLabel : confirmLabel}</button></div>
+        <div className="modal-actions">{!hideCancel && <button className="secondary-button" ref={cancelButtonRef} type="button" onClick={onCancel} disabled={isConfirming}>Hủy</button>}<button className={tone === 'danger' ? 'danger-button' : 'primary-button'} ref={confirmButtonRef} type="button" onClick={onConfirm} disabled={confirmDisabled || isConfirming}>{isConfirming ? confirmingLabel : confirmLabel}</button></div>
       </section>
     </div>
   )

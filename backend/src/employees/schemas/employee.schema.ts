@@ -6,7 +6,14 @@ export type EmployeeDocument = HydratedDocument<Employee>;
 
 @Schema({ timestamps: true, collection: 'employees' })
 export class Employee {
-  @Prop({ required: true, unique: true, index: true, trim: true, uppercase: true, maxlength: 40 })
+  @Prop({
+    required: true,
+    unique: true,
+    index: true,
+    trim: true,
+    uppercase: true,
+    maxlength: 40,
+  })
   employeeCode: string;
 
   @Prop({ required: true, trim: true, maxlength: 100 })
@@ -15,13 +22,38 @@ export class Employee {
   @Prop({ required: true, trim: true, maxlength: 100, select: false })
   fullNameNormalized: string;
 
-  @Prop({ required: true, unique: true, index: true, trim: true, lowercase: true, maxlength: 255 })
+  @Prop({
+    required: true,
+    unique: true,
+    index: true,
+    trim: true,
+    lowercase: true,
+    maxlength: 255,
+  })
   workEmail: string;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Department', required: true, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Department',
+    required: true,
+    index: true,
+  })
   departmentId: Types.ObjectId;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Position', required: true, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Department',
+    required: false,
+    index: true,
+  })
+  workUnitId?: Types.ObjectId;
+
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Position',
+    required: true,
+    index: true,
+  })
   positionId: Types.ObjectId;
 
   @Prop({ required: false, trim: true, maxlength: 30 })
@@ -39,10 +71,20 @@ export class Employee {
   @Prop({ required: false })
   dateOfBirth?: Date;
 
-  @Prop({ required: true, type: String, enum: Object.values(EmploymentType), default: EmploymentType.FULL_TIME })
+  @Prop({
+    required: true,
+    type: String,
+    enum: Object.values(EmploymentType),
+    default: EmploymentType.FULL_TIME,
+  })
   employmentType: EmploymentType;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Employee', required: false, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Employee',
+    required: false,
+    index: true,
+  })
   managerId?: Types.ObjectId;
 
   @Prop({ required: true, default: true, index: true })
@@ -53,14 +95,22 @@ export class Employee {
 
   @Prop({
     type: {
-      contentType: { type: String, enum: ['image/jpeg', 'image/png'], required: true },
+      contentType: {
+        type: String,
+        enum: ['image/jpeg', 'image/png'],
+        required: true,
+      },
       size: { type: Number, required: true, min: 1, max: 2 * 1024 * 1024 },
       updatedAt: { type: Date, required: true },
     },
     required: false,
     _id: false,
   })
-  avatar?: { contentType: 'image/jpeg' | 'image/png'; size: number; updatedAt: Date };
+  avatar?: {
+    contentType: 'image/jpeg' | 'image/png';
+    size: number;
+    updatedAt: Date;
+  };
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false })
   createdBy?: Types.ObjectId;
@@ -74,5 +124,6 @@ export class Employee {
 
 export const EmployeeSchema = SchemaFactory.createForClass(Employee);
 EmployeeSchema.index({ departmentId: 1, isActive: 1, createdAt: -1 });
+EmployeeSchema.index({ workUnitId: 1, isActive: 1, createdAt: -1 });
 EmployeeSchema.index({ managerId: 1, isActive: 1 });
 EmployeeSchema.index({ fullNameNormalized: 1 });

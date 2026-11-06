@@ -24,6 +24,10 @@ export function listOwnRequests(filter: RequestFilter = {}): Promise<PaginatedRe
   return apiClient(withQuery('/requests', filter))
 }
 
+export function listManagedRequests(filter: RequestFilter = {}): Promise<PaginatedResponse<RequestSummary>> {
+  return apiClient(withQuery('/requests/managed', filter))
+}
+
 export function listAllRequests(filter: RequestFilter = {}): Promise<PaginatedResponse<RequestSummary>> {
   return apiClient(withQuery('/requests/all', filter))
 }

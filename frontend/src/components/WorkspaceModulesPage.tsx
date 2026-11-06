@@ -174,7 +174,7 @@ export function WorkspaceModulesPage() {
             <EmptyTableRow colSpan={4} message="Không tìm thấy module phù hợp." />
           ) : (
             rows.map((module) => <tr key={module.moduleKey}>
-              <td><strong>{module.name}</strong><span className="cell-subtitle">{module.moduleKey}</span></td>
+              <td><strong>{module.moduleKey === 'FORM_BUILDER' ? 'Quản lý biểu mẫu' : module.name}</strong><span className="cell-subtitle">{module.moduleKey}</span></td>
               <td>{module.groupKey === 'ADMIN' ? 'Quản trị' : 'Không gian làm việc'}</td>
               <td><span className="module-path">{module.path}</span></td>
               <td><label className="inline-toggle"><input type="checkbox" checked={module.isEnabled} disabled={isProtectedModule(module)} onChange={(event) => setModuleEnabled(module.moduleKey, event.target.checked)} /><span>{module.isEnabled ? 'Đang bật' : 'Đã tắt'}</span></label></td>

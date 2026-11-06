@@ -23,6 +23,7 @@ import {
 import { isApiErrorCode } from '../../utils/api-errors'
 import { notifyRequestMutation } from '../../utils/request-events'
 import { formatDateTime } from '../../utils/formatters'
+import { workflowStatusLabel } from '../../utils/workflow-status'
 import { DynamicFormRenderer, type DynamicFormRendererHandle } from '../dynamic-form'
 import { ErrorState, LoadingState, PermissionDeniedState } from '../DataStates'
 import { ApprovalTaskStatusBadge, RequestStatusBadge } from '../StatusBadge'
@@ -382,6 +383,12 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
           ref={rendererRef}
           formSnapshot={request.formSnapshot}
           initialValues={request.formData}
+          systemAutoFillValues={{
+            REQUEST_CODE: request.requestNo,
+            REQUEST_STATUS: request.currentStepName
+              ? `${workflowStatusLabel(request.status)} · ${request.currentStepName}`
+              : workflowStatusLabel(request.status),
+          }}
           mode={editable ? 'edit' : 'readonly'}
           requestId={request.id}
           allowFileDelete={editable}

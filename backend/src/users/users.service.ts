@@ -143,7 +143,7 @@ export class UsersService {
           },
         },
       ],
-      { returnDocument: 'after' },
+      { returnDocument: 'after', updatePipeline: true },
     ).exec();
   }
 
@@ -196,9 +196,9 @@ export class UsersService {
     };
   }
 
-  async findEmployeeOptions(query: { availableOnly?: boolean; includeEmployeeId?: string } = {}): Promise<Array<{ id: string; employeeCode: string; fullName: string; department: string; isActive: boolean; userId?: string }>> {
+  async findEmployeeOptions(query: { availableOnly?: boolean; includeEmployeeId?: string } = {}): Promise<Array<{ id: string; employeeCode: string; fullName: string; workEmail: string; department: string; isActive: boolean; userId?: string }>> {
     const [employees, users] = await Promise.all([
-      this.employeeModel.find().select({ employeeCode: 1, fullName: 1, departmentId: 1, isActive: 1 }).sort({ employeeCode: 1 }).lean().exec(),
+      this.employeeModel.find().select({ employeeCode: 1, fullName: 1, workEmail: 1, departmentId: 1, isActive: 1 }).sort({ employeeCode: 1 }).lean().exec(),
       this.userModel.find({ employeeId: { $exists: true } }).select({ _id: 1, employeeId: 1 }).lean().exec(),
     ]);
     const userIdByEmployeeId = new Map(users.flatMap((user) => user.employeeId ? [[user.employeeId.toString(), user._id.toString()] as const] : []));
@@ -213,6 +213,7 @@ export class UsersService {
       id: employee._id.toString(),
       employeeCode: employee.employeeCode,
       fullName: employee.fullName,
+      workEmail: employee.workEmail,
       department: departmentById.get(employee.departmentId.toString()) ?? '',
       isActive: employee.isActive,
       ...(userIdByEmployeeId.get(employee._id.toString()) ? { userId: userIdByEmployeeId.get(employee._id.toString()) } : {}),

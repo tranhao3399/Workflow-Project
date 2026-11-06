@@ -1,81 +1,170 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, CopyPlus, FolderInput, FolderOpen, Settings2, Trash2 } from 'lucide-react'
 import { ApiError } from '../../services/api-client'
-import { cloneFormDefinition, deleteFormDefinition, listFormDefinitions } from '../../services/form-definitions.service'
-import { definitionStatuses, type DefinitionStatus, type FormDefinition } from '../../types/workflow'
-import { formatDateTime } from '../../utils/formatters'
+import {
+  cloneFormDefinition,
+  assignFormDefinitionGroup,
+  deleteFormDefinition,
+  listFormDefinitions,
+  listFormGroups,
+} from '../../services/form-definitions.service'
+import {
+  definitionStatuses,
+  type DefinitionStatus,
+  type FormDefinition,
+  type FormDefinitionSortField,
+  type FormGroup,
+} from '../../types/workflow'
+import { formatDateTime, normalizeSearchText } from '../../utils/formatters'
 import { DefinitionStatusBadge } from '../StatusBadge'
-import { ErrorState, LoadingState } from '../DataStates'
+import { EmptyState, ErrorState, LoadingState } from '../DataStates'
+import { AdvancedFilterPanel } from '../ui/AdvancedFilterPanel'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { DataTable, EmptyTableRow } from '../ui/DataTable'
 import { FilterSelect } from '../ui/FilterSelect'
 import { ListToolbar } from '../ui/ListToolbar'
 import { PageHeader } from '../ui/PageHeader'
 import { SurfaceCard } from '../ui/SurfaceCard'
+import { SortableTableHeader } from '../ui/SortableTableHeader'
 import { TablePagination } from '../ui/TablePagination'
+import { FormGroupManagerDialog } from './FormGroupManagerDialog'
 
 interface FormBuilderCatalogPageProps {
+  initialGroupId?: string
   canCreate: boolean
+  canUpdate: boolean
   canDeleteDraft: boolean
-  onCreate: () => void
+  onCreate: (groupId?: string) => void
   onOpen: (id: string) => void
   onNotify: (message: string, tone?: 'success' | 'error') => void
 }
+
+interface UngroupedCatalogGroup {
+  id: 'UNGROUPED'
+  code: 'UNGROUPED'
+  name: 'Chưa phân nhóm'
+  description: string
+  isActive: true
+  sortOrder: number
+  formCount: number
+}
+
+type CatalogGroup = FormGroup | UngroupedCatalogGroup
 
 const pageSizes = [10, 20, 50]
 const statusOptions = [
   { value: '', label: 'Tất cả trạng thái' },
   ...definitionStatuses.map((status) => ({ value: status, label: statusLabel(status) })),
 ]
-
-export function FormBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate, onOpen, onNotify }: FormBuilderCatalogPageProps) {
+export function FormBuilderCatalogPage({
+  initialGroupId,
+  canCreate,
+  canUpdate,
+  canDeleteDraft,
+  onCreate,
+  onOpen,
+  onNotify,
+}: FormBuilderCatalogPageProps) {
+  const [groups, setGroups] = useState<FormGroup[]>([])
+  const [ungroupedCount, setUngroupedCount] = useState(0)
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(initialGroupId ?? null)
+  const [isManagingGroups, setIsManagingGroups] = useState(false)
   const [items, setItems] = useState<FormDefinition[]>([])
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  const [isFilterOpen, setIsFilterOpen] = useState(false)
+  const [isStatusSelectOpen, setIsStatusSelectOpen] = useState(false)
   const [status, setStatus] = useState<DefinitionStatus | ''>('')
+  const [sortBy, setSortBy] = useState<FormDefinitionSortField>('updatedAt')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  const [hasUserSorted, setHasUserSorted] = useState(false)
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [hasError, setHasError] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
   const [deleteTarget, setDeleteTarget] = useState<FormDefinition | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [cloningId, setCloningId] = useState<string | null>(null)
+  const [moveTarget, setMoveTarget] = useState<FormDefinition | null>(null)
+  const [moveGroupId, setMoveGroupId] = useState('')
+  const [isMoving, setIsMoving] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const allGroups = useMemo<CatalogGroup[]>(() => [
+    ...groups,
+    {
+      id: 'UNGROUPED',
+      code: 'UNGROUPED',
+      name: 'Chưa phân nhóm',
+      description: 'Các biểu mẫu cũ hoặc chưa được gán vào nhóm.',
+      isActive: true,
+      sortOrder: Number.MAX_SAFE_INTEGER,
+      formCount: ungroupedCount,
+    },
+  ], [groups, ungroupedCount])
+  const selectedGroup = allGroups.find((group) => group.id === selectedGroupId) ?? null
+  const normalizedGroupSearch = normalizeSearchText(searchInput.trim())
+  const visibleGroups = normalizedGroupSearch
+    ? allGroups.filter((group) => normalizeSearchText(`${group.code} ${group.name} ${group.description ?? ''}`).includes(normalizedGroupSearch))
+    : allGroups
+
+  const loadGroups = useCallback(async () => {
+    const [nextGroups, ungrouped] = await Promise.all([
+      listFormGroups(),
+      listFormDefinitions({ page: 1, limit: 1, ungrouped: true }),
+    ])
+    setGroups(nextGroups)
+    setUngroupedCount(ungrouped.pagination.total)
+  }, [])
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
-      setSearch(searchInput.trim())
-      setPage(1)
+      if (selectedGroupId) {
+        setSearch(searchInput.trim())
+        setPage(1)
+      }
     }, 300)
     return () => window.clearTimeout(timeoutId)
-  }, [searchInput])
+  }, [searchInput, selectedGroupId])
 
   const load = useCallback(async (refreshVersion: number) => {
     if (refreshVersion < 0) return
     try {
+      if (!selectedGroupId) {
+        await loadGroups()
+        setHasError(false)
+        return
+      }
+      if (!groups.length) await loadGroups()
       const result = await listFormDefinitions({
         page,
         limit,
         ...(search ? { search } : {}),
         ...(status ? { status } : {}),
-        sortBy: 'updatedAt',
-        sortOrder: 'desc',
+        ...(selectedGroupId === 'UNGROUPED' ? { ungrouped: true } : { groupId: selectedGroupId }),
+        sortBy,
+        sortOrder,
       })
       setItems(result.data)
       setTotal(result.pagination.total)
-      setTotalPages(Math.max(1, result.pagination.totalPages))
+      const nextTotalPages = Math.max(1, result.pagination.totalPages)
+      setTotalPages(nextTotalPages)
       setHasError(false)
-      if (page > Math.max(1, result.pagination.totalPages)) setPage(Math.max(1, result.pagination.totalPages))
+      if (page > nextTotalPages) setPage(nextTotalPages)
     } catch {
       setHasError(true)
     } finally {
       setIsLoading(false)
+      setIsRefreshing(false)
     }
-  }, [limit, page, search, status])
+  }, [groups.length, limit, loadGroups, page, search, selectedGroupId, sortBy, sortOrder, status])
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => { void load(reloadVersion) }, 0)
+    const timeoutId = window.setTimeout(() => void load(reloadVersion), 0)
     return () => window.clearTimeout(timeoutId)
   }, [load, reloadVersion])
 
@@ -100,63 +189,177 @@ export function FormBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate, on
       onNotify('Xóa biểu mẫu nháp thành công.')
       setDeleteTarget(null)
       setReloadVersion((value) => value + 1)
+      await loadGroups()
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : 'Không thể xóa biểu mẫu nháp.'
-      onNotify(message, 'error')
+      onNotify(error instanceof ApiError ? error.message : 'Không thể xóa biểu mẫu nháp.', 'error')
     } finally {
       setIsDeleting(false)
     }
   }
 
+  async function moveForm() {
+    if (!moveTarget || isMoving) return
+    setIsMoving(true)
+    try {
+      await assignFormDefinitionGroup(moveTarget.id, moveGroupId || null)
+      onNotify('Đã chuyển nhóm biểu mẫu.')
+      setMoveTarget(null)
+      await loadGroups()
+      setReloadVersion((value) => value + 1)
+    } catch (error) {
+      onNotify(error instanceof Error ? error.message : 'Không thể chuyển nhóm biểu mẫu.', 'error')
+    } finally {
+      setIsMoving(false)
+    }
+  }
+
+  function openGroup(group: CatalogGroup) {
+    setSelectedGroupId(group.id)
+    setSearchInput('')
+    setSearch('')
+    setStatus('')
+    setSortBy('updatedAt')
+    setSortOrder('desc')
+    setHasUserSorted(false)
+    setPage(1)
+    setIsLoading(true)
+    window.history.replaceState(null, '', `/form-builder?groupId=${encodeURIComponent(group.id)}`)
+  }
+
+  function backToGroups() {
+    setSelectedGroupId(null)
+    setSearchInput('')
+    setSearch('')
+    setStatus('')
+    setPage(1)
+    setIsLoading(true)
+    window.history.replaceState(null, '', '/form-builder')
+  }
+
+  function clearSearch() {
+    setSearchInput('')
+    setIsLoading(Boolean(selectedGroupId))
+    window.requestAnimationFrame(() => searchRef.current?.focus())
+  }
+
+  function resetFilters() {
+    setStatus('')
+    setIsStatusSelectOpen(false)
+    setPage(1)
+    setIsLoading(true)
+  }
+
+  function refresh() {
+    setSearchInput('')
+    setSearch('')
+    setStatus('')
+    setSortBy('updatedAt')
+    setSortOrder('desc')
+    setHasUserSorted(false)
+    setIsFilterOpen(false)
+    setPage(1)
+    setIsRefreshing(true)
+    setIsLoading(true)
+    setReloadVersion((value) => value + 1)
+  }
+
+  const activeFilterCount = Number(status !== '')
   const rangeStart = total ? (page - 1) * limit + 1 : 0
   const rangeEnd = Math.min(page * limit, total)
 
+  function changeSort(column: string) {
+    const nextColumn = column as FormDefinitionSortField
+    setSortOrder((currentOrder) => sortBy === nextColumn
+      ? (currentOrder === 'asc' ? 'desc' : 'asc')
+      : (nextColumn === 'updatedAt' || nextColumn === 'version' ? 'desc' : 'asc'))
+    setSortBy(nextColumn)
+    setHasUserSorted(true)
+    setPage(1)
+    setIsLoading(true)
+  }
+
   return <>
     <PageHeader
-      title="Form Builder"
-      description="Thiết kế biểu mẫu dùng chung và quản lý từng phiên bản trước khi cấu hình quy trình."
-      actions={canCreate ? <button className="primary-button compact-button" type="button" onClick={onCreate}>+ Tạo biểu mẫu</button> : undefined}
+      className="catalog-page-header"
+      title={selectedGroup ? selectedGroup.name : 'Quản lý biểu mẫu'}
+      actions={<div className="page-header-actions">
+        {selectedGroup && <button className="secondary-button compact-button" type="button" onClick={backToGroups}><ArrowLeft size={14} /> Quay lại nhóm</button>}
+        {!selectedGroup && <button className="secondary-button compact-button" type="button" onClick={() => setIsManagingGroups(true)}><Settings2 size={14} /> Quản lý nhóm</button>}
+        {canCreate && (!selectedGroup || selectedGroup.id === 'UNGROUPED' || selectedGroup.isActive) && <button className="primary-button compact-button" type="button" onClick={() => onCreate(selectedGroup && selectedGroup.id !== 'UNGROUPED' ? selectedGroup.id : undefined)}>Tạo biểu mẫu</button>}
+      </div>}
     />
-    <SurfaceCard className="admin-section form-builder-catalog">
+
+    <SurfaceCard className="master-data-section form-builder-catalog">
       <ListToolbar>
-        <div className="form-builder-list-filters">
-          <label className="catalog-search">
-            <span>Tìm kiếm</span>
-            <span className="catalog-search-input">
-              <input value={searchInput} onChange={(event) => { setSearchInput(event.target.value); setIsLoading(true) }} placeholder="Mã hoặc tên biểu mẫu" />
-              {searchInput && <button className="clear-search-button" type="button" aria-label="Xóa tìm kiếm" onClick={() => { setSearchInput(''); setIsLoading(true) }}>×</button>}
-            </span>
-          </label>
-          <label className="form-builder-status-filter">
-            <span>Trạng thái</span>
-            <FilterSelect ariaLabel="Lọc trạng thái biểu mẫu" value={status} options={statusOptions} onChange={(value) => { setStatus(value as DefinitionStatus | ''); setPage(1); setIsLoading(true) }} />
-          </label>
-          <button className="secondary-button catalog-refresh-button" type="button" disabled={isLoading} onClick={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }}>↻ {isLoading ? 'Đang tải...' : 'Làm mới'}</button>
+        <div className="catalog-toolbar-main">
+          <div className="catalog-search-row">
+            <label className="catalog-search"><span>Tìm kiếm</span><span className="catalog-search-input">
+              <input ref={searchRef} value={searchInput} onChange={(event) => { setSearchInput(event.target.value); if (selectedGroupId) setIsLoading(true) }} placeholder={selectedGroup ? 'Mã hoặc tên biểu mẫu' : 'Mã hoặc tên nhóm biểu mẫu'} />
+              {searchInput && <button className="clear-search-button" type="button" aria-label="Xóa nội dung tìm kiếm" onClick={clearSearch}>×</button>}
+            </span></label>
+            {selectedGroup && <button className={isFilterOpen ? 'secondary-button filter-trigger is-active' : 'secondary-button filter-trigger'} type="button" aria-expanded={isFilterOpen} onClick={() => setIsFilterOpen((open) => !open)}>
+              <span>Bộ lọc</span>{activeFilterCount > 0 && <span className="filter-count-badge">{activeFilterCount}</span>}
+            </button>}
+            <button className="secondary-button catalog-refresh-button" type="button" disabled={isLoading || isRefreshing} onClick={refresh}><span className={isRefreshing ? 'refresh-icon is-spinning' : 'refresh-icon'}>↻</span>{isRefreshing ? 'Đang làm mới...' : 'Làm mới'}</button>
+          </div>
+          {selectedGroup && <AdvancedFilterPanel id="form-builder-filters" label="Bộ lọc danh sách biểu mẫu" isOpen={isFilterOpen}>
+            <div className="advanced-filter-content master-filter-content form-builder-filter-content">
+              <div><span className="form-builder-filter-label">Trạng thái</span><FilterSelect ariaLabel="Lọc trạng thái biểu mẫu" value={status} options={statusOptions} isOpen={isStatusSelectOpen} onOpenChange={setIsStatusSelectOpen} onChange={(value) => { setStatus(value as DefinitionStatus | ''); setPage(1); setIsLoading(true) }} /></div>
+              {activeFilterCount > 0 && <button className="secondary-button compact-button form-builder-reset-filter-btn" type="button" onClick={resetFilters}>Xóa bộ lọc</button>}
+            </div>
+          </AdvancedFilterPanel>}
         </div>
       </ListToolbar>
-      {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }} /> : <>
-        <DataTable className="admin-table form-builder-table" fixedLayout>
-          <thead><tr><th>Mã biểu mẫu</th><th>Tên biểu mẫu</th><th>Version</th><th>Trạng thái</th><th>Người cập nhật</th><th>Cập nhật lúc</th><th aria-label="Thao tác" /></tr></thead>
-          <tbody>{items.length === 0 ? <EmptyTableRow colSpan={7} message="Không tìm thấy biểu mẫu phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id} onClick={() => onOpen(item.id)}>
+
+      {isLoading && (!selectedGroup || !items.length) ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }} /> : !selectedGroup ? (
+        visibleGroups.length === 0 ? <EmptyState title="Không tìm thấy nhóm biểu mẫu" description="Thử lại với từ khóa khác." /> : <div className="form-group-card-grid">
+          {visibleGroups.map((group) => <button className="form-group-card" type="button" key={group.id} onClick={() => openGroup(group)}>
+            <span className="form-group-card-icon"><FolderOpen size={22} /></span>
+            <span className="form-group-card-content"><span className="form-group-card-title"><strong>{group.name}</strong>{group.id !== 'UNGROUPED' && <span className={group.isActive ? 'status-badge status-active' : 'status-badge status-inactive'}>{group.isActive ? 'Hoạt động' : 'Ngưng hoạt động'}</span>}</span><small>{group.code}</small><span>{group.description || 'Nhóm biểu mẫu nội bộ.'}</span></span>
+            <span className="form-group-card-count"><strong>{group.formCount}</strong><span>biểu mẫu</span></span>
+          </button>)}
+        </div>
+      ) : <>
+        <DataTable className="admin-table master-data-table form-builder-table" fixedLayout>
+          <thead><tr>
+            <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã biểu mẫu</SortableTableHeader>
+            <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Tên biểu mẫu</SortableTableHeader>
+            <SortableTableHeader column="version" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Phiên bản</SortableTableHeader>
+            <th>Số trường</th>
+            <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
+            <th>Người cập nhật</th>
+            <SortableTableHeader column="updatedAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Cập nhật lúc</SortableTableHeader>
+            <th aria-label="Thao tác" />
+          </tr></thead>
+          <tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không tìm thấy biểu mẫu phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id} onClick={() => onOpen(item.id)}>
             <td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpen(item.id) }}>{item.code}</button></td>
-            <td><strong>{item.name}</strong></td>
-            <td>v{item.version}</td>
-            <td><DefinitionStatusBadge status={item.status} /></td>
-            <td>{item.updatedBy?.name ?? '—'}</td>
-            <td>{formatDateTime(item.updatedAt, 'date-first')}</td>
+            <td><div className="form-builder-catalog-title"><strong>{item.name}</strong>{item.description && <small>{item.description}</small>}</div></td>
+            <td><span className="form-builder-version-text">v{item.version}</span></td>
+            <td><span className="form-builder-field-count-badge">{item.fields.length} trường</span></td>
+            <td><DefinitionStatusBadge status={item.status} /></td><td>{item.updatedBy?.name ?? '—'}</td><td>{formatDateTime(item.updatedAt, 'date-first')}</td>
             <td><div className="form-builder-row-actions">
-              {item.status !== 'DRAFT' && canCreate && <button className="secondary-button" type="button" disabled={cloningId === item.id} onClick={(event) => { event.stopPropagation(); void clone(item) }}>{cloningId === item.id ? 'Đang tạo...' : 'Tạo bản nháp'}</button>}
-              {item.status === 'DRAFT' && canDeleteDraft && <button className="icon-action danger-icon-action" type="button" title="Xóa bản nháp" aria-label={`Xóa ${item.name}`} onClick={(event) => { event.stopPropagation(); setDeleteTarget(item) }}>×</button>}
+              {canUpdate && <button className="icon-action" type="button" title="Chuyển nhóm" aria-label={`Chuyển nhóm ${item.name}`} onClick={(event) => { event.stopPropagation(); setMoveTarget(item); setMoveGroupId(item.group?.id ?? '') }}><FolderInput size={14} /></button>}
+              {item.status !== 'DRAFT' && canCreate && <button className="secondary-button form-builder-clone-btn" type="button" disabled={cloningId === item.id} onClick={(event) => { event.stopPropagation(); void clone(item) }}><CopyPlus size={13} /><span>{cloningId === item.id ? 'Đang tạo...' : 'Tạo bản nháp'}</span></button>}
+              {item.status === 'DRAFT' && canDeleteDraft && <button className="icon-action danger-icon-action" type="button" title="Xóa bản nháp" aria-label={`Xóa ${item.name}`} onClick={(event) => { event.stopPropagation(); setDeleteTarget(item) }}><Trash2 size={14} /></button>}
             </div></td>
           </tr>)}</tbody>
         </DataTable>
         <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setIsLoading(true); setPage((value) => Math.max(1, value - 1)) }} onNext={() => { setIsLoading(true); setPage((value) => Math.min(totalPages, value + 1)) }} rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} biểu mẫu`} pageSize={limit} pageSizes={pageSizes} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
       </>}
     </SurfaceCard>
+
+    {isManagingGroups && <FormGroupManagerDialog groups={groups} canCreate={canCreate} canUpdate={canUpdate} canDelete={canDeleteDraft} onClose={() => setIsManagingGroups(false)} onChanged={async () => { await loadGroups(); setReloadVersion((value) => value + 1) }} onNotify={onNotify} />}
+    {moveTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isMoving) setMoveTarget(null) }}>
+      <section className="modal-panel form-group-move-modal" role="dialog" aria-modal="true" aria-labelledby="move-form-group-title">
+        <header className="modal-header"><div><h2 id="move-form-group-title">Chuyển nhóm biểu mẫu</h2><p>{moveTarget.code} - {moveTarget.name}</p></div><button className="icon-close" type="button" aria-label="Đóng" disabled={isMoving} onClick={() => setMoveTarget(null)}>×</button></header>
+        <div className="form-group-move-body"><label><span>Nhóm biểu mẫu</span><FilterSelect ariaLabel="Chọn nhóm biểu mẫu" value={moveGroupId} options={[{ value: '', label: 'Chưa phân nhóm' }, ...groups.filter((group) => group.isActive || group.id === moveTarget.group?.id).map((group) => ({ value: group.id, label: group.name }))]} onChange={setMoveGroupId} disabled={isMoving} /></label></div>
+        <footer className="modal-actions form-group-move-actions"><button className="secondary-button" type="button" disabled={isMoving} onClick={() => setMoveTarget(null)}>Hủy</button><button className="primary-button" type="button" disabled={isMoving || moveGroupId === (moveTarget.group?.id ?? '')} onClick={() => void moveForm()}>{isMoving ? 'Đang chuyển...' : 'Chuyển nhóm'}</button></footer>
+      </section>
+    </div>}
     {deleteTarget && <ConfirmDialog title="Xóa biểu mẫu nháp" description={`Bạn có chắc chắn muốn xóa biểu mẫu ${deleteTarget.code} phiên bản ${deleteTarget.version}?`} confirmLabel="Xóa" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." compact />}
   </>
 }
 
 function statusLabel(status: DefinitionStatus): string {
-  return ({ DRAFT: 'Nháp', PUBLISHED: 'Đã xuất bản', INACTIVE: 'Ngưng hoạt động', ARCHIVED: 'Đã lưu trữ' })[status]
+  return { DRAFT: 'Nháp', PUBLISHED: 'Đã xuất bản', INACTIVE: 'Ngưng hoạt động', ARCHIVED: 'Đã lưu trữ' }[status]
 }

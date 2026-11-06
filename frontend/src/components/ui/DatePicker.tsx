@@ -5,11 +5,14 @@ interface DatePickerProps {
   value?: string
   onChange: (value?: string) => void
   ariaLabel: string
+  ariaDescribedBy?: string
+  ariaInvalid?: boolean
   placeholder?: string
   minDate?: string
   maxDate?: string
   showToday?: boolean
   clearable?: boolean
+  disabled?: boolean
 }
 
 interface PopupPosition { top: number; left: number; width: number }
@@ -41,7 +44,7 @@ function calendarDays(month: Date): Date[] {
   return Array.from({ length: 42 }, (_, index) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + index))
 }
 
-export function DatePicker({ value, onChange, ariaLabel, placeholder = 'dd/MM/yyyy', minDate, maxDate, showToday: showTodayProp = true, clearable = true }: DatePickerProps) {
+export function DatePicker({ value, onChange, ariaLabel, ariaDescribedBy, ariaInvalid = false, placeholder = 'dd/MM/yyyy', minDate, maxDate, showToday: showTodayProp = true, clearable = true, disabled = false }: DatePickerProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const popupRef = useRef<HTMLDivElement>(null)
   const selectedDate = dateFromValue(value)
@@ -79,12 +82,12 @@ export function DatePicker({ value, onChange, ariaLabel, placeholder = 'dd/MM/yy
   const unavailable = (date: Date) => { const time = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime(); return Boolean((earliest && time < earliest.getTime()) || (latest && time > latest.getTime())) }
   const commitTyped = (raw: string) => { if (!raw.trim()) { setError(''); onChange(undefined); return }; const next = parseDate(raw); const date = dateFromValue(next); if (!date || unavailable(date)) { setError(latest && date && date > latest ? 'Không thể chọn ngày trong tương lai.' : 'Vui lòng nhập ngày theo định dạng dd/MM/yyyy.'); return }; setError(''); setDisplayValue(formatDate(next)); onChange(next) }
   const selectDate = (date: Date) => { if (unavailable(date)) return; const next = toDateOnly(date); setDisplayValue(formatDate(next)); setError(''); onChange(next); setIsOpen(false); setShowMonthPicker(false) }
-  const open = () => { setVisibleMonth(selectedDate ?? today); setYearDraft(String((selectedDate ?? today).getFullYear())); setShowMonthPicker(false); setIsOpen(true) }
+  const open = () => { if (disabled) return; setVisibleMonth(selectedDate ?? today); setYearDraft(String((selectedDate ?? today).getFullYear())); setShowMonthPicker(false); setIsOpen(true) }
   const days = useMemo(() => calendarDays(visibleMonth), [visibleMonth])
   const popup = isOpen && position ? createPortal(<div className="date-picker-popover" ref={popupRef} role="dialog" aria-label={`Chọn ${ariaLabel}`} style={{ top: position.top, left: position.left, width: position.width }}>
     <div className="date-picker-header"><button className="date-picker-nav" type="button" aria-label="Tháng trước" onClick={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>‹</button><button className="date-picker-title" type="button" onClick={() => setShowMonthPicker((current) => !current)}>{months[visibleMonth.getMonth()]} năm {visibleMonth.getFullYear()}</button><button className="date-picker-nav" type="button" aria-label="Tháng sau" onClick={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}>›</button></div>
     {showMonthPicker ? <div className="date-picker-month-panel"><div className="date-picker-year-controls"><button type="button" aria-label="Năm trước" onClick={() => { const year = visibleMonth.getFullYear() - 1; setVisibleMonth((current) => new Date(year, current.getMonth(), 1)); setYearDraft(String(year)) }}>−</button><input className="date-picker-year-input" value={yearDraft} inputMode="numeric" maxLength={4} aria-label="Năm" onChange={(event) => setYearDraft(event.target.value.replace(/\D/g, '').slice(0, 4))} onBlur={() => { const year = Number(yearDraft); if (year >= 1900 && year <= 9999) setVisibleMonth((current) => new Date(year, current.getMonth(), 1)); else setYearDraft(String(visibleMonth.getFullYear())) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }} /><button type="button" aria-label="Năm sau" onClick={() => { const year = visibleMonth.getFullYear() + 1; setVisibleMonth((current) => new Date(year, current.getMonth(), 1)); setYearDraft(String(year)) }}>+</button></div><div className="date-picker-month-grid">{months.map((month, index) => <button className={index === visibleMonth.getMonth() ? 'is-current' : ''} type="button" key={month} onClick={() => { setVisibleMonth((current) => new Date(current.getFullYear(), index, 1)); setShowMonthPicker(false) }}>{month}</button>)}</div></div> : <><div className="date-picker-weekdays">{weekdays.map((day) => <span key={day}>{day}</span>)}</div><div className="date-picker-days">{days.map((date) => { const selected = Boolean(selectedDate && sameDate(date, selectedDate)); const current = date.getMonth() === visibleMonth.getMonth(); return <button className={['date-picker-day', !current ? 'is-outside-month' : '', selected ? 'is-selected' : '', sameDate(date, today) ? 'is-today' : ''].filter(Boolean).join(' ')} type="button" key={toDateOnly(date)} disabled={unavailable(date)} onClick={() => selectDate(date)}>{date.getDate()}</button> })}</div></>}
     <div className="date-picker-footer">{clearable && <button type="button" onClick={() => { setDisplayValue(''); setError(''); onChange(undefined); setIsOpen(false) }}>Xóa ngày</button>}{showToday && <button type="button" disabled={unavailable(today)} onClick={() => selectDate(today)}>Hôm nay</button>}</div>
   </div>, document.body) : null
-  return <div className="date-picker-field"><div className="date-picker" ref={rootRef}><input className="date-picker-text" value={displayValue} inputMode="numeric" maxLength={10} placeholder={placeholder} aria-label={ariaLabel} aria-invalid={Boolean(error)} onChange={(event) => { setDisplayValue(event.target.value.replace(/[^0-9/]/g, '')); if (error) setError('') }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitTyped(displayValue) } }} onBlur={(event) => commitTyped(event.target.value)} /><button className="date-picker-trigger" type="button" aria-label={`Mở lịch ${ariaLabel}`} aria-expanded={isOpen} onClick={() => isOpen ? setIsOpen(false) : open()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v2M12 2.5v2M2.75 6h10.5M3.5 3.5h9a.75.75 0 0 1 .75.75v8.25a.75.75 0 0 1-.75.75h-9a.75.75 0 0 1-.75-.75V4.25a.75.75 0 0 1 .75-.75Z" /></svg></button></div>{error && <p className="date-picker-error" role="alert">{error}</p>}{popup}</div>
+  return <div className="date-picker-field"><div className={disabled ? 'date-picker is-disabled' : 'date-picker'} ref={rootRef}><input className="date-picker-text" value={displayValue} inputMode="numeric" maxLength={10} placeholder={placeholder} aria-label={ariaLabel} aria-describedby={ariaDescribedBy} aria-invalid={ariaInvalid || Boolean(error)} disabled={disabled} onChange={(event) => { setDisplayValue(event.target.value.replace(/[^0-9/]/g, '')); if (error) setError('') }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitTyped(displayValue) } }} onBlur={(event) => commitTyped(event.target.value)} /><button className="date-picker-trigger" type="button" aria-label={`Mở lịch ${ariaLabel}`} aria-expanded={isOpen} disabled={disabled} onClick={() => isOpen ? setIsOpen(false) : open()}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v2M12 2.5v2M2.75 6h10.5M3.5 3.5h9a.75.75 0 0 1 .75.75v8.25a.75.75 0 0 1-.75.75h-9a.75.75 0 0 1-.75-.75V4.25a.75.75 0 0 1 .75-.75Z" /></svg></button></div>{error && <p className="date-picker-error" role="alert">{error}</p>}{popup}</div>
 }

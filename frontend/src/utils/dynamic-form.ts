@@ -27,7 +27,11 @@ export function initialDynamicFormValues(
 ): Record<string, unknown> {
   const values: Record<string, unknown> = { ...initialValues }
   for (const field of fields) {
+    if (field.type === 'SECTION') continue
     if (!(field.key in values) && field.defaultValue !== undefined) values[field.key] = field.defaultValue
+    else if (!(field.key in values) && field.type === 'TABLE' && (field.tableConfig?.minRows ?? 0) > 0) {
+      values[field.key] = Array.from({ length: field.tableConfig!.minRows }, () => ({}))
+    }
   }
   return values
 }
@@ -53,7 +57,8 @@ export function validateDynamicFormData(
   values: Readonly<Record<string, unknown>>,
 ): DynamicFormValidationResult {
   const supported = supportedFormFields(fields)
-  const byKey = new Map(supported.map((field) => [field.key, field]))
+  const inputFields = supported.filter((field) => field.type !== 'SECTION')
+  const byKey = new Map(inputFields.map((field) => [field.key, field]))
   const visibility = dynamicFieldVisibility(supported, values)
   const errors: DynamicFormValidationError[] = []
 
@@ -62,6 +67,7 @@ export function validateDynamicFormData(
   }
 
   for (const field of supported) {
+    if (field.type === 'SECTION') continue
     const value = values[field.key]
     if (visibility.get(field.key) !== false && field.required && isEmptyValue(value)) {
       errors.push({ fieldKey: field.key, code: 'REQUIRED', message: `${field.label} là bắt buộc.` })
@@ -76,7 +82,7 @@ export function dynamicFieldError(
   validation: DynamicFormValidationResult,
   fieldKey: string,
 ): DynamicFormValidationError | undefined {
-  return validation.errors.find((error) => error.fieldKey === fieldKey)
+  return validation.errors.find((error) => error.fieldKey === fieldKey || error.fieldKey.startsWith(`${fieldKey}.`))
 }
 
 export function dynamicFileIds(value: unknown): string[] {
@@ -142,11 +148,18 @@ function compareValues(actual: unknown, expected: unknown, compare: (left: numbe
 }
 
 function validateFieldValue(field: FormField, value: unknown, errors: DynamicFormValidationError[]): void {
+  if (field.type === 'SECTION') {
+    errors.push({ fieldKey: field.key, code: 'INVALID_TYPE', message: `${field.label} không nhận dữ liệu nhập.` })
+    return
+  }
   let validType = true
   if (textTypes.has(field.type)) {
     validType = typeof value === 'string'
     if (field.type === 'EMAIL' && validType && !validEmail(value as string)) {
       errors.push({ fieldKey: field.key, code: 'INVALID_EMAIL', message: `${field.label} không phải email hợp lệ.` })
+    }
+    if (field.type === 'PHONE' && validType && !validPhone(value as string)) {
+      errors.push({ fieldKey: field.key, code: 'INVALID_PHONE', message: `${field.label} chỉ được gồm tối đa 15 chữ số và có thể bắt đầu bằng dấu +.` })
     }
   } else if (numberTypes.has(field.type)) {
     validType = typeof value === 'number' && Number.isFinite(value)
@@ -168,13 +181,57 @@ function validateFieldValue(field: FormField, value: unknown, errors: DynamicFor
     validType = field.fileConfig?.multiple
       ? Array.isArray(value) && fileIds.length === value.length && fileIds.length <= field.fileConfig.maxFiles && fileIds.every((id) => objectIdPattern.test(id))
       : typeof value === 'string' && objectIdPattern.test(value)
+  } else if (field.type === 'TABLE') {
+    validateTableValue(field, value, errors)
+    return
   }
 
   if (!validType) {
     errors.push({ fieldKey: field.key, code: 'INVALID_TYPE', message: `${field.label} không đúng định dạng.` })
     return
   }
+  if (numberTypes.has(field.type) && typeof value === 'number' && value < 0) {
+    errors.push({ fieldKey: field.key, code: 'NON_NEGATIVE_REQUIRED', message: `${field.label} phải lớn hơn hoặc bằng 0.` })
+    return
+  }
+  if (field.type === 'CURRENCY' && typeof value === 'number' && !Number.isInteger(value)) {
+    errors.push({ fieldKey: field.key, code: 'CURRENCY_INTEGER_REQUIRED', message: `${field.label} phải là số nguyên.` })
+    return
+  }
   validateRules(field, value, errors)
+}
+
+function validPhone(value: string): boolean {
+  return /^\+?\d{1,15}$/.test(value)
+}
+
+function validateTableValue(field: FormField, value: unknown, errors: DynamicFormValidationError[]): void {
+  const config = field.tableConfig
+  if (!Array.isArray(value) || !config) {
+    errors.push({ fieldKey: field.key, code: 'INVALID_TYPE', message: `${field.label} không đúng định dạng bảng.` })
+    return
+  }
+  if (value.length < config.minRows) errors.push({ fieldKey: field.key, code: 'TABLE_MIN_ROWS', message: `${field.label} cần ít nhất ${config.minRows} dòng.` })
+  if (value.length > config.maxRows) errors.push({ fieldKey: field.key, code: 'TABLE_MAX_ROWS', message: `${field.label} chỉ được có tối đa ${config.maxRows} dòng.` })
+  const columnKeys = new Set(config.columns.map((column) => column.key))
+  value.forEach((row, rowIndex) => {
+    if (!isRecord(row)) {
+      errors.push({ fieldKey: `${field.key}.${rowIndex}`, code: 'INVALID_TABLE_ROW', message: `Dòng ${rowIndex + 1} của ${field.label} không hợp lệ.` })
+      return
+    }
+    Object.keys(row).forEach((key) => {
+      if (!columnKeys.has(key)) errors.push({ fieldKey: `${field.key}.${rowIndex}.${key}`, code: 'UNKNOWN_TABLE_COLUMN', message: `Cột ${key} không được khai báo trong ${field.label}.` })
+    })
+    config.columns.forEach((column) => {
+      const cellKey = `${field.key}.${rowIndex}.${column.key}`
+      const cellValue = row[column.key]
+      if (column.required && isEmptyValue(cellValue)) {
+        errors.push({ fieldKey: cellKey, code: 'REQUIRED', message: `Dòng ${rowIndex + 1} - ${column.label} là bắt buộc.` })
+      } else if (!isEmptyValue(cellValue)) {
+        validateFieldValue({ ...column, key: cellKey, label: `Dòng ${rowIndex + 1} - ${column.label}` }, cellValue, errors)
+      }
+    })
+  })
 }
 
 function validateRules(field: FormField, value: unknown, errors: DynamicFormValidationError[]): void {
@@ -254,6 +311,10 @@ function validDate(value: unknown): value is string {
 
 function isEmptyValue(value: unknown): boolean {
   return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function isOptionField(field: FormField): boolean {

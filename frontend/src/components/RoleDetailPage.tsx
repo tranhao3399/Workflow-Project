@@ -85,14 +85,14 @@ function matrixColumnFor(permission: PermissionDefinition): MatrixColumn | null 
   if (permission.matrixColumn !== 'SPECIAL') return permission.matrixColumn
   if (permission.key === 'REQUESTS.SUBMIT') return 'CREATE'
   if (permission.key === 'REQUESTS.VOID') return 'DELETE'
-  if (permission.key === 'REQUESTS.VIEW_ALL') return null
+  if (permission.key === 'REQUESTS.VIEW_ALL' || permission.key === 'REQUESTS.VIEW_SCOPE') return null
   return 'UPDATE'
 }
 
 function toPermissionModules(registry: PermissionDefinition[]): PermissionModule[] {
   const grouped = new Map<string, PermissionModule>()
   for (const permission of registry) {
-    if (permission.module === 'DASHBOARD' || permission.module === 'NOTIFICATION' || permission.module === 'POSITION' || permission.key === 'REQUESTS.VIEW_ALL') continue
+    if (permission.module === 'DASHBOARD' || permission.module === 'NOTIFICATION' || permission.module === 'POSITION' || permission.key === 'REQUESTS.VIEW_ALL' || permission.key === 'REQUESTS.VIEW_SCOPE') continue
     const current = grouped.get(permission.module)
     if (current) current.permissions.push(permission)
     else grouped.set(permission.module, { key: permission.module, label: permission.moduleLabel, permissions: [permission] })

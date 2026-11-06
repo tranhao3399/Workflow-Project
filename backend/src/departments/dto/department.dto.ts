@@ -1,6 +1,7 @@
 import { Transform, Type } from 'class-transformer';
-import { ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsInt, IsMongoId, IsNotEmpty, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
+import { ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsEnum, IsInt, IsMongoId, IsNotEmpty, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { OrganizationUnitType } from '../enums/organization-unit-type.enum.js';
 
 const trim = ({ value }: { value: unknown }): unknown => typeof value === 'string' ? value.trim() : value;
 
@@ -12,6 +13,12 @@ export class CreateDepartmentDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(120) name: string;
   @ApiPropertyOptional({ example: true })
   @IsOptional() @IsBoolean() isActive?: boolean;
+  @ApiPropertyOptional({ enum: OrganizationUnitType, example: OrganizationUnitType.STORE })
+  @IsOptional() @IsEnum(OrganizationUnitType) unitType?: OrganizationUnitType;
+  @ApiPropertyOptional({ nullable: true, example: '66d0f0b74d5b5d4e65e75124' })
+  @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId() parentId?: string | null;
+  @ApiPropertyOptional({ nullable: true, example: '66d0f0b74d5b5d4e65e75124' })
+  @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId() managerEmployeeId?: string | null;
   @ApiPropertyOptional({ type: [String], example: ['66d0f0b74d5b5d4e65e75124'], description: 'Các ObjectId chức danh áp dụng.' })
   @IsOptional() @IsArray() @ArrayUnique() @IsMongoId({ each: true }) positionIds?: string[];
 }
@@ -25,6 +32,8 @@ export class UpdateDepartmentDto {
   @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId() parentId?: string | null;
   @ApiPropertyOptional({ nullable: true, example: '66d0f0b74d5b5d4e65e75124' })
   @ValidateIf((_, value) => value !== null && value !== undefined) @IsMongoId() managerEmployeeId?: string | null;
+  @ApiPropertyOptional({ enum: OrganizationUnitType, example: OrganizationUnitType.REGION })
+  @IsOptional() @IsEnum(OrganizationUnitType) unitType?: OrganizationUnitType;
   @ApiPropertyOptional({ example: true })
   @IsOptional() @IsBoolean() isActive?: boolean;
   @ApiPropertyOptional({ example: 10, minimum: 0, maximum: 10000 })
@@ -56,6 +65,7 @@ export class UpdateDepartmentStatusDto {
 export class ListDepartmentsDto {
   @IsOptional() @Transform(({ value }) => value === 'true' ? true : value === 'false' ? false : value) @IsBoolean() active?: boolean;
   @IsOptional() @IsString() @MaxLength(100) search?: string;
+  @IsOptional() @IsEnum(OrganizationUnitType) unitType?: OrganizationUnitType;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit = 20;
 }

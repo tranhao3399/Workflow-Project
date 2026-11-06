@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listOwnRequests } from '../../services/requests.service'
+import { listManagedRequests, listOwnRequests } from '../../services/requests.service'
 import { requestStatus, type RequestFilter, type RequestSummary } from '../../types/workflow'
 import { formatDateTime } from '../../utils/formatters'
 import { RequestStatusBadge } from '../StatusBadge'
@@ -9,6 +9,7 @@ import { FilterSelect } from '../ui/FilterSelect'
 import { ListToolbar } from '../ui/ListToolbar'
 import { PageHeader } from '../ui/PageHeader'
 import { SurfaceCard } from '../ui/SurfaceCard'
+import { SortableTableHeader } from '../ui/SortableTableHeader'
 import { TablePagination } from '../ui/TablePagination'
 
 type RequestTab = 'ALL' | NonNullable<RequestFilter['statusGroup']>
@@ -17,6 +18,7 @@ interface RequestCatalogPageProps {
   canCreate: boolean
   onCreate: () => void
   onOpen: (id: string) => void
+  canViewManaged: boolean
 }
 
 const tabs: Array<{ value: RequestTab; label: string }> = [
@@ -35,12 +37,13 @@ const sortOptions = [
   { value: 'requestNo:asc', label: 'Mã phiếu A-Z' },
 ]
 
-export function RequestCatalogPage({ canCreate, onCreate, onOpen }: RequestCatalogPageProps) {
+export function RequestCatalogPage({ canCreate, onCreate, onOpen, canViewManaged }: RequestCatalogPageProps) {
   const [items, setItems] = useState<RequestSummary[]>([])
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [tab, setTab] = useState<RequestTab>('ALL')
   const [sort, setSort] = useState('updatedAt:desc')
+  const [hasUserSorted, setHasUserSorted] = useState(false)
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
@@ -48,6 +51,7 @@ export function RequestCatalogPage({ canCreate, onCreate, onOpen }: RequestCatal
   const [isLoading, setIsLoading] = useState(true)
   const [hasError, setHasError] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
+  const [scope, setScope] = useState<'OWN' | 'MANAGED'>('OWN')
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => { setSearch(searchInput.trim()); setPage(1) }, 300)
@@ -57,7 +61,7 @@ export function RequestCatalogPage({ canCreate, onCreate, onOpen }: RequestCatal
   const load = useCallback(async () => {
     const [sortBy, sortOrder] = sort.split(':') as [NonNullable<RequestFilter['sortBy']>, 'asc' | 'desc']
     try {
-      const result = await listOwnRequests({
+      const result = await (scope === 'OWN' ? listOwnRequests : listManagedRequests)({
         page,
         limit,
         search: search || undefined,
@@ -75,7 +79,7 @@ export function RequestCatalogPage({ canCreate, onCreate, onOpen }: RequestCatal
     } finally {
       setIsLoading(false)
     }
-  }, [limit, page, search, sort, tab])
+  }, [limit, page, scope, search, sort, tab])
 
   // Data fetching intentionally synchronizes the catalog with server-side filters.
   // oxlint-disable-next-line react/set-state-in-effect
@@ -89,12 +93,35 @@ export function RequestCatalogPage({ canCreate, onCreate, onOpen }: RequestCatal
   const rangeStart = total ? (page - 1) * limit + 1 : 0
   const rangeEnd = Math.min(page * limit, total)
 
+  function changeSort(column: string) {
+    const [currentColumn, currentOrder] = sort.split(':')
+    const nextOrder = currentColumn === column
+      ? (currentOrder === 'asc' ? 'desc' : 'asc')
+      : (column === 'createdAt' || column === 'updatedAt' ? 'desc' : 'asc')
+    setSort(`${column}:${nextOrder}`)
+    setHasUserSorted(true)
+    setPage(1)
+    setIsLoading(true)
+  }
+
+  const [sortBy, sortOrder] = sort.split(':') as [string, 'asc' | 'desc']
+
   return <>
     <PageHeader title="Phiếu của tôi" description="Theo dõi phiếu nháp và tiến độ xử lý." actions={canCreate ? <button className="primary-button compact-button" type="button" onClick={onCreate}>+ Tạo phiếu</button> : undefined} />
     <SurfaceCard className="request-catalog">
+      {canViewManaged && <div className="request-scope-tabs" role="tablist" aria-label="Phạm vi phiếu"><button className={scope === 'OWN' ? 'is-active' : ''} type="button" role="tab" aria-selected={scope === 'OWN'} onClick={() => { setScope('OWN'); setPage(1); setIsLoading(true) }}>Phiếu của tôi</button><button className={scope === 'MANAGED' ? 'is-active' : ''} type="button" role="tab" aria-selected={scope === 'MANAGED'} onClick={() => { setScope('MANAGED'); setPage(1); setIsLoading(true) }}>Phiếu thuộc phạm vi quản lý</button></div>}
       <div className="request-status-tabs" role="tablist" aria-label="Lọc trạng thái phiếu">{tabs.map((item) => <button className={tab === item.value ? 'is-active' : ''} type="button" role="tab" aria-selected={tab === item.value} key={item.value} onClick={() => { setTab(item.value); setPage(1); setIsLoading(true) }}>{item.label}</button>)}</div>
-      <ListToolbar><div className="request-list-toolbar"><label className="catalog-search"><span>Tìm kiếm</span><span className="catalog-search-input"><input value={searchInput} placeholder="Mã phiếu hoặc tiêu đề" onChange={(event) => { setSearchInput(event.target.value); setIsLoading(true) }} />{searchInput && <button className="clear-search-button" type="button" aria-label="Xóa tìm kiếm" onClick={() => setSearchInput('')}>×</button>}</span></label><label className="request-sort-control"><span>Sắp xếp</span><FilterSelect ariaLabel="Sắp xếp phiếu" value={sort} options={sortOptions} onChange={(value) => { setSort(value); setPage(1); setIsLoading(true) }} /></label><button className="secondary-button catalog-refresh-button" type="button" disabled={isLoading} onClick={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }}>↻ {isLoading ? 'Đang tải...' : 'Làm mới'}</button></div></ListToolbar>
-      {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : <><DataTable className="admin-table request-table" fixedLayout><thead><tr><th>Mã phiếu</th><th>Form</th><th>Tiêu đề</th><th>Trạng thái</th><th>Bước hiện tại</th><th>Ngày tạo</th><th>Cập nhật</th></tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={7} message="Không có phiếu phù hợp." /> : items.map((item) => <tr className="request-row" key={item.id} onClick={() => onOpen(item.id)}><td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpen(item.id) }}>{item.requestNo}</button></td><td>{item.form ? <><strong>{item.form.name}</strong><small className="request-form-version">{item.form.code} · v{item.form.version}</small></> : `Form v${item.formVersion}`}</td><td><strong>{item.title}</strong></td><td><RequestStatusBadge status={item.status} /></td><td>{item.currentStepName || item.currentStepKey || '—'}</td><td>{formatDateTime(item.createdAt)}</td><td>{formatDateTime(item.updatedAt)}</td></tr>)}</tbody></DataTable><TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} phiếu`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} /></>}
+      <ListToolbar><div className="request-list-toolbar"><label className="catalog-search"><span>Tìm kiếm</span><span className="catalog-search-input"><input value={searchInput} placeholder="Mã phiếu hoặc tiêu đề" onChange={(event) => { setSearchInput(event.target.value); setIsLoading(true) }} />{searchInput && <button className="clear-search-button" type="button" aria-label="Xóa tìm kiếm" onClick={() => setSearchInput('')}>×</button>}</span></label><label className="request-sort-control"><span>Sắp xếp</span><FilterSelect ariaLabel="Sắp xếp phiếu" value={sort} options={sortOptions} onChange={(value) => { setSort(value); setHasUserSorted(true); setPage(1); setIsLoading(true) }} /></label><button className="secondary-button catalog-refresh-button" type="button" disabled={isLoading} onClick={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }}>↻ {isLoading ? 'Đang tải...' : 'Làm mới'}</button></div></ListToolbar>
+      {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : <><DataTable className="admin-table request-table" fixedLayout><thead><tr>
+        <SortableTableHeader column="requestNo" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã phiếu</SortableTableHeader>
+        <th>Form</th>
+        <SortableTableHeader column="title" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Tiêu đề</SortableTableHeader>
+        {scope === 'MANAGED' && <th>Người tạo</th>}
+        <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
+        <th>Bước hiện tại</th>
+        <SortableTableHeader column="createdAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Ngày tạo</SortableTableHeader>
+        <SortableTableHeader column="updatedAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Cập nhật</SortableTableHeader>
+      </tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={scope === 'MANAGED' ? 8 : 7} message="Không có phiếu phù hợp." /> : items.map((item) => <tr className="request-row" key={item.id} onClick={() => onOpen(item.id)}><td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpen(item.id) }}>{item.requestNo}</button></td><td>{item.form ? <><strong>{item.form.name}</strong><small className="request-form-version">{item.form.code} · v{item.form.version}</small></> : `Form v${item.formVersion}`}</td><td><strong>{item.title}</strong></td>{scope === 'MANAGED' && <td><strong>{item.requesterSnapshot.fullName}</strong><small className="request-form-version">{item.requesterSnapshot.departmentName}</small></td>}<td><RequestStatusBadge status={item.status} /></td><td>{item.currentStepName || item.currentStepKey || '—'}</td><td>{formatDateTime(item.createdAt)}</td><td>{formatDateTime(item.updatedAt)}</td></tr>)}</tbody></DataTable><TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} phiếu`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} /></>}
     </SurfaceCard>
   </>
 }

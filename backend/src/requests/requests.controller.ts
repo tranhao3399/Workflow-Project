@@ -81,8 +81,18 @@ export class RequestsController {
     return this.service.findOwn(this.userId(request), query);
   }
 
+  @Get('managed')
+  @RequirePermissions('REQUESTS.VIEW_SCOPE')
+  @ApiOperation({ summary: 'Danh sách phiếu thuộc phạm vi đơn vị người gọi quản lý' })
+  @ApiOkResponse({ description: 'Danh sách có phân trang và giới hạn theo cây tổ chức.', type: Object })
+  @ApiQuery({ name: 'statusGroup', required: false, enum: requestStatusGroups })
+  @ApiValidationError()
+  findManaged(@Req() request: RequestWithContext, @Query() query: ListRequestsDto) {
+    return this.service.findManaged(this.userId(request), query);
+  }
+
   @Get(':id/history')
-  @RequirePermissions({ any: ['REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'REQUESTS.VIEW_ALL'] })
+  @RequirePermissions({ any: ['REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'REQUESTS.VIEW_SCOPE', 'REQUESTS.VIEW_ALL'] })
   @ApiOperation({ summary: 'Lịch sử xử lý phiếu' })
   @ApiParam({ name: 'id', description: 'MongoDB ObjectId của phiếu.' })
   @ApiOkResponse({ type: ApiDataResponseDto })
@@ -97,7 +107,7 @@ export class RequestsController {
   }
 
   @Get(':id')
-  @RequirePermissions({ any: ['REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'REQUESTS.VIEW_ALL'] })
+  @RequirePermissions({ any: ['REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'REQUESTS.VIEW_SCOPE', 'REQUESTS.VIEW_ALL'] })
   @ApiOperation({ summary: 'Chi tiết phiếu yêu cầu' })
   @ApiParam({ name: 'id', description: 'MongoDB ObjectId của phiếu.' })
   @ApiOkResponse({ type: ApiDataResponseDto })

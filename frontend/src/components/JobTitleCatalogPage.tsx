@@ -10,6 +10,7 @@ import { ListToolbar } from './ui/ListToolbar'
 import { JobTitleStatusBadge } from './ui/MasterDataStatusBadge'
 import { PageHeader } from './ui/PageHeader'
 import { SurfaceCard } from './ui/SurfaceCard'
+import { SortableTableHeader } from './ui/SortableTableHeader'
 import { TablePagination } from './ui/TablePagination'
 
 type StatusFilter = 'ALL' | 'ACTIVE' | 'INACTIVE'
@@ -33,6 +34,9 @@ export function JobTitleCatalogPage({ onCreateJobTitle, onOpenJobTitle, canCreat
   const [status, setStatus] = useState<StatusFilter>('ALL')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<PageSize>(10)
+  const [sortBy, setSortBy] = useState<'code' | 'name' | 'status'>('name')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
+  const [hasUserSorted, setHasUserSorted] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
   async function load(showRefresh = false) {
@@ -63,11 +67,19 @@ export function JobTitleCatalogPage({ onCreateJobTitle, onOpenJobTitle, canCreat
       return matchesQuery && matchesStatus
     })
   }, [jobTitles, searchQuery, status])
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const sorted = useMemo(() => [...filtered].sort((left, right) => {
+    const comparison = sortBy === 'code'
+      ? left.code.localeCompare(right.code, 'vi')
+      : sortBy === 'name'
+        ? left.name.localeCompare(right.name, 'vi')
+        : Number(left.isActive) - Number(right.isActive)
+    return sortOrder === 'asc' ? comparison : -comparison
+  }), [filtered, sortBy, sortOrder])
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
   const currentPage = Math.min(page, totalPages)
-  const rows = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  const rangeStart = filtered.length ? (currentPage - 1) * pageSize + 1 : 0
-  const rangeEnd = Math.min(currentPage * pageSize, filtered.length)
+  const rows = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const rangeStart = sorted.length ? (currentPage - 1) * pageSize + 1 : 0
+  const rangeEnd = Math.min(currentPage * pageSize, sorted.length)
   const activeFilterCount = Number(status !== 'ALL')
 
   function clearSearch() {
@@ -83,9 +95,20 @@ export function JobTitleCatalogPage({ onCreateJobTitle, onOpenJobTitle, canCreat
     setStatus('ALL')
     setPage(1)
     setPageSize(10)
+    setSortBy('name')
+    setSortOrder('asc')
+    setHasUserSorted(false)
     setIsFilterOpen(false)
     setOpenSelect(null)
     void load(true)
+  }
+
+  function changeSort(column: string) {
+    const nextColumn = column as 'code' | 'name' | 'status'
+    setSortOrder((current) => sortBy === nextColumn ? (current === 'asc' ? 'desc' : 'asc') : 'asc')
+    setSortBy(nextColumn)
+    setHasUserSorted(true)
+    setPage(1)
   }
 
   if (hasError) return <ErrorState onRetry={() => void load(true)} />
@@ -104,7 +127,11 @@ export function JobTitleCatalogPage({ onCreateJobTitle, onOpenJobTitle, canCreat
           <AdvancedFilterPanel id="job-title-filters" label="Bộ lọc chức danh" isOpen={isFilterOpen}><div className="advanced-filter-content master-filter-content"><label><span>Trạng thái</span><FilterSelect ariaLabel="Lọc theo trạng thái chức danh" value={status} options={[{ value: 'ALL', label: 'Tất cả trạng thái' }, { value: 'ACTIVE', label: 'Hoạt động' }, { value: 'INACTIVE', label: 'Ngưng hoạt động' }]} isOpen={openSelect === 'status'} onOpenChange={(open) => setOpenSelect(open ? 'status' : null)} onChange={(value) => { setStatus(value as StatusFilter); setPage(1) }} /></label></div></AdvancedFilterPanel>
         </div>
       </ListToolbar>
-      <DataTable className="admin-table master-data-table" fixedLayout><thead><tr><th>Mã chức danh</th><th>Chức danh</th><th>Trạng thái</th></tr></thead><tbody>{rows.length === 0 ? <EmptyTableRow colSpan={3} message="Không tìm thấy chức danh phù hợp." /> : rows.map((jobTitle) => <tr key={jobTitle.id}><td><button className="master-code-link" type="button" onClick={() => onOpenJobTitle(jobTitle.id)}>{jobTitle.code}</button></td><td><strong className="master-primary-text">{jobTitle.name}</strong></td><td><JobTitleStatusBadge isActive={jobTitle.isActive} /></td></tr>)}</tbody></DataTable><TablePagination currentPage={currentPage} totalPages={totalPages} onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)} rangeLabel={`${rangeStart}–${rangeEnd} trên ${filtered.length} chức danh`} pageSize={pageSize} pageSizes={pageSizes} onPageSizeChange={(value) => { setPageSize(value as PageSize); setPage(1) }} />
+      <DataTable className="admin-table master-data-table" fixedLayout><thead><tr>
+        <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã chức danh</SortableTableHeader>
+        <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Chức danh</SortableTableHeader>
+        <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
+      </tr></thead><tbody>{rows.length === 0 ? <EmptyTableRow colSpan={3} message="Không tìm thấy chức danh phù hợp." /> : rows.map((jobTitle) => <tr key={jobTitle.id}><td><button className="master-code-link" type="button" onClick={() => onOpenJobTitle(jobTitle.id)}>{jobTitle.code}</button></td><td><strong className="master-primary-text">{jobTitle.name}</strong></td><td><JobTitleStatusBadge isActive={jobTitle.isActive} /></td></tr>)}</tbody></DataTable><TablePagination currentPage={currentPage} totalPages={totalPages} onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)} rangeLabel={`${rangeStart}–${rangeEnd} trên ${sorted.length} chức danh`} pageSize={pageSize} pageSizes={pageSizes} onPageSizeChange={(value) => { setPageSize(value as PageSize); setPage(1) }} />
     </SurfaceCard>
   </>
 }

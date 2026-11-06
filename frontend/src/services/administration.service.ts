@@ -24,6 +24,7 @@ export interface UserEmployeeOption {
   id: string
   employeeCode: string
   fullName: string
+  workEmail: string
   department: string
   isActive: boolean
   userId?: string
@@ -60,6 +61,13 @@ export async function updateUser(userId: string, values: UpdateUserValues): Prom
   return apiClient<ApiDataResponse<User>>(`/users/${encodeURIComponent(userId)}`, {
     method: 'PATCH',
     body: JSON.stringify({ email: values.email.trim().toLowerCase(), ...(values.roleIds !== undefined ? { roleIds: values.roleIds } : {}), isActive: values.isActive, ...(values.newPassword ? { newPassword: values.newPassword } : {}) }),
+  }).then((response) => response.data)
+}
+
+export async function resetUserPassword(userId: string, newPassword: string): Promise<User> {
+  return apiClient<ApiDataResponse<User>>(`/users/${encodeURIComponent(userId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ newPassword }),
   }).then((response) => response.data)
 }
 

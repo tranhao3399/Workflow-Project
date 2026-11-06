@@ -29,8 +29,15 @@ import {
 } from './dto/request.dto.js';
 import { RequestAccessPolicy } from './request-access.policy.js';
 import { RequestActorContextService } from './request-actor-context.service.js';
-import { createRequestNumber, isRecord } from './request-data.helpers.js';
+import {
+  applyAutoFillToMigratedFormData,
+  buildInitialRequestFormData,
+  enforceLockedAutoFillFormData,
+  hasLockedAutoFillFields,
+  isRecord,
+} from './request-data.helpers.js';
 import { RequestDraftMigrationService } from './request-draft-migration.service.js';
+import { RequestNumberService } from './request-number.service.js';
 import { RequestQueryService } from './request-query.service.js';
 import { RequestSnapshotFactory } from './request-snapshot.factory.js';
 import type { StoredRequest } from './request.types.js';
@@ -66,6 +73,7 @@ export class RequestsService {
     private readonly actorContext: RequestActorContextService,
     private readonly snapshots: RequestSnapshotFactory,
     private readonly draftMigration: RequestDraftMigrationService,
+    private readonly requestNumbers: RequestNumberService,
   ) {}
 
   availableForms() {
@@ -78,6 +86,10 @@ export class RequestsService {
 
   findAll(query: ListRequestsDto) {
     return this.queryService.findAll(query);
+  }
+
+  findManaged(userId: string, query: ListRequestsDto) {
+    return this.queryService.findManaged(userId, query);
   }
 
   findOne(userId: string, id: string, permissionKeys: readonly string[]) {
@@ -114,8 +126,9 @@ export class RequestsService {
       }
       await this.lockPublishedPackage(form, workflow, session);
 
+      const requestNo = await this.requestNumbers.next(form.code, session);
       const [request] = await this.requests.create([{
-        requestNo: createRequestNumber(),
+        requestNo,
         title: form.name,
         formDefinitionId: form._id,
         workflowDefinitionId: workflow._id,
@@ -124,7 +137,7 @@ export class RequestsService {
         requesterUserId: actor.userId,
         requesterEmployeeId: actor.employeeId,
         requesterSnapshot: actor.requesterSnapshot,
-        formData: {},
+        formData: buildInitialRequestFormData(form.fields, actor.autoFillProfile),
         formSnapshot: this.snapshots.createFormSnapshot(form),
         status: 'DRAFT',
         revisionRound: 0,
@@ -178,8 +191,18 @@ export class RequestsService {
       if (input.title !== undefined) request.title = input.title;
       if (input.formData !== undefined) {
         const source = await this.requestFileValidationSource(request, session);
-        await this.files.attachRequestFileReferences(request._id, input.formData, source, session);
-        request.formData = input.formData;
+        let nextFormData = input.formData;
+        if (hasLockedAutoFillFields(source.fields)) {
+          const actor = await this.actorContext.resolve(userId, session);
+          nextFormData = enforceLockedAutoFillFormData(
+            source.fields,
+            input.formData,
+            request.formData,
+            actor.autoFillProfile,
+          );
+        }
+        await this.files.attachRequestFileReferences(request._id, nextFormData, source, session);
+        request.formData = nextFormData;
         request.markModified('formData');
       }
       request.updatedBy = new Types.ObjectId(userId);
@@ -257,8 +280,17 @@ export class RequestsService {
         ? undefined
         : await this.forms.findById(source.formDefinitionId).select({ fields: 1 }).session(session).lean().exec();
       const migration = this.draftMigration.migrate(source, form.fields, sourceForm?.fields);
+      const recreatedFormData = applyAutoFillToMigratedFormData(
+        form.fields,
+        migration.formData,
+        actor.autoFillProfile,
+      );
+      const reviewItems = migration.reviewItems.filter(
+        (item) => !(item.reason === 'REQUIRED_VALUE_MISSING' && Boolean(recreatedFormData[item.fieldKey])),
+      );
+      const requestNo = await this.requestNumbers.next(form.code, session);
       const [request] = await this.requests.create([{
-        requestNo: createRequestNumber(),
+        requestNo,
         title: source.title,
         formDefinitionId: form._id,
         workflowDefinitionId: workflow._id,
@@ -267,7 +299,7 @@ export class RequestsService {
         requesterUserId: actor.userId,
         requesterEmployeeId: actor.employeeId,
         requesterSnapshot: actor.requesterSnapshot,
-        formData: migration.formData,
+        formData: recreatedFormData,
         formSnapshot: this.snapshots.createFormSnapshot(form),
         status: 'DRAFT',
         revisionRound: 0,
@@ -296,13 +328,13 @@ export class RequestsService {
         {
           recreatedFromRequestId: source._id.toString(),
           copiedFieldKeys: migration.copiedFieldKeys,
-          reviewFieldKeys: migration.reviewItems.map((item) => item.fieldKey),
+          reviewFieldKeys: reviewItems.map((item) => item.fieldKey),
         },
       );
       return {
         requestId: request._id.toString(),
         copiedFieldKeys: migration.copiedFieldKeys,
-        reviewItems: migration.reviewItems,
+        reviewItems,
       };
     });
 
@@ -328,6 +360,15 @@ export class RequestsService {
       }
       const actor = await this.actorContext.resolve(userId, session);
       const { form, workflow } = await this.publishedPackage(request, session);
+      if (hasLockedAutoFillFields(form.fields)) {
+        request.formData = enforceLockedAutoFillFormData(
+          form.fields,
+          request.formData,
+          request.formData,
+          actor.autoFillProfile,
+        );
+        request.markModified('formData');
+      }
       this.dynamicFormValidator.assertFormDataValid({ fields: form.fields }, request.formData);
       await this.files.assertRequestFileReferencesValid(request._id, request.formData, { fields: form.fields }, session);
 

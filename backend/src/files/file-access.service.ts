@@ -4,6 +4,7 @@ import { Model, Types } from 'mongoose';
 import { ApprovalTask } from '../approvals/schemas/approval-task.schema.js';
 import { Request, type RequestStatus } from '../requests/schemas/request.schema.js';
 import type { FileOwnerType } from './schemas/stored-file.schema.js';
+import { OrganizationScopeService } from '../common/organization/organization-scope.service.js';
 
 export interface FileOwnerReference {
   ownerType?: FileOwnerType;
@@ -13,6 +14,7 @@ export interface FileOwnerReference {
 export interface RequestAccessRecord {
   _id: Types.ObjectId;
   requesterUserId: Types.ObjectId;
+  requesterSnapshot: { departmentId: Types.ObjectId };
   status: RequestStatus;
 }
 
@@ -21,13 +23,14 @@ export class FileAccessService {
   constructor(
     @InjectModel(Request.name) private readonly requests: Model<Request>,
     @InjectModel(ApprovalTask.name) private readonly approvalTasks: Model<ApprovalTask>,
+    private readonly organizationScope: OrganizationScopeService,
   ) {}
 
   async requireEditableRequest(requestId: string | Types.ObjectId, userId: string): Promise<RequestAccessRecord> {
     const requestObjectId = this.toObjectId(requestId, 'requestId');
     const userObjectId = this.toObjectId(userId, 'userId');
     const request = await this.requests.findById(requestObjectId)
-      .select({ requesterUserId: 1, status: 1 })
+      .select({ requesterUserId: 1, requesterSnapshot: 1, status: 1 })
       .lean().exec();
     if (!request) throw new NotFoundException('Không tìm thấy phiếu yêu cầu.');
     if (!request.requesterUserId.equals(userObjectId)) {
@@ -36,7 +39,7 @@ export class FileAccessService {
     if (request.status !== 'DRAFT' && request.status !== 'REVISION_REQUESTED') {
       throw new ForbiddenException('Phiếu yêu cầu hiện không cho phép thay đổi tệp đính kèm.');
     }
-    return request as RequestAccessRecord;
+    return request as unknown as RequestAccessRecord;
   }
 
   async requireFileReadAccess(
@@ -46,18 +49,22 @@ export class FileAccessService {
   ): Promise<RequestAccessRecord> {
     const requestId = await this.resolveRequestId(file);
     const request = await this.requests.findById(requestId)
-      .select({ requesterUserId: 1, status: 1 })
+      .select({ requesterUserId: 1, requesterSnapshot: 1, status: 1 })
       .lean().exec();
     if (!request) throw new NotFoundException('Không tìm thấy phiếu yêu cầu của tệp.');
 
     const userObjectId = this.toObjectId(userId, 'userId');
     if (permissionKeys.includes('REQUESTS.VIEW_ALL') || request.requesterUserId.equals(userObjectId)) {
-      return request as RequestAccessRecord;
+      return request as unknown as RequestAccessRecord;
+    }
+    if (permissionKeys.includes('REQUESTS.VIEW_SCOPE')
+      && await this.organizationScope.canAccessDepartment(userId, request.requesterSnapshot.departmentId)) {
+      return request as unknown as RequestAccessRecord;
     }
 
     const hasApprovalTask = await this.approvalTasks.exists({ requestId: request._id, assigneeUserId: userObjectId });
     if (!hasApprovalTask) throw new ForbiddenException('Bạn không có quyền truy cập tệp đính kèm này.');
-    return request as RequestAccessRecord;
+    return request as unknown as RequestAccessRecord;
   }
 
   async requireFileEditAccess(file: FileOwnerReference, userId: string): Promise<RequestAccessRecord> {

@@ -6,6 +6,7 @@ import { ApprovalHistory } from '../approvals/schemas/approval-history.schema.js
 import { createPaginationMetadata } from '../common/http/pagination.js';
 import { escapeRegExp } from '../common/text/escape-reg-exp.js';
 import { FormDefinition } from '../form-definitions/schemas/form-definition.schema.js';
+import { FormGroup } from '../form-definitions/schemas/form-group.schema.js';
 import { WorkflowDefinition } from '../workflow-definitions/schemas/workflow-definition.schema.js';
 import { WorkspaceModule } from '../workspace-modules/schemas/workspace-module.schema.js';
 import type { ListRequestsDto } from './dto/request.dto.js';
@@ -19,6 +20,7 @@ import type {
   StoredRequest,
 } from './request.types.js';
 import { Request, type RequestStatus } from './schemas/request.schema.js';
+import { OrganizationScopeService } from '../common/organization/organization-scope.service.js';
 
 const REQUEST_STATUS_GROUPS: Readonly<Record<NonNullable<ListRequestsDto['statusGroup']>, readonly RequestStatus[]>> = {
   DRAFT: ['DRAFT'],
@@ -33,11 +35,13 @@ export class RequestQueryService {
   constructor(
     @InjectModel(Request.name) private readonly requests: Model<Request>,
     @InjectModel(FormDefinition.name) private readonly forms: Model<FormDefinition>,
+    @InjectModel(FormGroup.name) private readonly formGroups: Model<FormGroup>,
     @InjectModel(WorkflowDefinition.name) private readonly workflows: Model<WorkflowDefinition>,
     @InjectModel(WorkspaceModule.name) private readonly workspaceModules: Model<WorkspaceModule>,
     @InjectModel(ApprovalHistory.name) private readonly histories: Model<ApprovalHistory>,
     private readonly accessPolicy: RequestAccessPolicy,
     private readonly snapshots: RequestSnapshotFactory,
+    private readonly organizationScope: OrganizationScopeService,
   ) {}
 
   async availableForms() {
@@ -55,16 +59,32 @@ export class RequestQueryService {
       status: 'PUBLISHED',
     }).sort({ name: 1, code: 1 }).lean().exec();
 
+    const groupIds = [...new Set(forms.flatMap((form) => form.groupId ? [form.groupId.toString()] : []))];
+    const groups = groupIds.length
+      ? await this.formGroups.find({ _id: { $in: groupIds } })
+        .select({ code: 1, name: 1, isActive: 1, sortOrder: 1 }).lean().exec()
+      : [];
+    const groupById = new Map(groups.map((group) => [group._id.toString(), group]));
+
     return forms.flatMap((form) => {
       const workflow = workflowByForm.get(form._id.toString());
       if (!workflow) return [];
+      const group = form.groupId ? groupById.get(form.groupId.toString()) : undefined;
       return [{
         id: form._id.toString(),
         code: form.code,
         version: form.version,
         name: form.name,
+        ...(group ? { group: {
+          id: group._id.toString(),
+          code: group.code,
+          name: group.name,
+          isActive: group.isActive,
+          sortOrder: group.sortOrder,
+        } } : {}),
+        ...(form.category ? { category: form.category } : {}),
         description: form.description,
-        fields: form.fields,
+        fields: this.snapshots.normalizedFormFields(form.fields),
         settings: form.settings,
         workflow: {
           id: workflow._id.toString(),
@@ -87,6 +107,10 @@ export class RequestQueryService {
 
   findAll(query: ListRequestsDto) {
     return this.list(query, {});
+  }
+
+  async findManaged(userId: string, query: ListRequestsDto) {
+    return this.list(query, await this.organizationScope.managedRequestFilter(userId));
   }
 
   async findOne(userId: string, id: string, permissionKeys: readonly string[]) {
@@ -115,7 +139,7 @@ export class RequestQueryService {
   }
 
   async history(userId: string, id: string, permissionKeys: readonly string[]) {
-    const request = await this.requests.findById(id).select({ requesterUserId: 1 }).lean().exec();
+    const request = await this.requests.findById(id).select({ requesterUserId: 1, requesterSnapshot: 1 }).lean().exec();
     if (!request) throw this.accessPolicy.notFound();
     await this.accessPolicy.requireReadAccess(request as StoredRequest, userId, permissionKeys);
     return this.histories.find({ requestId: request._id })
@@ -289,7 +313,7 @@ export class RequestQueryService {
       workflowDefinitionId: request.workflowDefinitionId.toString(),
       workflowVersion: request.workflowVersion,
       formData: request.formData,
-      formSnapshot: request.formSnapshot,
+      formSnapshot: this.snapshots.normalizeFormSnapshot(request.formSnapshot),
       workflowSnapshot: request.workflowSnapshot,
       currentStepKey: request.currentStepKey,
       currentStepRunNo: request.currentStepRunNo,

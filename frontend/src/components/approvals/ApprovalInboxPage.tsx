@@ -15,6 +15,7 @@ import { FilterSelect, type FilterSelectOption } from '../ui/FilterSelect'
 import { ListToolbar } from '../ui/ListToolbar'
 import { PageHeader } from '../ui/PageHeader'
 import { SurfaceCard } from '../ui/SurfaceCard'
+import { SortableTableHeader } from '../ui/SortableTableHeader'
 import { TablePagination } from '../ui/TablePagination'
 
 interface ApprovalInboxPageProps {
@@ -61,6 +62,7 @@ export function ApprovalInboxPage({ onOpenRequest }: ApprovalInboxPageProps) {
   const [approvalMode, setApprovalMode] = useState('')
   const [overdueOnly, setOverdueOnly] = useState(false)
   const [sort, setSort] = useState('assignedAt:desc')
+  const [hasUserSorted, setHasUserSorted] = useState(false)
   const [page, setPage] = useState(1)
   const [limit, setLimit] = useState(10)
   const [total, setTotal] = useState(0)
@@ -134,6 +136,19 @@ export function ApprovalInboxPage({ onOpenRequest }: ApprovalInboxPageProps) {
   const rangeStart = total ? (page - 1) * limit + 1 : 0
   const rangeEnd = Math.min(page * limit, total)
 
+  function changeSort(column: string) {
+    const [currentColumn, currentOrder] = sort.split(':')
+    const nextOrder = currentColumn === column
+      ? (currentOrder === 'asc' ? 'desc' : 'asc')
+      : (column === 'assignedAt' || column === 'dueAt' ? 'desc' : 'asc')
+    setSort(`${column}:${nextOrder}`)
+    setHasUserSorted(true)
+    setPage(1)
+    setIsLoading(true)
+  }
+
+  const [sortBy, sortOrder] = sort.split(':') as [string, 'asc' | 'desc']
+
   return <>
     <PageHeader title="Chờ phê duyệt" description="Theo dõi và xử lý các phiếu được giao cho bạn." />
     <SurfaceCard className="approval-inbox">
@@ -142,10 +157,15 @@ export function ApprovalInboxPage({ onOpenRequest }: ApprovalInboxPageProps) {
         <label className="catalog-search"><span>Tìm kiếm</span><span className="catalog-search-input"><input value={searchInput} placeholder="Mã phiếu, người gửi hoặc bước" onChange={(event) => { setSearchInput(event.target.value); setIsLoading(true) }} />{searchInput && <button className="clear-search-button" type="button" aria-label="Xóa tìm kiếm" onClick={() => setSearchInput('')}>×</button>}</span></label>
         <label className="approval-filter-control"><span>Trạng thái</span><FilterSelect ariaLabel="Lọc trạng thái task" value={status} options={statusOptions} onChange={(value) => { setStatus(value); setPage(1); setIsLoading(true) }} /></label>
         <label className="approval-filter-control"><span>Chế độ duyệt</span><FilterSelect ariaLabel="Lọc chế độ duyệt" value={approvalMode} options={[{ value: '', label: 'Tất cả chế độ' }, { value: 'ANY', label: 'Một người duyệt' }, { value: 'ALL', label: 'Tất cả duyệt' }, { value: 'MAJORITY', label: 'Đa số duyệt' }]} onChange={(value) => { setApprovalMode(value); setPage(1); setIsLoading(true) }} /></label>
-        <label className="approval-filter-control"><span>Sắp xếp</span><FilterSelect ariaLabel="Sắp xếp task" value={sort} options={sortOptions} onChange={(value) => { setSort(value); setPage(1); setIsLoading(true) }} /></label>
+        <label className="approval-filter-control"><span>Sắp xếp</span><FilterSelect ariaLabel="Sắp xếp task" value={sort} options={sortOptions} onChange={(value) => { setSort(value); setHasUserSorted(true); setPage(1); setIsLoading(true) }} /></label>
         {scope === 'pending' && <label className="approval-overdue-toggle"><input type="checkbox" checked={overdueOnly} onChange={(event) => { setOverdueOnly(event.target.checked); setPage(1); setIsLoading(true) }} /><span>Chỉ quá hạn</span></label>}
       </div></ListToolbar>
-      {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : <><DataTable className="admin-table approval-inbox-table" fixedLayout><thead><tr><th>Mã phiếu</th><th>Form</th><th>Người gửi</th><th>Phòng ban</th><th>Bước</th><th>Ngày giao</th><th>Hạn xử lý</th><th>Trạng thái</th></tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không có task phê duyệt phù hợp." /> : items.map((task) => <tr className="approval-inbox-row" key={task.id} onClick={() => onOpenRequest(task.requestId, task.id)}><td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpenRequest(task.requestId, task.id) }}>{task.request?.requestNo ?? '—'}</button><small>{task.request?.title}</small></td><td><strong>{task.request?.form?.name || task.request?.form?.code || `Form v${task.request?.form?.version ?? '—'}`}</strong>{task.request?.form?.code && <small>{task.request.form.code} · v{task.request.form.version}</small>}</td><td><strong>{task.request?.requesterSnapshot.fullName ?? '—'}</strong><small>{task.request?.requesterSnapshot.employeeCode}</small></td><td>{task.request?.requesterSnapshot.departmentName ?? '—'}</td><td><strong>{task.stepName}</strong><small>{task.stepKey} · lần {task.stepRunNo}</small></td><td>{formatDateTime(task.assignedAt)}</td><td>{task.dueAt ? <><span>{formatDateTime(task.dueAt)}</span>{task.isOverdue && <span className="approval-overdue-badge">Quá hạn</span>}</> : 'Không có hạn'}</td><td><ApprovalTaskStatusBadge status={task.status} />{task.request && <RequestStatusBadge status={task.request.status} />}</td></tr>)}</tbody></DataTable><TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} task`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} /></>}
+      {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : <><DataTable className="admin-table approval-inbox-table" fixedLayout><thead><tr><th>Mã phiếu</th><th>Form</th><th>Người gửi</th><th>Phòng ban</th>
+        <SortableTableHeader column="stepNameSnapshot" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Bước</SortableTableHeader>
+        <SortableTableHeader column="assignedAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Ngày giao</SortableTableHeader>
+        <SortableTableHeader column="dueAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Hạn xử lý</SortableTableHeader>
+        <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
+      </tr></thead><tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không có task phê duyệt phù hợp." /> : items.map((task) => <tr className="approval-inbox-row" key={task.id} onClick={() => onOpenRequest(task.requestId, task.id)}><td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpenRequest(task.requestId, task.id) }}>{task.request?.requestNo ?? '—'}</button><small>{task.request?.title}</small></td><td><strong>{task.request?.form?.name || task.request?.form?.code || `Form v${task.request?.form?.version ?? '—'}`}</strong>{task.request?.form?.code && <small>{task.request.form.code} · v{task.request.form.version}</small>}</td><td><strong>{task.request?.requesterSnapshot.fullName ?? '—'}</strong><small>{task.request?.requesterSnapshot.employeeCode}</small></td><td>{task.request?.requesterSnapshot.departmentName ?? '—'}</td><td><strong>{task.stepName}</strong><small>{task.stepKey} · lần {task.stepRunNo}</small></td><td>{formatDateTime(task.assignedAt)}</td><td>{task.dueAt ? <><span>{formatDateTime(task.dueAt)}</span>{task.isOverdue && <span className="approval-overdue-badge">Quá hạn</span>}</> : 'Không có hạn'}</td><td><ApprovalTaskStatusBadge status={task.status} />{task.request && <RequestStatusBadge status={task.request.status} />}</td></tr>)}</tbody></DataTable><TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} task`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} /></>}
     </SurfaceCard>
   </>
 }
