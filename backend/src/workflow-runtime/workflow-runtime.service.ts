@@ -3,7 +3,13 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { ApprovalTask } from '../approvals/schemas/approval-task.schema.js';
 import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
+import { Employee } from '../employees/schemas/employee.schema.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import {
+  extractLeaveDaysFromFormData,
+  extractLeaveDeductionConfig,
+  roundLeaveDays,
+} from '../requests/leave-deduction.helper.js';
 import type { RequestDocument } from '../requests/schemas/request.schema.js';
 import {
   approvalModes,
@@ -30,6 +36,7 @@ import type {
 export class WorkflowRuntimeService {
   constructor(
     @InjectModel(ApprovalTask.name) private readonly tasks: Model<ApprovalTask>,
+    @InjectModel(Employee.name) private readonly employees: Model<Employee>,
     private readonly assigneeResolver: AssigneeResolverService,
     private readonly conditionEvaluator: ConditionEvaluatorService,
     private readonly history: WorkflowHistoryService,
@@ -220,6 +227,55 @@ export class WorkflowRuntimeService {
     }
     const fromStatus = request.status;
     const stepRunNo = request.currentStepRunNo ?? 0;
+    let leaveDeductionMetadata: Record<string, unknown> = {};
+    if (step.endResult === 'APPROVED' && !request.leaveDeductionApplied) {
+      const leaveConfig = extractLeaveDeductionConfig(
+        (request.formSnapshot as { settings?: unknown } | undefined)?.settings,
+      );
+      if (leaveConfig?.enabled) {
+        const days = extractLeaveDaysFromFormData(request.formData, leaveConfig.fieldKey);
+        if (days === undefined || days < 0) {
+          throw this.runtimeConflict(
+            'INVALID_LEAVE_DEDUCTION_DAYS',
+            'Số ngày nghỉ phép trên phiếu không hợp lệ để khấu trừ quỹ phép năm.',
+          );
+        }
+        if (days > 0) {
+          const updatedEmployee = await this.employees
+            .findOneAndUpdate(
+              {
+                _id: request.requesterEmployeeId,
+                annualLeaveDays: {
+                  $gte: leaveConfig.allowNegative ? -36500 : days,
+                },
+              },
+              { $inc: { annualLeaveDays: -days } },
+              { session, returnDocument: 'after' },
+            )
+            .select({ annualLeaveDays: 1 })
+            .exec();
+          if (!updatedEmployee) {
+            throw this.runtimeConflict(
+              'INSUFFICIENT_ANNUAL_LEAVE',
+              'Không đủ số ngày phép năm còn lại hoặc nhân viên chưa được cấu hình quỹ phép năm để hoàn tất phê duyệt.',
+            );
+          }
+          request.leaveDeductionApplied = {
+            fieldKey: leaveConfig.fieldKey!,
+            days,
+            deductedAt: new Date(),
+          };
+          request.markModified('leaveDeductionApplied');
+          const remainingLeave = (updatedEmployee as unknown as { annualLeaveDays?: unknown }).annualLeaveDays;
+          leaveDeductionMetadata = {
+            leaveDeductedDays: days,
+            ...(typeof remainingLeave === 'number'
+              ? { remainingAnnualLeaveDays: roundLeaveDays(remainingLeave) }
+              : {}),
+          };
+        }
+      }
+    }
     request.status = step.endResult;
     request.completedAt = new Date();
     request.currentStepKey = undefined;
@@ -230,7 +286,10 @@ export class WorkflowRuntimeService {
       action: 'COMPLETED',
       fromStatus,
       toStatus: request.status,
-      metadata: { endResult: step.endResult },
+      metadata: {
+        endResult: step.endResult,
+        ...leaveDeductionMetadata,
+      },
     }, session);
     await this.notifications.createPersonal({
       recipientUserId: request.requesterUserId,

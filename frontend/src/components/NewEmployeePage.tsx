@@ -13,6 +13,7 @@ import type {
   Employee,
   EmployeeFormValues,
   EmploymentType,
+  Gender,
 } from "../types/employees";
 import type { JobTitlePreview } from "../types/master-data";
 import type { ReferenceData } from "../types/reference-data";
@@ -39,6 +40,8 @@ interface EmployeeFieldErrors {
   workUnitId?: string;
   departmentId?: string;
   positionId?: string;
+  annualLeaveDays?: string;
+  citizenId?: string;
 }
 
 type EmployeeRequiredField = keyof EmployeeFieldErrors;
@@ -73,6 +76,17 @@ function validateEmployee(form: EmployeeFormValues): EmployeeFieldErrors {
       ? undefined
       : "Phòng ban không được để trống.",
     positionId: form.positionId ? undefined : "Chức danh không được để trống.",
+    annualLeaveDays:
+      form.annualLeaveDays === undefined ||
+      (Number.isFinite(form.annualLeaveDays) &&
+        form.annualLeaveDays >= 0 &&
+        form.annualLeaveDays <= 365)
+        ? undefined
+        : "Số ngày nghỉ phép năm phải từ 0 đến 365.",
+    citizenId:
+      !form.citizenId || /^\d{12}$/.test(form.citizenId)
+        ? undefined
+        : "Số CCCD phải gồm đúng 12 chữ số.",
   };
 }
 
@@ -91,6 +105,7 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
     Partial<Record<EmployeeRequiredField, boolean>>
   >({});
   const [emailConflict, setEmailConflict] = useState("");
+  const [citizenIdConflict, setCitizenIdConflict] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -172,14 +187,6 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
     () => workUnitOptions(referenceData?.departments ?? []),
     [referenceData],
   );
-  const suggestedManager = useMemo(() => {
-    const managerId = suggestedManagerId(
-      referenceData?.departments ?? [],
-      form.workUnitId,
-      people,
-    );
-    return people.find((person) => person.id === managerId);
-  }, [form.workUnitId, people, referenceData]);
   const validation = useMemo(() => validateEmployee(form), [form]);
   const isDirty = useMemo(() => {
     const { employeeCode: _employeeCode, ...values } = form;
@@ -197,6 +204,7 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
   ) {
     setForm((current) => ({ ...current, [key]: value }));
     if (key === "workEmail") setEmailConflict("");
+    if (key === "citizenId") setCitizenIdConflict("");
     setError("");
   }
 
@@ -236,14 +244,19 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
       workUnitId: true,
       departmentId: true,
       positionId: true,
+      annualLeaveDays: true,
+      citizenId: true,
     });
     if (Object.values(nextErrors).some(Boolean)) {
       setActiveTab(
-        nextErrors.fullName || nextErrors.workEmail
+        nextErrors.fullName ||
+        nextErrors.workEmail ||
+        nextErrors.annualLeaveDays ||
+        nextErrors.citizenId
           ? "OVERVIEW"
           : "ORGANIZATION",
       );
-      setError("Vui lòng nhập đầy đủ các thông tin bắt buộc.");
+      setError("Vui lòng kiểm tra lại các trường thông tin chưa hợp lệ.");
       return;
     }
 
@@ -258,6 +271,7 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
         ...values,
         fullName: form.fullName.trim(),
         workEmail: form.workEmail.trim().toLowerCase(),
+        ...(form.citizenId ? { citizenId: form.citizenId.trim() } : {}),
       });
       if (avatarFile) await uploadEmployeeAvatar(employee.id, avatarFile);
       onCreated();
@@ -268,6 +282,16 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
       ) {
         setTouched((current) => ({ ...current, workEmail: true }));
         setEmailConflict(reason.message);
+        setActiveTab("OVERVIEW");
+        return;
+      }
+      if (
+        reason instanceof ApiError &&
+        (reason.field === "citizenId" ||
+          reason.code === "CITIZEN_ID_ALREADY_EXISTS")
+      ) {
+        setTouched((current) => ({ ...current, citizenId: true }));
+        setCitizenIdConflict(reason.message);
         setActiveTab("OVERVIEW");
         return;
       }
@@ -489,6 +513,61 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
                   }
                 />
                 <ProfileField
+                  label="Giới tính"
+                  value={
+                    form.gender === "MALE"
+                      ? "Nam"
+                      : form.gender === "FEMALE"
+                        ? "Nữ"
+                        : form.gender === "OTHER"
+                          ? "Khác"
+                          : undefined
+                  }
+                  isEditing
+                  editControl={
+                    <FilterSelect
+                      ariaLabel="Chọn giới tính"
+                      value={form.gender ?? ""}
+                      options={[
+                        { value: "", label: "Chọn giới tính" },
+                        { value: "MALE", label: "Nam" },
+                        { value: "FEMALE", label: "Nữ" },
+                        { value: "OTHER", label: "Khác" },
+                      ]}
+                      disabled={isSaving}
+                      onChange={(value) =>
+                        update("gender", (value || undefined) as Gender | undefined)
+                      }
+                    />
+                  }
+                />
+                <ProfileField
+                  label="Số CCCD"
+                  value={form.citizenId}
+                  isEditing
+                  error={
+                    citizenIdConflict ||
+                    (touched.citizenId ? validation.citizenId : undefined)
+                  }
+                  editControl={
+                    <input
+                      inputMode="numeric"
+                      autoComplete="off"
+                      maxLength={12}
+                      value={form.citizenId ?? ""}
+                      disabled={isSaving}
+                      onChange={(event) =>
+                        update(
+                          "citizenId",
+                          event.target.value.replace(/\D/g, "").slice(0, 12) ||
+                            undefined,
+                        )
+                      }
+                      onBlur={() => touchField("citizenId")}
+                    />
+                  }
+                />
+                <ProfileField
                   label="Ngày vào làm"
                   value={form.hiredAt}
                   isEditing
@@ -501,22 +580,58 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
                   }
                 />
                 <ProfileField
-                  label="Loại nhân sự"
+                  label="Loại hợp đồng"
                   value={form.employmentType}
                   isEditing
                   editControl={
                     <FilterSelect
-                      ariaLabel="Chọn loại nhân sự"
+                      ariaLabel="Chọn loại hợp đồng"
                       value={form.employmentType}
                       options={[
-                        { value: "FULL_TIME", label: "Chính thức" },
-                        { value: "CONTRACT", label: "Hợp đồng" },
+                        { value: "OFFICIAL", label: "Chính thức" },
+                        { value: "FULL_TIME", label: "Full-time" },
+                        { value: "PART_TIME", label: "Part-time" },
+                        { value: "CONTRACT", label: "Thử việc" },
                         { value: "INTERN", label: "Thực tập" },
                       ]}
                       disabled={isSaving}
                       onChange={(value) =>
                         update("employmentType", value as EmploymentType)
                       }
+                    />
+                  }
+                />
+                <ProfileField
+                  label="Số ngày nghỉ phép năm"
+                  value={
+                    form.annualLeaveDays !== undefined
+                      ? `${form.annualLeaveDays} ngày`
+                      : undefined
+                  }
+                  isEditing
+                  error={
+                    touched.annualLeaveDays
+                      ? validation.annualLeaveDays
+                      : undefined
+                  }
+                  editControl={
+                    <input
+                      type="number"
+                      min="0"
+                      max="365"
+                      step="0.5"
+                      inputMode="decimal"
+                      value={form.annualLeaveDays ?? ""}
+                      disabled={isSaving}
+                      onChange={(event) =>
+                        update(
+                          "annualLeaveDays",
+                          event.target.value === ""
+                            ? undefined
+                            : Number(event.target.value),
+                        )
+                      }
+                      onBlur={() => touchField("annualLeaveDays")}
                     />
                   }
                 />
@@ -691,13 +806,6 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
                   />
                 }
               />
-              <p className="employee-display-note">
-                {suggestedManager
-                  ? `Gợi ý theo cây tổ chức: ${suggestedManager.fullName} · ${suggestedManager.employeeCode}.`
-                  : "Đơn vị đã chọn chưa có người quản lý phù hợp trong cây tổ chức."}{" "}
-                Admin có thể chọn người khác khi cần; lựa chọn thủ công sẽ không
-                bị tự động ghi đè.
-              </p>
             </div>
           )}
         </SurfaceCard>
@@ -710,9 +818,10 @@ export function NewEmployeePage({ onBack, onCreated }: NewEmployeePageProps) {
       )}
       {showConfirm && (
         <ConfirmDialog
-          title="Rời màn hình khi chưa lưu thay đổi?"
-          description="Thông tin hồ sơ nhân viên đang nhập sẽ bị hủy."
-          confirmLabel="Hủy thay đổi và quay lại"
+          title="Chưa lưu thay đổi"
+          description="Thông tin hồ sơ nhân viên đang nhập chưa được lưu. Bạn có chắc chắn muốn rời khỏi trang?"
+          confirmLabel="Rời khỏi trang"
+          variant="discard-changes"
           onCancel={() => setShowConfirm(false)}
           onConfirm={onBack}
         />

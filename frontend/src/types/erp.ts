@@ -1,44 +1,103 @@
-import type { UserRole } from './auth'
 import type { RequestStatus } from './workflow'
 export { requestStatuses } from './workflow'
 export type { RequestStatus } from './workflow'
-export type DashboardRole = Extract<UserRole, 'EMPLOYEE' | 'MANAGER' | 'ADMIN'>
 
-export interface WorkflowRequest {
+export type DashboardView = 'MY_WORK' | 'HR' | 'SYSTEM'
+
+export interface DashboardRequest {
   id: string
-  code: string
+  requestNo: string
   title: string
-  formName: string
   requester: string
   department: string
   status: RequestStatus
-  submittedAt: string | null
+  submittedAt?: string
   updatedAt: string
-  amount?: number
 }
 
-export interface ApprovalTask {
+export interface DashboardApprovalTask {
   id: string
-  request: WorkflowRequest
-  currentStep: string
-  dueAt: string
-  ageInHours: number
+  requestId: string
+  requestNo: string
+  title: string
+  requester: string
+  department: string
+  stepName: string
+  assignedAt: string
+  dueAt?: string
+  isOverdue: boolean
 }
 
-export interface Metric {
+export interface DashboardMetric {
+  key: string
   label: string
-  value: string
+  value: number
   description: string
   tone: 'neutral' | 'warning' | 'success' | 'danger'
+  target?: NavigationKey
+}
+
+export interface DashboardEmployee {
+  id: string
+  employeeCode: string
+  fullName: string
+  department: string
+  position: string
+  employmentType?: string
+  isActive?: boolean
+  hiredAt?: string
+}
+
+export interface DashboardQuickForm {
+  id: string
+  code: string
+  name: string
+  category?: string
+}
+
+export interface DashboardSecurityEvent {
+  id: string
+  action: string
+  description: string
+  actor: string
+  outcome: string
+  occurredAt: string
+  ipAddress?: string
+}
+
+export interface DashboardWorkspaceModule {
+  key: string
+  name: string
+  isEnabled: boolean
+  group: string
+}
+
+export interface DashboardAnalytics {
+  key: string
+  label: string
+  items: Array<{ key: string; label: string; value: number }>
 }
 
 export interface DashboardData {
-  role: DashboardRole
-  greeting: string
-  metrics: Metric[]
-  requests: WorkflowRequest[]
-  approvals: ApprovalTask[]
-  activitySummary: Array<{ label: string; value: string; description: string }>
+  profile: {
+    fullName: string
+    position?: string
+    department?: string
+    employeeCode?: string
+  }
+  availableViews: DashboardView[]
+  activeView: DashboardView
+  canCreateRequest: boolean
+  scopeLabel: string
+  metrics: DashboardMetric[]
+  recentRequests: DashboardRequest[]
+  approvalQueue: DashboardApprovalTask[]
+  quickForms: DashboardQuickForm[]
+  directReports: DashboardEmployee[]
+  recentEmployees: DashboardEmployee[]
+  securityEvents: DashboardSecurityEvent[]
+  workspaceModules: DashboardWorkspaceModule[]
+  analytics: DashboardAnalytics[]
 }
 
 export type NavigationKey =
@@ -55,7 +114,6 @@ export type NavigationKey =
   | 'new-workflow-definition'
   | 'workflow-definition-detail'
   | 'employees'
-  | 'organization'
   | 'departments'
   | 'new-department'
   | 'department-detail'

@@ -1,12 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
 import { ClientSession, Model } from 'mongoose';
 import type { QueryFilter } from 'mongoose';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import { createPaginationMetadata } from '../common/http/pagination.js';
+import { escapeRegExp } from '../common/text/escape-reg-exp.js';
 import type { SafeUser } from '../users/users.service.js';
 import { ListAuditLogsDto } from './dto/list-audit-logs.dto.js';
+import { ListAuditActorsDto } from './dto/list-audit-actors.dto.js';
 import { AuditOutcome } from './enums/audit-outcome.enum.js';
 import {
   AuditActor,
@@ -44,7 +46,13 @@ const CHANGE_ALLOWLIST = new Set([
   'position',
   'positions',
   'phone',
+  'address',
+  'dateOfBirth',
+  'gender',
+  'citizenId',
   'hiredAt',
+  'annualLeaveDays',
+  'workUnitId',
   'managerId',
   'userId',
   'employeeId',
@@ -84,6 +92,13 @@ export interface AuditLogEvent {
   metadata?: Record<string, unknown>;
 }
 
+export interface AuditActorOption {
+  id: string;
+  fullName?: string;
+  employeeCode?: string;
+  email?: string;
+}
+
 @Injectable()
 export class AuditLogService {
   private readonly logger = new Logger(AuditLogService.name);
@@ -110,16 +125,48 @@ export class AuditLogService {
 
   async findAll(query: ListAuditLogsDto) {
     const filter: QueryFilter<AuditLog> = {};
+    filter.$nor = [{
+      'context.method': 'POST',
+      'context.path': { $in: ['/api/auth/refresh', '/auth/refresh'] },
+    }];
 
-    if (query.actorId) filter['actor.userId'] = query.actorId;
+    const conditions: QueryFilter<AuditLog>[] = [];
+
+    if (query.search?.trim()) {
+      const search = new RegExp(escapeRegExp(query.search.trim()), 'i');
+      filter.$or = [
+        { 'actor.fullName': search },
+        { 'actor.employeeCode': search },
+        { 'actor.email': search },
+        { action: search },
+        { description: search },
+        { 'resource.code': search },
+        { 'resource.name': search },
+        { requestId: search },
+      ];
+    }
+    if (query.actorType === 'SYSTEM') {
+      filter['actor.userId'] = { $exists: false };
+    } else if (query.actorId) {
+      filter['actor.userId'] = query.actorId;
+    }
+    const moduleCondition = this.moduleFilter(query.module);
+    if (moduleCondition) conditions.push(moduleCondition);
+    const actionCondition = this.actionGroupFilter(query.actionGroup);
+    if (actionCondition) conditions.push(actionCondition);
     if (query.action) filter.action = query.action.toUpperCase();
     if (query.resourceType) filter['resource.type'] = query.resourceType.toUpperCase();
     if (query.resourceId) filter['resource.id'] = query.resourceId;
+    if (query.outcome) filter.outcome = query.outcome;
     if (query.startDate || query.endDate) {
+      if (query.startDate && query.endDate && new Date(query.startDate) > new Date(query.endDate)) {
+        throw new BadRequestException('Đến ngày phải lớn hơn hoặc bằng Từ ngày.');
+      }
       filter.occurredAt = {};
       if (query.startDate) filter.occurredAt.$gte = new Date(query.startDate);
       if (query.endDate) filter.occurredAt.$lte = new Date(query.endDate);
     }
+    if (conditions.length) filter.$and = conditions;
 
     const skip = (query.page - 1) * query.limit;
     const [data, total] = await Promise.all([
@@ -139,12 +186,76 @@ export class AuditLogService {
     };
   }
 
+  async findActorOptions(query: ListAuditActorsDto): Promise<AuditActorOption[]> {
+    const actorMatch: Record<string, unknown> = {
+      'actor.userId': { $exists: true, $nin: [null, ''] },
+    };
+    if (query.search?.trim()) {
+      const search = new RegExp(escapeRegExp(query.search.trim()), 'i');
+      actorMatch.$or = [
+        { 'actor.fullName': search },
+        { 'actor.employeeCode': search },
+        { 'actor.email': search },
+      ];
+    }
+
+    return this.auditLogModel.aggregate<AuditActorOption>([
+      { $match: actorMatch },
+      { $sort: { occurredAt: -1 } },
+      {
+        $group: {
+          _id: '$actor.userId',
+          fullName: { $first: '$actor.fullName' },
+          employeeCode: { $first: '$actor.employeeCode' },
+          email: { $first: '$actor.email' },
+        },
+      },
+      { $sort: { fullName: 1, email: 1 } },
+      { $limit: query.limit },
+      {
+        $project: {
+          _id: 0,
+          id: '$_id',
+          fullName: 1,
+          employeeCode: 1,
+          email: 1,
+        },
+      },
+    ]).exec();
+  }
+
+  private moduleFilter(module?: string): QueryFilter<AuditLog> | undefined {
+    const resourceTypes: Record<string, string[]> = {
+      AUTH_ACCOUNT: ['AUTH_SESSION', 'USER_SESSION', 'USER', 'ROLE'],
+      EMPLOYEE: ['EMPLOYEE'],
+      ORGANIZATION: ['DEPARTMENT'],
+      JOB_TITLE: ['POSITION'],
+      WORKSPACE: ['WORKSPACE_MODULE'],
+      WORKFLOW_FORM: ['FORM_DEFINITION', 'FORM_GROUP', 'WORKFLOW_DEFINITION', 'REQUEST', 'APPROVAL_TASK', 'FILE'],
+    };
+    const types = module ? resourceTypes[module] : undefined;
+    return types ? { 'resource.type': { $in: types } } : undefined;
+  }
+
+  private actionGroupFilter(actionGroup?: string): QueryFilter<AuditLog> | undefined {
+    const patterns: Record<string, RegExp> = {
+      LOGIN_LOGOUT: /^USER\.(?:LOGIN|LOGOUT)/,
+      CREATE: /\.(?:CREATED|CLONED|DUPLICATED)$/,
+      UPDATE: /\.(?:UPDATED|STATUS_CHANGED|ACTIVATED|DEACTIVATED|GROUP_CHANGED|AVATAR_UPDATED|AVATAR_REMOVED|PASSWORD_CHANGED|PASSWORD_RESET_SUCCEEDED|EMPLOYEE_LINKED|EMPLOYEE_UNLINKED|ROLES_ADDED|ROLES_REMOVED|POSITIONS_ADDED|POSITION_ASSIGNED|POSITIONS_ASSIGNED|POSITIONS_APPLIED)$/,
+      DELETE: /\.(?:DELETED|REMOVED|VOIDED)$/,
+      APPROVAL: /\.(?:SUBMITTED|ASSIGNED|APPROVED|REJECTED|REVISION_REQUESTED|REASSIGNED|RESUBMITTED|AUTO_SKIPPED|COMPLETED)$/,
+    };
+    const pattern = actionGroup ? patterns[actionGroup] : undefined;
+    return pattern ? { action: pattern } : undefined;
+  }
+
   private async write(
     request: RequestWithContext,
     actor: SafeUser | undefined,
     event: AuditLogEvent,
     session?: ClientSession,
   ): Promise<void> {
+    if (this.shouldSkipRequest(request)) return;
     const document = {
       occurredAt: new Date(),
       requestId: request.requestId ?? randomUUID(),
@@ -173,6 +284,12 @@ export class AuditLogService {
       this.logger.error(`Unable to persist audit log for ${event.action}: ${errorMessage}`);
       if (session) throw error;
     }
+  }
+
+  private shouldSkipRequest(request: RequestWithContext): boolean {
+    const path = request.originalUrl?.split('?')[0]?.replace(/\/+$/, '');
+    return request.method?.toUpperCase() === 'POST'
+      && (path === '/api/auth/refresh' || path === '/auth/refresh');
   }
 
   private resolveActor(actor?: SafeUser): AuditActor {

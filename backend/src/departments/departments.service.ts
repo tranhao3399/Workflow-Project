@@ -11,6 +11,7 @@ import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
 import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
 import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { OrganizationScopeService } from '../common/organization/organization-scope.service.js';
 import { escapeRegExp } from '../common/text/escape-reg-exp.js';
 import { normalizeSearchText } from '../common/text/normalize-search-text.js';
 import { Employee } from '../employees/schemas/employee.schema.js';
@@ -34,9 +35,10 @@ export class DepartmentsService {
     @InjectModel(DepartmentPosition.name)
     private readonly departmentPositions: Model<DepartmentPosition>,
     private readonly auditLogs: AuditLogService,
+    private readonly organizationScope: OrganizationScopeService,
   ) {}
 
-  async findAll(query: ListDepartmentsDto) {
+  async findAll(actorUserId: string, query: ListDepartmentsDto) {
     const filter: Record<string, unknown> =
       query.active === undefined ? {} : { isActive: query.active };
     if (query.unitType) {
@@ -57,10 +59,17 @@ export class DepartmentsService {
         },
       ];
     }
+    const scope = await this.organizationScope.resolve(actorUserId);
+    const scopedFilter = scope.fullAccess
+      ? filter
+      : { $and: [filter, { _id: { $in: scope.departmentIds } }] };
+    const allowedDepartmentIds = scope.fullAccess
+      ? undefined
+      : new Set(scope.departmentIds);
     const skip = (query.page - 1) * query.limit;
     const [data, total] = await Promise.all([
       this.departments
-        .find(filter)
+        .find(scopedFilter)
         .sort({ sortOrder: 1, name: 1 })
         .skip(skip)
         .limit(query.limit)
@@ -68,17 +77,28 @@ export class DepartmentsService {
         .populate('managerEmployeeId', 'employeeCode fullName')
         .lean()
         .exec(),
-      this.departments.countDocuments(filter).exec(),
+      this.departments.countDocuments(scopedFilter).exec(),
     ]);
     return {
-      data: data.map((item) => this.toOrganizationUnit(item)),
+      data: data.map((item) => this.toOrganizationUnit(item, allowedDepartmentIds)),
       pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
 
-  async findCatalog(query: Pick<ListDepartmentsDto, 'active'>) {
+  async findCatalog(
+    actorUserId: string,
+    query: Pick<ListDepartmentsDto, 'active'>,
+  ) {
+    const scope = await this.organizationScope.resolve(actorUserId);
+    const baseFilter = query.active === undefined ? {} : { isActive: query.active };
+    const filter = scope.fullAccess
+      ? baseFilter
+      : { $and: [baseFilter, { _id: { $in: scope.departmentIds } }] };
+    const allowedDepartmentIds = scope.fullAccess
+      ? undefined
+      : new Set(scope.departmentIds);
     const items = await this.departments
-      .find(query.active === undefined ? {} : { isActive: query.active })
+      .find(filter)
       .sort({ sortOrder: 1, name: 1 })
       .populate('parentId', 'code name')
       .populate('managerEmployeeId', 'employeeCode fullName')
@@ -171,7 +191,7 @@ export class DepartmentsService {
         ? (employeeCountByDepartment.get(itemId) ?? 0)
         : (employeeCountByWorkUnit.get(itemId) ?? 0);
       return {
-        ...this.toOrganizationUnit(item),
+        ...this.toOrganizationUnit(item, allowedDepartmentIds),
         positions,
         positionCount: positions.length,
         employeeCount,
@@ -179,7 +199,8 @@ export class DepartmentsService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(actorUserId: string, id: string) {
+    const scope = await this.requireDepartmentAccess(actorUserId, id);
     const item = await this.departments
       .findById(id)
       .populate('parentId', 'code name')
@@ -187,10 +208,14 @@ export class DepartmentsService {
       .lean()
       .exec();
     if (!item) throw new NotFoundException('Không tìm thấy phòng ban.');
-    return this.toOrganizationUnit(item);
+    return this.toOrganizationUnit(
+      item,
+      scope.fullAccess ? undefined : new Set(scope.departmentIds),
+    );
   }
 
-  async findPositions(departmentId: string) {
+  async findPositions(actorUserId: string, departmentId: string) {
+    await this.requireDepartmentAccess(actorUserId, departmentId);
     if (!(await this.departments.exists({ _id: departmentId })))
       throw new NotFoundException('Không tìm thấy phòng ban.');
     const assignments = await this.departmentPositions
@@ -228,6 +253,7 @@ export class DepartmentsService {
     departmentId: string,
     positionIds: string[],
   ) {
+    await this.requireDepartmentAccess(request.user!.id, departmentId);
     const uniqueIds = [...new Set(positionIds)];
     const [department, positions, existingCount] = await Promise.all([
       this.departments.findById(departmentId).exec(),
@@ -310,6 +336,7 @@ export class DepartmentsService {
     departmentId: string,
     assignmentIds: string[],
   ) {
+    await this.requireDepartmentAccess(request.user!.id, departmentId);
     const [department, assignments] = await Promise.all([
       this.departments.findById(departmentId).exec(),
       this.departmentPositions
@@ -345,6 +372,9 @@ export class DepartmentsService {
   }
 
   async create(request: RequestWithContext, input: CreateDepartmentDto) {
+    if (input.parentId) {
+      await this.requireDepartmentAccess(request.user!.id, input.parentId);
+    }
     const code = input.code.toUpperCase();
     const name = input.name.trim();
     const nameNormalized = normalizeSearchText(name);
@@ -431,6 +461,10 @@ export class DepartmentsService {
     id: string,
     input: UpdateDepartmentDto,
   ) {
+    await this.requireDepartmentAccess(request.user!.id, id);
+    if (input.parentId) {
+      await this.requireDepartmentAccess(request.user!.id, input.parentId);
+    }
     const current = await this.departments.findById(id).exec();
     if (!current) throw new NotFoundException('Không tìm thấy phòng ban.');
     if (input.isActive === false && current.isActive) {
@@ -537,6 +571,7 @@ export class DepartmentsService {
   }
 
   async remove(request: RequestWithContext, id: string) {
+    await this.requireDepartmentAccess(request.user!.id, id);
     const department = await this.departments.findById(id).exec();
     if (!department) throw new NotFoundException('Không tìm thấy phòng ban.');
     const [employeeCount, childCount, assignmentCount] = await Promise.all([
@@ -641,11 +676,14 @@ export class DepartmentsService {
         );
       }
       let cursor: string | undefined = parentId;
+      const visited = new Set<string>();
+      if (currentId) visited.add(currentId);
       while (cursor) {
-        if (currentId && cursor === currentId)
+        if (visited.has(cursor))
           throw new BadRequestException(
             'Cấu trúc phòng ban tạo thành vòng lặp.',
           );
+        visited.add(cursor);
         const parent = await this.departments
           .findById(cursor)
           .select({ parentId: 1 })
@@ -705,6 +743,7 @@ export class DepartmentsService {
 
   private toOrganizationUnit(
     item: Department & { _id?: Types.ObjectId; id?: string },
+    allowedDepartmentIds?: ReadonlySet<string>,
   ) {
     const parent = item.parentId as unknown as
       | { _id?: Types.ObjectId; name?: string; code?: string }
@@ -722,12 +761,19 @@ export class DepartmentsService {
       manager && typeof manager === 'object' && '_id' in manager
         ? manager._id?.toString()
         : manager?.toString();
+    const canExposeParent =
+      !parentId ||
+      !allowedDepartmentIds ||
+      allowedDepartmentIds.has(parentId);
     return {
       ...item,
       unitType: item.unitType ?? OrganizationUnitType.UNCLASSIFIED,
-      parentId,
+      parentId: canExposeParent ? parentId : undefined,
       parentName:
-        parent && typeof parent === 'object' && 'name' in parent
+        canExposeParent &&
+        parent &&
+        typeof parent === 'object' &&
+        'name' in parent
           ? parent.name
           : undefined,
       managerEmployeeId,
@@ -740,6 +786,14 @@ export class DepartmentsService {
           ? manager.employeeCode
           : undefined,
     };
+  }
+
+  private async requireDepartmentAccess(userId: string, departmentId: string) {
+    const scope = await this.organizationScope.resolve(userId);
+    if (!scope.fullAccess && !scope.departmentIds.includes(departmentId)) {
+      throw new NotFoundException('Không tìm thấy phòng ban.');
+    }
+    return scope;
   }
 
   private async audit(

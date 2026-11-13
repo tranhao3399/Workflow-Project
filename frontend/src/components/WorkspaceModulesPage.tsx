@@ -168,7 +168,7 @@ export function WorkspaceModulesPage() {
         </div>
       </ListToolbar>
       <DataTable className="workspace-modules-table" fixedLayout>
-        <thead><tr><th>Module</th><th>Nhóm</th><th>Đường dẫn</th><th>Trạng thái</th></tr></thead>
+        <thead><tr><th>Phân hệ</th><th>Nhóm</th><th>Đường dẫn</th><th>Trạng thái</th></tr></thead>
         <tbody>
           {rows.length === 0 ? (
             <EmptyTableRow colSpan={4} message="Không tìm thấy module phù hợp." />
@@ -187,6 +187,7 @@ export function WorkspaceModulesPage() {
         totalPages={totalPages}
         onPrevious={() => setPage(currentPage - 1)}
         onNext={() => setPage(currentPage + 1)}
+        onPageChange={setPage}
         rangeLabel={`${rangeStart}–${rangeEnd} trên ${filteredModules.length} module`}
         pageSize={pageSize}
         pageSizes={pageSizes}

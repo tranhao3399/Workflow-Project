@@ -12,6 +12,7 @@ export interface DepartmentPreview {
   name: string;
   code: string;
   managerName?: string;
+  managerEmployeeCode?: string;
   managerEmployeeId?: string;
   unitType: OrganizationUnitType;
   parentId?: string;
@@ -45,6 +46,7 @@ export interface DepartmentApiResponse {
   unitType: OrganizationUnitType;
   parentId?: string;
   managerEmployeeId?: string;
+  managerEmployeeCode?: string;
   createdAt: string;
   updatedAt: string;
 }

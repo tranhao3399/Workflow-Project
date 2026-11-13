@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMotionTokens, useShouldReduceMotion } from '@animate-ui/react/utils/motion'
+import { AnimatePresence, motion } from 'motion/react'
 import { OverviewDashboard } from './Dashboard'
 import { EmptyState, ErrorState, LoadingState, PermissionDeniedState } from './DataStates'
 import { PermissionPage } from './PermissionPage'
@@ -9,7 +11,6 @@ import { NewUserPage } from './NewUserPage'
 import { EmployeeCatalogPage } from './EmployeeCatalogPage'
 import { EmployeeDetailPage } from './EmployeeDetailPage'
 import { NewEmployeePage } from './NewEmployeePage'
-import { OrganizationPage } from './OrganizationPage'
 import { DepartmentCatalogPage } from './DepartmentCatalogPage'
 import { DepartmentCreatePage } from './DepartmentCreatePage'
 import { DepartmentDetailPage } from './DepartmentDetailPage'
@@ -22,6 +23,7 @@ import { WorkflowBuilderCatalogPage, WorkflowBuilderEditorPage } from './workflo
 import { RequestCatalogPage, RequestDetailPage, RequestFormsPage } from './requests'
 import { ApprovalInboxPage } from './approvals'
 import { NotificationCenterPage } from './notifications'
+import { AuditLogCatalogPage } from './AuditLogCatalogPage'
 import { AppShell } from './ui/AppShell'
 import { PageHeader } from './ui/PageHeader'
 import { TopBar } from './ui/TopBar'
@@ -30,13 +32,14 @@ import { ConfirmDialog } from './ui/ConfirmDialog'
 import { getDashboard } from '../services/dashboard.service'
 import { getMyWorkspaceModules } from '../services/workspace-modules.service'
 import { getCurrentUser } from '../services/auth.service'
-import type { AuthUser, UserRole } from '../types/auth'
-import type { DashboardData, DashboardRole, NavigationItem, NavigationKey } from '../types/erp'
+import type { AuthUser } from '../types/auth'
+import type { DashboardData, DashboardView, NavigationItem, NavigationKey } from '../types/erp'
 import type { WorkspaceModule } from '../types/workspace-modules'
 import type { SystemNotification } from '../types/notifications'
 import { normalizeSearchText } from '../utils/formatters'
 import { hasAllPermissions, hasPermission } from '../utils/permissions'
 import { resolveNotificationTarget } from '../utils/notification-target'
+import { vietnameseToastMessage } from '../utils/api-errors'
 
 interface WorkspaceProps {
   user: AuthUser
@@ -50,6 +53,7 @@ const navigationKeyByPath: Record<string, NavigationKey> = {
   '/overview': 'overview',
   '/my-requests': 'my-requests',
   '/my-requests/new': 'new-request',
+  '/requests/new': 'new-request',
   '/approval-inbox': 'approval-inbox',
   '/notifications': 'notifications',
   '/form-builder': 'form-builder',
@@ -58,7 +62,7 @@ const navigationKeyByPath: Record<string, NavigationKey> = {
   '/workflow-builder/new': 'new-workflow-definition',
   '/employees': 'employees',
   '/employees/new': 'new-employee',
-  '/organization': 'organization',
+  '/organization': 'departments',
   '/departments': 'departments',
   '/departments/new': 'new-department',
   '/job-titles': 'job-titles',
@@ -143,7 +147,6 @@ const pathByNavigationKey: Record<NavigationKey, string> = {
   'new-workflow-definition': '/workflow-builder/new',
   'workflow-definition-detail': '/workflow-builder',
   employees: '/employees',
-  organization: '/organization',
   departments: '/departments',
   'new-department': '/departments/new',
   'department-detail': '/departments',
@@ -196,7 +199,6 @@ const pageMeta: Record<NavigationKey, { title: string; description?: string }> =
   'new-workflow-definition': { title: 'Tạo Workflow' },
   'workflow-definition-detail': { title: 'Chi tiết Workflow' },
   employees: { title: 'Nhân viên', description: 'Quản lý hồ sơ nhân sự trong tổ chức.' },
-  organization: { title: 'Cơ cấu tổ chức', description: 'Danh mục phòng ban và chức danh dùng chung.' },
   departments: { title: 'Phòng ban', description: 'Quản lý danh mục phòng ban và cơ cấu nhân sự trong tổ chức.' },
   'new-department': { title: 'Tạo phòng ban' },
   'department-detail': { title: 'Chi tiết phòng ban' },
@@ -211,12 +213,12 @@ const pageMeta: Record<NavigationKey, { title: string; description?: string }> =
   permissions: { title: 'Vai trò & phân quyền', description: 'Quản lý vai trò và quyền truy cập của tài khoản trong hệ thống.' },
   'new-role': { title: 'Tạo vai trò' },
   'role-detail': { title: 'Chi tiết vai trò' },
-  'audit-logs': { title: 'Nhật ký hệ thống', description: 'Theo dõi các sự kiện nghiệp vụ và bảo mật.' },
+  'audit-logs': { title: 'Nhật ký hệ thống' },
   'workspace-modules': { title: 'Quản lý không gian làm việc' },
   'my-account': { title: 'Tài khoản của tôi' },
 }
 
-const selfManagedHeaderPages: NavigationKey[] = ['my-requests', 'new-request', 'request-detail', 'approval-inbox', 'notifications', 'employees', 'organization', 'departments', 'new-department', 'department-detail', 'job-titles', 'new-job-title', 'job-title-detail', 'new-employee', 'employee-detail', 'users', 'new-user', 'permissions', 'new-role', 'role-detail', 'workspace-modules', 'workflow-builder', 'new-workflow-definition', 'workflow-definition-detail', 'user-detail', 'my-account', 'form-builder', 'new-form-definition', 'form-definition-detail']
+const selfManagedHeaderPages: NavigationKey[] = ['overview', 'my-requests', 'new-request', 'request-detail', 'approval-inbox', 'notifications', 'employees', 'departments', 'new-department', 'department-detail', 'job-titles', 'new-job-title', 'job-title-detail', 'new-employee', 'employee-detail', 'users', 'new-user', 'permissions', 'new-role', 'role-detail', 'workspace-modules', 'workflow-builder', 'new-workflow-definition', 'workflow-definition-detail', 'user-detail', 'my-account', 'form-builder', 'new-form-definition', 'form-definition-detail']
 const requiredPermissionsByPage: Partial<Record<NavigationKey, readonly string[]>> = {
   overview: ['DASHBOARD.VIEW'],
   'my-requests': ['REQUESTS.VIEW_OWN'],
@@ -250,19 +252,13 @@ const requiredPermissionsByPage: Partial<Record<NavigationKey, readonly string[]
 
 function canAccessPage(page: NavigationKey, permissionKeys: readonly string[]): boolean {
   if (page === 'request-detail') {
-    return ['REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'REQUESTS.VIEW_ALL']
+    return ['REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'REQUESTS.VIEW_SCOPE', 'REQUESTS.VIEW_ALL']
       .some((permission) => hasPermission(permissionKeys, permission))
   }
   const required = requiredPermissionsByPage[page]
   if (!required?.length) return true
   return hasAllPermissions(permissionKeys, required)
 }
-function toDashboardRole(role: UserRole): DashboardRole {
-  if (role === 'ADMIN') return 'ADMIN'
-  if (role === 'MANAGER' || role === 'ACCOUNTANT' || role === 'DIRECTOR') return 'MANAGER'
-  return 'EMPLOYEE'
-}
-
 function toNavigationItems(modules: WorkspaceModule[]): NavigationItem[] {
   return modules.flatMap((module) => {
     const key = navigationKeyByPath[module.path]
@@ -298,7 +294,6 @@ const navigationIconPaths: Record<NavigationKey, string[]> = {
   'new-workflow-definition': ['M5 5h4v4H5z', 'M15 15h4v4h-4z', 'M9 7h5a2 2 0 0 1 2 2v6'],
   'workflow-definition-detail': ['M5 5h4v4H5z', 'M15 15h4v4h-4z', 'M9 7h5a2 2 0 0 1 2 2v6'],
   employees: ['M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M4 21a8 8 0 0 1 16 0', 'M19 8v6', 'M16 11h6'],
-  organization: ['M4 4h16v16H4z', 'M4 10h16', 'M10 4v16'],
   departments: ['M4 4h16v16H4z', 'M4 10h16', 'M10 4v16'],
   'new-department': ['M4 4h16v16H4z', 'M4 10h16', 'M10 4v16'],
   'department-detail': ['M4 4h16v16H4z', 'M4 10h16', 'M10 4v16'],
@@ -323,9 +318,12 @@ function NavigationIcon({ navigationKey }: { navigationKey: NavigationKey }) {
 }
 
 export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, onPasswordChanged }: WorkspaceProps) {
+  const shouldReduceMotion = useShouldReduceMotion()
+  const { transition } = useMotionTokens()
   const [activePage, setActivePage] = useState<NavigationKey>(() => getRouteKey(window.location.pathname))
   const [selectedUserId, setSelectedUserId] = useState<string | null>(() => getRouteId(window.location.pathname, '/users/'))
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(() => getRouteId(window.location.pathname, '/employees/'))
+  const [employeeCatalogViewMode, setEmployeeCatalogViewMode] = useState<'LIST' | 'TREE'>('LIST')
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string | null>(() => getDepartmentId(window.location.pathname))
   const [departmentCatalogViewMode, setDepartmentCatalogViewMode] = useState<'LIST' | 'TREE'>('LIST')
   const [selectedJobTitleId, setSelectedJobTitleId] = useState<string | null>(() => getJobTitleId(window.location.pathname))
@@ -336,8 +334,13 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [pendingNavigationItem, setPendingNavigationItem] = useState<NavigationItem | null>(null)
   const [pendingNavigationAction, setPendingNavigationAction] = useState<(() => void) | null>(null)
-  const [accountEmployeeId, setAccountEmployeeId] = useState<string | null>(null)
+  const [accountEmployeeId, setAccountEmployeeId] = useState<string | null>(() => (
+    getRouteKey(window.location.pathname) === 'new-user'
+      ? new URLSearchParams(window.location.search).get('employeeId')
+      : null
+  ))
   const [data, setData] = useState<DashboardData | null>(null)
+  const [dashboardView, setDashboardView] = useState<DashboardView>()
   const [isLoading, setIsLoading] = useState(true)
   const [hasError, setHasError] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
@@ -354,7 +357,6 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     void getCurrentUser().then(onCurrentUserUpdated).catch(() => undefined)
   }, [onCurrentUserUpdated])
 
-  const dashboardRole = toDashboardRole(user.role)
   const permissionKeys = useMemo(() => user.permissionKeys ?? [], [user.permissionKeys])
   const navigationItems = useMemo(
     () => toNavigationItems(menuModules).filter((item) => canAccessPage(item.key, permissionKeys)),
@@ -375,9 +377,41 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
   const selectedApprovalTaskId = activePage === 'request-detail'
     ? new URLSearchParams(window.location.search).get('taskId') ?? undefined
     : undefined
+  const newUserEmployeeId = activePage === 'new-user'
+    ? new URLSearchParams(window.location.search).get('employeeId') ?? accountEmployeeId ?? undefined
+    : undefined
+  const employeeDetailInitialTab = activePage === 'employee-detail'
+    && new URLSearchParams(window.location.search).get('tab') === 'account'
+    ? 'ACCOUNT' as const
+    : 'OVERVIEW' as const
+  const pageRecordId = activePage === 'employee-detail'
+    ? selectedEmployeeId
+    : activePage === 'department-detail'
+      ? selectedDepartmentId
+      : activePage === 'job-title-detail'
+        ? selectedJobTitleId
+        : activePage === 'user-detail'
+          ? selectedUserId
+          : activePage === 'role-detail'
+            ? selectedRoleId
+            : activePage === 'form-definition-detail'
+              ? selectedFormDefinitionId
+              : activePage === 'workflow-definition-detail'
+                ? selectedWorkflowDefinitionId
+                : activePage === 'request-detail'
+                  ? `${selectedRequestId ?? ''}:${selectedApprovalTaskId ?? ''}`
+                  : ''
+  const pageTransitionKey = `${activePage}:${pageRecordId ?? ''}`
+  const employeeReturnTo = activePage === 'employee-detail'
+    ? new URLSearchParams(window.location.search).get('returnTo')
+    : null
   const activeNavigationKey = requestOpenedFromInbox
     ? 'approval-inbox'
-    : parentNavigationKeyByPage[activePage] ?? activePage
+    : employeeReturnTo === 'user-detail'
+      ? 'users'
+      : employeeReturnTo === 'department-detail'
+        ? 'departments'
+      : parentNavigationKeyByPage[activePage] ?? activePage
 
   useEffect(() => {
     window.localStorage.setItem('workflow:sidebar-collapsed', String(isSidebarCollapsed))
@@ -385,10 +419,19 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
 
   useEffect(() => {
     const canonicalPath = canonicalJobTitlePath(window.location.pathname)
-    if (canonicalPath) window.history.replaceState(null, '', canonicalPath)
+    if (canonicalPath) {
+      window.history.replaceState(null, '', canonicalPath)
+      return
+    }
     const requestPath = canonicalRequestPath(window.location.pathname)
-    if (requestPath) window.history.replaceState(null, '', requestPath)
-  }, [])
+    if (requestPath) {
+      window.history.replaceState(null, '', requestPath)
+      return
+    }
+    if (activePage === 'overview' && window.location.pathname !== '/overview') {
+      window.history.replaceState(null, '', '/overview')
+    }
+  }, [activePage])
 
   useEffect(() => {
     const refreshDashboard = () => {
@@ -423,7 +466,7 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     let isCurrent = true
     async function loadDashboard() {
       try {
-        const dashboard = await getDashboard(dashboardRole)
+        const dashboard = await getDashboard(dashboardView)
         if (!isCurrent) return
         setData(dashboard)
         setHasError(false)
@@ -435,13 +478,16 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     }
     void loadDashboard()
     return () => { isCurrent = false }
-  }, [dashboardRole, reloadVersion])
+  }, [dashboardView, reloadVersion])
 
   useEffect(() => {
     function handlePopState() {
       setActivePage(getRouteKey(window.location.pathname))
       setSelectedUserId(getRouteId(window.location.pathname, '/users/'))
       setSelectedEmployeeId(getRouteId(window.location.pathname, '/employees/'))
+      setAccountEmployeeId(getRouteKey(window.location.pathname) === 'new-user'
+        ? new URLSearchParams(window.location.search).get('employeeId')
+        : null)
       setSelectedDepartmentId(getDepartmentId(window.location.pathname))
       setSelectedJobTitleId(getJobTitleId(window.location.pathname))
       setSelectedRoleId(getRoleId(window.location.pathname))
@@ -476,6 +522,14 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     const timeoutId = window.setTimeout(() => setToast(''), 4000)
     return () => window.clearTimeout(timeoutId)
   }, [toast])
+
+  useEffect(() => {
+    const staysInEmployeeFlow = ['employees', 'new-employee', 'employee-detail'].includes(activePage)
+    if (staysInEmployeeFlow) return
+    // Leaving the employee flow resets the next catalog visit to its default list view.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setEmployeeCatalogViewMode('LIST')
+  }, [activePage])
 
   useEffect(() => {
     const staysInDepartmentFlow = ['departments', 'new-department', 'department-detail'].includes(activePage)
@@ -523,13 +577,32 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     setSelectedUserId(null)
     setAccountEmployeeId(employeeId ?? null)
     setActivePage('new-user')
+    if (employeeId) {
+      window.history.replaceState(null, '', `/employees/${encodeURIComponent(employeeId)}?tab=account`)
+      window.history.pushState(null, '', `/users/new?employeeId=${encodeURIComponent(employeeId)}&returnTo=employee-account`)
+      return
+    }
     updatePath('new-user')
   }
 
   function returnToUsers() {
+    setAccountEmployeeId(null)
     setSelectedUserId(null)
     setActivePage('users')
     updatePath('users')
+  }
+
+  function returnFromNewUser() {
+    const query = new URLSearchParams(window.location.search)
+    const employeeId = query.get('employeeId') ?? accountEmployeeId
+    if (employeeId && query.get('returnTo') === 'employee-account') {
+      setAccountEmployeeId(null)
+      setSelectedEmployeeId(employeeId)
+      setActivePage('employee-detail')
+      window.history.replaceState(null, '', `/employees/${encodeURIComponent(employeeId)}?tab=account`)
+      return
+    }
+    returnToUsers()
   }
 
   function openNewEmployeePage() {
@@ -550,10 +623,40 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     updatePath('employees')
   }
 
-  function openEmployee(employeeId: string) {
+  function returnFromEmployeeDetail() {
+    const query = new URLSearchParams(window.location.search)
+    const returnTo = query.get('returnTo')
+    const sourceId = query.get('sourceId')
+
+    if (returnTo === 'user-detail' && sourceId) {
+      setSelectedEmployeeId(null)
+      setSelectedUserId(sourceId)
+      setActivePage('user-detail')
+      window.history.replaceState(null, '', `/users/${encodeURIComponent(sourceId)}`)
+      return
+    }
+
+    if (returnTo === 'department-detail' && sourceId) {
+      setSelectedEmployeeId(null)
+      setSelectedDepartmentId(sourceId)
+      setActivePage('department-detail')
+      window.history.replaceState(null, '', `/departments/${encodeURIComponent(sourceId)}`)
+      return
+    }
+
+    returnToEmployees()
+  }
+
+  function openEmployee(
+    employeeId: string,
+    source?: { page: 'user-detail' | 'department-detail'; id: string },
+  ) {
     setSelectedEmployeeId(employeeId)
     setActivePage('employee-detail')
-    window.history.pushState(null, '', `/employees/${employeeId}`)
+    const path = source
+      ? `/employees/${encodeURIComponent(employeeId)}?returnTo=${source.page}&sourceId=${encodeURIComponent(source.id)}`
+      : `/employees/${encodeURIComponent(employeeId)}`
+    window.history.pushState(null, '', path)
   }
 
   function openDepartment(departmentId: string) {
@@ -629,6 +732,10 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
 
   function returnToFormBuilder() {
     const groupId = new URLSearchParams(window.location.search).get('groupId')
+    navigateToFormBuilder(groupId ?? undefined)
+  }
+
+  function navigateToFormBuilder(groupId?: string) {
     setSelectedFormDefinitionId(null)
     setActivePage('form-builder')
     window.history.pushState(null, '', groupId ? `/form-builder?groupId=${encodeURIComponent(groupId)}` : '/form-builder')
@@ -662,10 +769,14 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     updatePath('workflow-builder')
   }
 
-  function openNewRequest() {
+  function openNewRequest(formId?: string, formCode?: string) {
     setSelectedRequestId(null)
     setActivePage('new-request')
-    updatePath('new-request')
+    const parameters = new URLSearchParams()
+    if (formId) parameters.set('formId', formId)
+    if (formCode) parameters.set('formCode', formCode)
+    const path = parameters.size ? `/requests/new?${parameters.toString()}` : '/requests/new'
+    window.history.pushState(null, '', path)
   }
 
   function openRequest(requestId: string, replace = false) {
@@ -754,7 +865,14 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
 
   function notify(message: string, tone: 'success' | 'error' = 'success') {
     setToastTone(tone)
-    setToast(message)
+    setToast(
+      vietnameseToastMessage(
+        message,
+        tone === 'success'
+          ? 'Thao tác đã hoàn tất.'
+          : 'Không thể thực hiện thao tác. Vui lòng thử lại.',
+      ),
+    )
   }
 
   function retryDashboard() {
@@ -766,37 +884,37 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
   function renderContent() {
     if (!canAccessPage(activePage, permissionKeys)) return <PermissionDeniedState />
     if (activePage === 'my-account') return <MyAccountPage user={user} onBack={() => navigateTo({ key: 'overview', label: 'Tổng quan', section: 'workspace' })} onPasswordChanged={onPasswordChanged} />
-    if (activePage === 'my-requests') return <RequestCatalogPage canCreate={hasPermission(permissionKeys, 'REQUESTS.CREATE')} canViewManaged={hasPermission(permissionKeys, 'REQUESTS.VIEW_SCOPE')} onCreate={openNewRequest} onOpen={openRequest} />
+    if (activePage === 'my-requests') return <RequestCatalogPage canCreate={hasPermission(permissionKeys, 'REQUESTS.CREATE')} canViewManaged={hasPermission(permissionKeys, 'REQUESTS.VIEW_SCOPE')} onCreate={() => openNewRequest()} onOpen={openRequest} />
     if (activePage === 'approval-inbox') return <ApprovalInboxPage onOpenRequest={openApprovalRequest} />
     if (activePage === 'notifications') return <NotificationCenterPage onOpenNotification={openNotificationTarget} onNotify={notify} />
-    if (activePage === 'new-request') return <RequestFormsPage onBack={returnToRequests} onOpenRequest={openRequest} onNotify={notify} />
+    if (activePage === 'new-request') return <RequestFormsPage initialFormId={new URLSearchParams(window.location.search).get('formId') ?? undefined} initialSearch={new URLSearchParams(window.location.search).get('formCode') ?? undefined} onBack={returnToRequests} onOpenRequest={openRequest} onNotify={notify} />
     if (activePage === 'request-detail' && selectedRequestId) return <RequestDetailPage key={`${selectedRequestId}:${selectedApprovalTaskId ?? 'current'}`} requestId={selectedRequestId} currentUserId={user.id} taskId={selectedApprovalTaskId} onBack={requestOpenedFromInbox ? returnToApprovalInbox : returnToRequests} onDeleted={returnToRequests} onOpenRequest={openRequest} onNotify={notify} />
     if (activePage === 'form-builder') return <FormBuilderCatalogPage initialGroupId={new URLSearchParams(window.location.search).get('groupId') ?? undefined} canCreate={hasPermission(permissionKeys, 'FORM_BUILDER.CREATE')} canUpdate={hasPermission(permissionKeys, 'FORM_BUILDER.UPDATE')} canDeleteDraft={hasPermission(permissionKeys, 'FORM_BUILDER.DELETE_DRAFT')} onCreate={openNewFormDefinition} onOpen={openFormDefinition} onNotify={notify} />
-    if (activePage === 'new-form-definition') return <FormBuilderEditorPage key="new-form-definition" initialGroupId={new URLSearchParams(window.location.search).get('groupId') ?? undefined} canCreate={hasPermission(permissionKeys, 'FORM_BUILDER.CREATE')} canUpdate={hasPermission(permissionKeys, 'FORM_BUILDER.UPDATE')} canDeleteDraft={hasPermission(permissionKeys, 'FORM_BUILDER.DELETE_DRAFT')} onBack={returnToFormBuilder} onOpen={openFormDefinition} onConfigureWorkflow={configureWorkflow} onNotify={notify} />
-    if (activePage === 'form-definition-detail' && selectedFormDefinitionId) return <FormBuilderEditorPage key={selectedFormDefinitionId} formDefinitionId={selectedFormDefinitionId} canCreate={hasPermission(permissionKeys, 'FORM_BUILDER.CREATE')} canUpdate={hasPermission(permissionKeys, 'FORM_BUILDER.UPDATE')} canDeleteDraft={hasPermission(permissionKeys, 'FORM_BUILDER.DELETE_DRAFT')} onBack={returnToFormBuilder} onOpen={openFormDefinition} onConfigureWorkflow={configureWorkflow} onNotify={notify} />
+    if (activePage === 'new-form-definition') return <FormBuilderEditorPage key="new-form-definition" initialGroupId={new URLSearchParams(window.location.search).get('groupId') ?? undefined} canCreate={hasPermission(permissionKeys, 'FORM_BUILDER.CREATE')} canUpdate={hasPermission(permissionKeys, 'FORM_BUILDER.UPDATE')} canDeleteDraft={hasPermission(permissionKeys, 'FORM_BUILDER.DELETE_DRAFT')} onBack={returnToFormBuilder} onNavigateCatalog={navigateToFormBuilder} onOpen={openFormDefinition} onConfigureWorkflow={configureWorkflow} onNotify={notify} />
+    if (activePage === 'form-definition-detail' && selectedFormDefinitionId) return <FormBuilderEditorPage key={selectedFormDefinitionId} formDefinitionId={selectedFormDefinitionId} initialGroupId={new URLSearchParams(window.location.search).get('groupId') ?? undefined} canCreate={hasPermission(permissionKeys, 'FORM_BUILDER.CREATE')} canUpdate={hasPermission(permissionKeys, 'FORM_BUILDER.UPDATE')} canDeleteDraft={hasPermission(permissionKeys, 'FORM_BUILDER.DELETE_DRAFT')} onBack={returnToFormBuilder} onNavigateCatalog={navigateToFormBuilder} onOpen={openFormDefinition} onConfigureWorkflow={configureWorkflow} onNotify={notify} />
     if (activePage === 'workflow-builder') return <WorkflowBuilderCatalogPage canCreate={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.CREATE')} canDeleteDraft={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.DELETE_DRAFT')} onCreate={openNewWorkflowDefinition} onOpen={openWorkflowDefinition} onNotify={notify} />
     if (activePage === 'new-workflow-definition') return <WorkflowBuilderEditorPage key="new-workflow-definition" initialFormDefinitionId={new URLSearchParams(window.location.search).get('formDefinitionId') ?? undefined} canCreate={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.CREATE')} canUpdate={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.UPDATE')} canDeleteDraft={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.DELETE_DRAFT')} canPublishWorkflow={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.PUBLISH')} canPublishPackage={hasAllPermissions(permissionKeys, ['FORM_BUILDER.PUBLISH', 'WORKFLOW_BUILDER.PUBLISH'])} canCloneWorkflow={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.CREATE')} canClonePackage={hasAllPermissions(permissionKeys, ['FORM_BUILDER.CREATE', 'WORKFLOW_BUILDER.CREATE'])} onBack={returnToWorkflowBuilder} onOpen={openWorkflowDefinition} onNotify={notify} />
     if (activePage === 'workflow-definition-detail' && selectedWorkflowDefinitionId) return <WorkflowBuilderEditorPage key={selectedWorkflowDefinitionId} workflowDefinitionId={selectedWorkflowDefinitionId} canCreate={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.CREATE')} canUpdate={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.UPDATE')} canDeleteDraft={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.DELETE_DRAFT')} canPublishWorkflow={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.PUBLISH')} canPublishPackage={hasAllPermissions(permissionKeys, ['FORM_BUILDER.PUBLISH', 'WORKFLOW_BUILDER.PUBLISH'])} canCloneWorkflow={hasPermission(permissionKeys, 'WORKFLOW_BUILDER.CREATE')} canClonePackage={hasAllPermissions(permissionKeys, ['FORM_BUILDER.CREATE', 'WORKFLOW_BUILDER.CREATE'])} onBack={returnToWorkflowBuilder} onOpen={openWorkflowDefinition} onNotify={notify} />
-    if (activePage === 'employees') return <EmployeeCatalogPage onOpenEmployee={openEmployee} onCreateEmployee={openNewEmployeePage} canCreateEmployee={hasPermission(permissionKeys, 'EMPLOYEE.CREATE')} />
+    if (activePage === 'employees') return <EmployeeCatalogPage onOpenEmployee={openEmployee} onCreateEmployee={openNewEmployeePage} canCreateEmployee={hasPermission(permissionKeys, 'EMPLOYEE.CREATE')} initialViewMode={employeeCatalogViewMode} onViewModeChange={setEmployeeCatalogViewMode} />
     if (activePage === 'departments') return <DepartmentCatalogPage onOpenDepartment={openDepartment} onCreateDepartment={openNewDepartmentPage} canCreateDepartment={hasPermission(permissionKeys, 'DEPARTMENT.CREATE')} initialViewMode={departmentCatalogViewMode} onViewModeChange={setDepartmentCatalogViewMode} />
     if (activePage === 'new-department') return <DepartmentCreatePage onBack={returnToDepartments} onCreated={returnToDepartments} />
-    if (activePage === 'department-detail' && selectedDepartmentId) return <DepartmentDetailPage departmentId={selectedDepartmentId} currentUserId={user.id} onBack={returnToDepartments} onDeleted={handleDepartmentDeleted} />
+  if (activePage === 'department-detail' && selectedDepartmentId) return <DepartmentDetailPage departmentId={selectedDepartmentId} currentUserId={user.id} canViewEmployees={hasPermission(permissionKeys, 'EMPLOYEE.VIEW')} onBack={returnToDepartments} onDeleted={handleDepartmentDeleted} onOpenEmployee={(employeeId) => openEmployee(employeeId, { page: 'department-detail', id: selectedDepartmentId })} />
     if (activePage === 'job-titles') return <JobTitleCatalogPage onCreateJobTitle={openNewJobTitlePage} onOpenJobTitle={openJobTitleDetail} canCreateJobTitle={hasPermission(permissionKeys, 'JOB_TITLE.CREATE')} />
     if (activePage === 'new-job-title') return <JobTitleForm onBack={returnToJobTitles} onSaved={() => { notify('Tạo chức danh thành công.'); returnToJobTitles() }} />
     if (activePage === 'job-title-detail' && selectedJobTitleId) return <JobTitleForm jobTitleId={selectedJobTitleId} currentUserId={user.id} onBack={returnToJobTitles} onSaved={returnToJobTitles} onDeleted={handleJobTitleDeleted} canUpdateJobTitle={hasPermission(permissionKeys, 'JOB_TITLE.UPDATE')} canDeleteJobTitle={hasPermission(permissionKeys, 'JOB_TITLE.DELETE')} canChangeStatus={hasPermission(permissionKeys, 'JOB_TITLE.CHANGE_STATUS')} />
-    if (activePage === 'organization') return <OrganizationPage />
     if (activePage === 'new-employee') return <NewEmployeePage onBack={returnToEmployees} onCreated={returnToEmployees} />
-    if (activePage === 'employee-detail' && selectedEmployeeId) return <EmployeeDetailPage employeeId={selectedEmployeeId} currentUserId={user.id} onBack={returnToEmployees} onCreateAccount={openNewUserPage} onOpenUser={(userId) => { setSelectedUserId(userId); setActivePage('user-detail'); window.history.pushState(null, '', `/users/${userId}`) }} onCurrentUserUpdated={refreshCurrentUser} canUpdateEmployee={hasPermission(permissionKeys, 'EMPLOYEE.UPDATE')} canChangeEmployeeStatus={hasPermission(permissionKeys, 'EMPLOYEE.CHANGE_STATUS')} />
+    if (activePage === 'employee-detail' && selectedEmployeeId) return <EmployeeDetailPage employeeId={selectedEmployeeId} currentUserId={user.id} initialTab={employeeDetailInitialTab} onBack={returnFromEmployeeDetail} onCreateAccount={openNewUserPage} onOpenUser={(userId) => { setSelectedUserId(userId); setActivePage('user-detail'); window.history.pushState(null, '', `/users/${userId}`) }} onCurrentUserUpdated={refreshCurrentUser} canUpdateEmployee={hasPermission(permissionKeys, 'EMPLOYEE.UPDATE')} canUploadEmployeeAvatar={hasPermission(permissionKeys, 'EMPLOYEE.UPLOAD_AVATAR')} canChangeEmployeeStatus={hasPermission(permissionKeys, 'EMPLOYEE.CHANGE_STATUS')} />
     if (activePage === 'users') return <UserCatalogPage onOpenUser={(userId) => { setSelectedUserId(userId); setActivePage('user-detail'); window.history.pushState(null, '', `/users/${userId}`) }} onCreateUser={() => openNewUserPage()} canCreateUser={hasPermission(permissionKeys, 'USER.CREATE')} />
-    if (activePage === 'new-user') return <NewUserPage initialEmployeeId={accountEmployeeId ?? undefined} onBack={returnToUsers} onCreated={returnToUsers} />
-    if (activePage === 'user-detail' && selectedUserId) return <UserDetailPage userId={selectedUserId} currentUserId={user.id} onBack={returnToUsers} onOpenEmployee={openEmployee} canResetPassword={hasPermission(permissionKeys, 'USER.RESET_PASSWORD')} />
+    if (activePage === 'new-user') return <NewUserPage initialEmployeeId={newUserEmployeeId} onBack={returnFromNewUser} onCreated={() => { notify('Tạo tài khoản thành công.'); returnFromNewUser() }} />
+  if (activePage === 'user-detail' && selectedUserId) return <UserDetailPage userId={selectedUserId} currentUserId={user.id} onBack={returnToUsers} onOpenEmployee={(employeeId) => openEmployee(employeeId, { page: 'user-detail', id: selectedUserId })} canResetPassword={hasPermission(permissionKeys, 'USER.RESET_PASSWORD')} />
     if (activePage === 'permissions') return <PermissionPage onCreateRole={openNewRolePage} onOpenRole={openRole} canCreateRole={hasPermission(permissionKeys, 'ROLE.CREATE')} />
     if (activePage === 'new-role') return <RoleDetailPage currentUserId={user.id} onBack={returnToRoles} onSaved={returnToRoles} canUpdateRole={hasPermission(permissionKeys, 'ROLE.UPDATE')} canDeleteRole={hasPermission(permissionKeys, 'ROLE.DELETE')} />
     if (activePage === 'role-detail' && selectedRoleId) return <RoleDetailPage roleId={selectedRoleId} currentUserId={user.id} onBack={returnToRoles} onSaved={() => { notify('Đã xóa vai trò thành công.'); returnToRoles() }} canUpdateRole={hasPermission(permissionKeys, 'ROLE.UPDATE')} canDeleteRole={hasPermission(permissionKeys, 'ROLE.DELETE')} />
     if (activePage === 'workspace-modules') return <WorkspaceModulesPage />
+    if (activePage === 'audit-logs') return <AuditLogCatalogPage />
     if (isLoading) return <LoadingState />
     if (hasError || !data) return <ErrorState onRetry={retryDashboard} />
-    if (activePage === 'overview') return <OverviewDashboard data={data} onNavigate={navigateTo} navigationItems={navigationItems} permissionKeys={permissionKeys} />
+    if (activePage === 'overview') return <OverviewDashboard data={data} onNavigate={navigateTo} navigationItems={navigationItems} onViewChange={setDashboardView} onCreateRequest={openNewRequest} onOpenRequest={openRequest} onOpenApproval={openApprovalRequest} onOpenEmployee={openEmployee} />
     return <EmptyState title={`${meta.title} chưa được kết nối`} description="Màn hình đã sẵn vị trí trong hệ thống; dữ liệu sẽ hiển thị khi NestJS API tương ứng được xây dựng." />
   }
 
@@ -811,5 +929,37 @@ export function Workspace({ user, onLogout, isLoggingOut, onCurrentUserUpdated, 
     </nav>
   </>
 
-  return <><AppShell sidebar={sidebar} isSidebarCollapsed={isSidebarCollapsed} hasUnsavedChanges={hasUnsavedChanges} topBar={<TopBar user={user} isLoggingOut={isLoggingOut} onLogout={onLogout} onOpenMyAccount={openMyAccount} canViewNotifications={hasPermission(permissionKeys, 'NOTIFICATION.VIEW')} onOpenNotifications={openNotifications} onOpenNotification={openNotificationTarget} onNotify={notify} searchQuery={searchQuery} onSearchChange={setSearchQuery} searchResults={globalSearchMatches} onSearchSelect={navigateTo} isMobileSearchActive={isMobileSearchActive} onMobileSearchOpen={() => setIsMobileSearchActive(true)} onMobileSearchClose={() => setIsMobileSearchActive(false)} />}>{!selfManagedHeaderPages.includes(activePage) && <PageHeader title={meta.title} description={activePage === 'overview' && data ? data.greeting : meta.description} />}{renderContent()}</AppShell>{toast && <div className={`toast-message${toastTone === 'error' ? ' toast-error' : ''}`} role={toastTone === 'error' ? 'alert' : 'status'}>{toast}</div>}{(pendingNavigationItem || pendingNavigationAction) && <ConfirmDialog title="Chưa lưu thay đổi" description="Bạn đang có thay đổi chưa lưu. Nếu rời trang, các thay đổi này sẽ bị hủy." confirmLabel="Rời khỏi trang" tone="danger" onCancel={() => { setPendingNavigationItem(null); setPendingNavigationAction(null); window.dispatchEvent(new CustomEvent('workflow:navigate-cancel')) }} onConfirm={() => { if (pendingNavigationItem) performNavigation(pendingNavigationItem); else { const action = pendingNavigationAction; setPendingNavigationAction(null); action?.() } }} />}</>
+  return <>
+    <AppShell
+      sidebar={sidebar}
+      isSidebarCollapsed={isSidebarCollapsed}
+      hasUnsavedChanges={hasUnsavedChanges}
+      topBar={<TopBar user={user} isLoggingOut={isLoggingOut} onLogout={onLogout} onOpenMyAccount={openMyAccount} canViewNotifications={hasPermission(permissionKeys, 'NOTIFICATION.VIEW')} onOpenNotifications={openNotifications} onOpenNotification={openNotificationTarget} onNotify={notify} searchQuery={searchQuery} onSearchChange={setSearchQuery} searchResults={globalSearchMatches} onSearchSelect={navigateTo} isMobileSearchActive={isMobileSearchActive} onMobileSearchOpen={() => setIsMobileSearchActive(true)} onMobileSearchClose={() => setIsMobileSearchActive(false)} />}
+    >
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          className="workspace-page-transition"
+          key={pageTransitionKey}
+          initial={shouldReduceMotion ? false : { opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={shouldReduceMotion ? undefined : { opacity: 0, y: -3 }}
+          transition={shouldReduceMotion ? { duration: 0 } : transition.fade}
+        >
+          {!selfManagedHeaderPages.includes(activePage) && <PageHeader title={meta.title} description={meta.description} />}
+          {renderContent()}
+        </motion.div>
+      </AnimatePresence>
+    </AppShell>
+    <AnimatePresence initial={false}>
+      {toast && <motion.div
+        className={`toast-message${toastTone === 'error' ? ' toast-error' : ''}`}
+        role={toastTone === 'error' ? 'alert' : 'status'}
+        initial={shouldReduceMotion ? false : { opacity: 0, y: 10, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.98 }}
+        transition={shouldReduceMotion ? { duration: 0 } : transition.menu}
+      >{toast}</motion.div>}
+    </AnimatePresence>
+    {(pendingNavigationItem || pendingNavigationAction) && <ConfirmDialog title="Chưa lưu thay đổi" description="Bạn đang có thay đổi chưa lưu. Bạn có chắc chắn muốn rời khỏi trang?" confirmLabel="Rời khỏi trang" variant="discard-changes" onCancel={() => { setPendingNavigationItem(null); setPendingNavigationAction(null); window.dispatchEvent(new CustomEvent('workflow:navigate-cancel')) }} onConfirm={() => { if (pendingNavigationItem) performNavigation(pendingNavigationItem); else { const action = pendingNavigationAction; setPendingNavigationAction(null); action?.() } }} />}
+  </>
 }

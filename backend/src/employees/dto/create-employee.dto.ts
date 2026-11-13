@@ -6,13 +6,18 @@ import {
   IsEnum,
   IsMongoId,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
+  Min,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { EmploymentType } from '../enums/employment-type.enum.js';
+import { Gender } from '../enums/gender.enum.js';
 
 const trimValue = ({ value }: { value: unknown }): unknown =>
   typeof value === 'string' ? value.trim() : value;
@@ -94,6 +99,35 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsDateString()
   dateOfBirth?: string;
+
+  @ApiPropertyOptional({ enum: Gender, example: Gender.MALE })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsEnum(Gender)
+  gender?: Gender;
+
+  @ApiPropertyOptional({
+    example: '079123456789',
+    description: 'Số căn cước công dân gồm đúng 12 chữ số.',
+  })
+  @ValidateIf((_, value) => value !== undefined)
+  @Transform(trimValue)
+  @IsString()
+  @Matches(/^\d{12}$/, {
+    message: 'Số CCCD phải gồm đúng 12 chữ số.',
+  })
+  citizenId?: string;
+
+  @ApiPropertyOptional({
+    example: 12,
+    minimum: 0,
+    maximum: 365,
+    description: 'Số ngày nghỉ phép năm được cấp cho nhân viên.',
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(365)
+  annualLeaveDays?: number;
 
   @ApiPropertyOptional({
     enum: EmploymentType,

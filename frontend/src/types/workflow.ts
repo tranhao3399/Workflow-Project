@@ -40,6 +40,8 @@ export const formAutoFillSources = [
   'REQUESTER_DEPARTMENT_NAME',
   'REQUESTER_WORK_UNIT_NAME',
   'REQUESTER_POSITION_NAME',
+  'REQUESTER_ANNUAL_LEAVE_DAYS',
+  'REQUESTER_DIRECT_MANAGER_NAME',
   'CURRENT_DATE',
 ] as const
 export type FormAutoFillSource = (typeof formAutoFillSources)[number]
@@ -87,6 +89,7 @@ export interface FormTableColumn {
   placeholder?: string
   options?: FormFieldOption[]
   validation?: FormFieldValidation
+  formula?: string
 }
 
 export interface FormTableConfig {
@@ -110,6 +113,7 @@ export interface FormField {
   validation?: FormFieldValidation
   visibilityCondition?: FormFieldVisibilityCondition
   autoFill?: FormFieldAutoFill
+  formula?: string
   layout?: Record<string, unknown>
   fileConfig?: FormFileConfig
   tableConfig?: FormTableConfig
@@ -126,11 +130,18 @@ export interface DynamicFormValidationResult {
   errors: DynamicFormValidationError[]
 }
 
+export interface FormLeaveDeductionSettings {
+  enabled: boolean
+  fieldKey?: string
+  allowNegative?: boolean
+}
+
 export interface FormSettings {
   allowSaveDraft?: boolean
   allowCancelAfterSubmit?: boolean
   titleTemplate?: string
   instructions?: string
+  leaveDeduction?: FormLeaveDeductionSettings
 }
 
 export interface FormGroupSummary {
@@ -175,6 +186,9 @@ export const approvalModes = ['ANY', 'ALL', 'MAJORITY'] as const
 export type ApprovalMode = (typeof approvalModes)[number]
 export const assigneeRuleTypes = [
   'REQUESTER_DIRECT_MANAGER',
+  'REQUESTER_WORK_UNIT_MANAGER',
+  'REQUESTER_FUNCTIONAL_DEPARTMENT_MANAGER',
+  'REQUESTER_PARENT_WORK_UNIT_MANAGER',
   'REQUESTER_DEPARTMENT_MANAGER',
   'REQUESTER_PARENT_DEPARTMENT_MANAGER',
   'COMPANY_MANAGER',
@@ -184,6 +198,24 @@ export const assigneeRuleTypes = [
   'SPECIFIC_USER',
 ] as const
 export type AssigneeRuleType = (typeof assigneeRuleTypes)[number]
+
+// Legacy rules remain readable for existing workflow definitions, but are not offered for new setup.
+export const legacyAssigneeRuleTypes = [
+  'REQUESTER_DEPARTMENT_MANAGER',
+  'REQUESTER_PARENT_DEPARTMENT_MANAGER',
+] as const
+
+export const selectableAssigneeRuleTypes = [
+  'REQUESTER_DIRECT_MANAGER',
+  'REQUESTER_WORK_UNIT_MANAGER',
+  'REQUESTER_FUNCTIONAL_DEPARTMENT_MANAGER',
+  'REQUESTER_PARENT_WORK_UNIT_MANAGER',
+  'COMPANY_MANAGER',
+  'ROLE',
+  'ROLE_IN_REQUESTER_DEPARTMENT',
+  'POSITION_IN_REQUESTER_DEPARTMENT',
+  'SPECIFIC_USER',
+] as const satisfies readonly AssigneeRuleType[]
 export const workflowConditionSources = ['FORM_FIELD', 'REQUESTER_ATTRIBUTE'] as const
 export type WorkflowConditionSource = (typeof workflowConditionSources)[number]
 
@@ -372,6 +404,10 @@ export interface Request extends RequestSummary {
   workflowDefinitionId: string
   workflowVersion: number
   formData: Record<string, unknown>
+  systemAutoFillValues?: {
+    REQUEST_CODE: string
+    REQUEST_STATUS: string
+  }
   formSnapshot?: FormDefinitionSnapshot
   workflowSnapshot?: WorkflowDefinitionSnapshot
   currentStepKey?: string
@@ -382,6 +418,12 @@ export interface Request extends RequestSummary {
   cancelReason?: string
   voidedAt?: string
   voidReason?: string
+  leaveDeductionApplied?: {
+    fieldKey: string
+    days: number
+    deductedAt: string
+    refundedAt?: string
+  }
   currentApprovalTaskId?: string
   definitionVersion: RequestDefinitionVersion
   availableActions: AvailableActions

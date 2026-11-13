@@ -9,6 +9,7 @@ export const apiErrorCodes = [
   'CONCURRENT_MODIFICATION',
   'DEFINITION_VERSION_OUTDATED',
   'EMAIL_ALREADY_EXISTS',
+  'CITIZEN_ID_ALREADY_EXISTS',
 ] as const
 
 export type ApiErrorCode = (typeof apiErrorCodes)[number]
@@ -49,6 +50,7 @@ const errorMessages: Record<ApiErrorCode, string> = {
   CONCURRENT_MODIFICATION: 'Dữ liệu vừa được thay đổi ở nơi khác. Vui lòng tải lại.',
   DEFINITION_VERSION_OUTDATED: 'Phiếu nháp đang dùng phiên bản Form–Workflow cũ. Hãy tạo phiếu mới từ phiên bản hiện hành.',
   EMAIL_ALREADY_EXISTS: 'Email đã được sử dụng trong hệ thống.',
+  CITIZEN_ID_ALREADY_EXISTS: 'Số CCCD đã được sử dụng cho một nhân viên khác.',
 }
 
 export function normalizeApiErrorCode(code?: string): string | undefined {
@@ -66,4 +68,12 @@ export function isApiErrorCode(error: unknown, code: ApiErrorCode): boolean {
     && error !== null
     && 'code' in error
     && normalizeApiErrorCode(typeof error.code === 'string' ? error.code : undefined) === code
+}
+
+export function vietnameseToastMessage(
+  message: string,
+  fallback: string,
+): string {
+  const technicalEnglish = /\b(failed|failure|error|invalid|unauthorized|forbidden|not found|must|required|cannot|network|fetch|bad request|internal server|already exists|timeout|unknown)\b/i
+  return technicalEnglish.test(message) ? fallback : message
 }

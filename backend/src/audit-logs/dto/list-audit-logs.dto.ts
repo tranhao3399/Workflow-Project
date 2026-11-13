@@ -1,10 +1,28 @@
 import { Type } from 'class-transformer';
-import { IsDateString, IsInt, IsMongoId, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsDateString, IsEnum, IsIn, IsInt, IsMongoId, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { AuditOutcome } from '../enums/audit-outcome.enum.js';
 
 export class ListAuditLogsDto {
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string;
+
+  @IsOptional()
   @IsMongoId()
   actorId?: string;
+
+  @IsOptional()
+  @IsIn(['SYSTEM'])
+  actorType?: string;
+
+  @IsOptional()
+  @IsIn(['AUTH_ACCOUNT', 'EMPLOYEE', 'ORGANIZATION', 'JOB_TITLE', 'WORKSPACE', 'WORKFLOW_FORM'])
+  module?: string;
+
+  @IsOptional()
+  @IsIn(['LOGIN_LOGOUT', 'CREATE', 'UPDATE', 'DELETE', 'APPROVAL'])
+  actionGroup?: string;
 
   @IsOptional()
   @IsString()
@@ -20,6 +38,10 @@ export class ListAuditLogsDto {
   @IsString()
   @MaxLength(100)
   resourceId?: string;
+
+  @IsOptional()
+  @IsEnum(AuditOutcome)
+  outcome?: AuditOutcome;
 
   @IsOptional()
   @IsDateString()

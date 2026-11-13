@@ -8,6 +8,7 @@ import {
   type FormFieldOption,
   type FormFieldType,
 } from '../types/workflow'
+import { evaluateFormCalculations } from './form-calculation'
 
 const textTypes = new Set<FormFieldType>(['TEXT', 'TEXTAREA', 'EMAIL', 'PHONE'])
 const numberTypes = new Set<FormFieldType>(['NUMBER', 'CURRENCY'])
@@ -33,7 +34,7 @@ export function initialDynamicFormValues(
       values[field.key] = Array.from({ length: field.tableConfig!.minRows }, () => ({}))
     }
   }
-  return values
+  return evaluateFormCalculations(fields, values)
 }
 
 export function activeFieldOptions(field: FormField): FormFieldOption[] {
@@ -57,9 +58,10 @@ export function validateDynamicFormData(
   values: Readonly<Record<string, unknown>>,
 ): DynamicFormValidationResult {
   const supported = supportedFormFields(fields)
+  const effectiveValues = evaluateFormCalculations(supported, values)
   const inputFields = supported.filter((field) => field.type !== 'SECTION')
   const byKey = new Map(inputFields.map((field) => [field.key, field]))
-  const visibility = dynamicFieldVisibility(supported, values)
+  const visibility = dynamicFieldVisibility(supported, effectiveValues)
   const errors: DynamicFormValidationError[] = []
 
   for (const key of Object.keys(values)) {
@@ -68,8 +70,8 @@ export function validateDynamicFormData(
 
   for (const field of supported) {
     if (field.type === 'SECTION') continue
-    const value = values[field.key]
-    if (visibility.get(field.key) !== false && field.required && isEmptyValue(value)) {
+    const value = effectiveValues[field.key]
+    if (visibility.get(field.key) !== false && field.required && !field.formula?.trim() && isEmptyValue(value)) {
       errors.push({ fieldKey: field.key, code: 'REQUIRED', message: `${field.label} là bắt buộc.` })
       continue
     }
@@ -225,7 +227,7 @@ function validateTableValue(field: FormField, value: unknown, errors: DynamicFor
     config.columns.forEach((column) => {
       const cellKey = `${field.key}.${rowIndex}.${column.key}`
       const cellValue = row[column.key]
-      if (column.required && isEmptyValue(cellValue)) {
+      if (column.required && !column.formula?.trim() && isEmptyValue(cellValue)) {
         errors.push({ fieldKey: cellKey, code: 'REQUIRED', message: `Dòng ${rowIndex + 1} - ${column.label} là bắt buộc.` })
       } else if (!isEmptyValue(cellValue)) {
         validateFieldValue({ ...column, key: cellKey, label: `Dòng ${rowIndex + 1} - ${column.label}` }, cellValue, errors)

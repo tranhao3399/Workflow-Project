@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { ApiError } from '../../services/api-client'
 import { publishDefinitionPackage } from '../../services/definition-packages.service'
-import { cloneFormDefinition, listFormDefinitions } from '../../services/form-definitions.service'
+import { cloneFormDefinition, listAllFormDefinitions } from '../../services/form-definitions.service'
 import {
   cloneWorkflowDefinition,
   createWorkflowDefinition,
@@ -16,7 +17,7 @@ import { isApiErrorCode } from '../../utils/api-errors'
 import { DefinitionStatusBadge } from '../StatusBadge'
 import { ErrorState, LoadingState } from '../DataStates'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
-import { PageHeader } from '../ui/PageHeader'
+import { FilterSelect } from '../ui/FilterSelect'
 import { SurfaceCard } from '../ui/SurfaceCard'
 import { defaultWorkflowBpmnXml, type BpmnNodePatch, type BpmnNodeSelection } from './bpmn-workflow'
 import { WorkflowGraphCanvas, type WorkflowGraphCanvasHandle } from './WorkflowGraphCanvas'
@@ -56,6 +57,7 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
   const [forms, setForms] = useState<FormDefinition[]>([])
   const [referenceData, setReferenceData] = useState<WorkflowBuilderReferenceData>(emptyReferenceData)
   const [selection, setSelection] = useState<BpmnNodeSelection | null>(null)
+  const [isInfoCollapsed, setIsInfoCollapsed] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
@@ -72,13 +74,13 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
     let current = true
     const load = async () => {
       try {
-        const [formResult, references, workflow] = await Promise.all([
-          listFormDefinitions({ page: 1, limit: 100, sortBy: 'updatedAt', sortOrder: 'desc' }),
+        const [availableForms, references, workflow] = await Promise.all([
+          listAllFormDefinitions({ sortBy: 'updatedAt', sortOrder: 'desc' }),
           getWorkflowBuilderReferenceData(),
           workflowDefinitionId ? getWorkflowDefinition(workflowDefinitionId) : Promise.resolve(null),
         ])
         if (!current) return
-        setForms(formResult.data)
+        setForms(availableForms)
         setReferenceData(references)
         if (workflow) {
           if (!workflow.bpmnXml) throw new Error('Workflow này chưa có BPMN XML hợp lệ.')
@@ -88,7 +90,7 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
           setOriginalFingerprint(fingerprint(next))
           setCanvasXml(workflow.bpmnXml)
         } else {
-          const form = formResult.data.find((item) => item.id === initialFormDefinitionId)
+          const form = availableForms.find((item) => item.id === initialFormDefinitionId)
           const next = form ? initialDraft(form.id, form.code, form.name) : initialDraft(initialFormDefinitionId)
           setDefinition(null)
           setDraft(next)
@@ -284,8 +286,8 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
       try {
         targetForm = await cloneFormDefinition(definition.formDefinitionId)
       } catch (error) {
-        const candidates = await listFormDefinitions({ search: definition.formDefinition.code, status: 'DRAFT', page: 1, limit: 100 })
-        const existing = candidates.data.find((form) => form.code === definition.formDefinition?.code)
+        const candidates = await listAllFormDefinitions({ search: definition.formDefinition.code, status: 'DRAFT' })
+        const existing = candidates.find((form) => form.code === definition.formDefinition?.code)
         if (!existing) throw error
         targetForm = existing
       }
@@ -347,16 +349,71 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
   if (isLoading) return <LoadingState />
   if (loadError) return <ErrorState onRetry={() => { setIsLoading(true); setLoadError(false); setReloadVersion((value) => value + 1) }} />
 
+  const pageTitle = definition?.name ?? 'Tạo Workflow'
+  const metadataIssue = (path: string) => serverIssues.find((issue) => !issue.elementId && issue.path === path)?.message
+
   return <>
-    <PageHeader title={definition?.name ?? 'Tạo Workflow'} description={definition ? `${definition.code} · Phiên bản ${definition.version}` : 'Thiết kế quy trình bằng BPMN với tập phần tử hệ thống hỗ trợ.'} actions={<>
-      <button className="secondary-button" type="button" onClick={back}>← Quay lại</button>
-      {!isDraft && canCloneWorkflow && definition?.formDefinition?.status === 'PUBLISHED' && <button className="primary-button" type="button" disabled={isCloning} onClick={() => setConfirmAction('CLONE_WORKFLOW')}>Chỉ cập nhật quy trình</button>}
-      {!isDraft && canClonePackage && <button className="secondary-button" type="button" disabled={isCloning} onClick={() => setConfirmAction('CLONE_PACKAGE')}>Tạo phiên bản Form + Workflow</button>}
-      {definition?.status === 'DRAFT' && canDeleteDraft && <button className="danger-button" type="button" onClick={() => setConfirmAction('DELETE')}>Xóa bản nháp</button>}
-    </>}>{definition && <div className="form-builder-header-status"><DefinitionStatusBadge status={definition.status} /></div>}</PageHeader>
+    <nav className="detail-breadcrumb" aria-label="Điều hướng Workflow">
+      <button className="breadcrumb-link" type="button" onClick={back}>Workflow Builder</button>
+      <span aria-hidden="true">/</span>
+      <strong>{pageTitle}</strong>
+    </nav>
+
+    <section className="department-detail-summary form-builder-detail-summary">
+      <div className="department-detail-summary-main form-builder-summary-main">
+        <h1>{pageTitle}</h1>
+        {definition && <span className="form-builder-version-pill">Phiên bản {definition.version}</span>}
+      </div>
+      <div className="department-detail-actions">
+        <button className="secondary-button compact-button" type="button" onClick={back} disabled={isSaving || isPublishing}>← Quay lại</button>
+        {!isDraft && canCloneWorkflow && definition?.formDefinition?.status === 'PUBLISHED' && <button className="primary-button compact-button" type="button" disabled={isCloning} onClick={() => setConfirmAction('CLONE_WORKFLOW')}>Chỉ cập nhật quy trình</button>}
+        {!isDraft && canClonePackage && <button className="secondary-button compact-button" type="button" disabled={isCloning} onClick={() => setConfirmAction('CLONE_PACKAGE')}>Tạo phiên bản Form + Workflow</button>}
+        {definition?.status === 'DRAFT' && canDeleteDraft && <button className="danger-outline-button compact-button form-builder-delete-draft-button" type="button" disabled={isSaving} onClick={() => setConfirmAction('DELETE')}>Xóa bản nháp</button>}
+        {isEditable && <button className="secondary-button compact-button" type="button" disabled={isSaving || isValidating || isPublishing || (!isDirty && Boolean(definition))} onClick={() => void save()}>{isSaving ? 'Đang lưu...' : 'Lưu nháp'}</button>}
+        {isEditable && <button className="secondary-button compact-button" type="button" disabled={isSaving || isValidating || isPublishing} onClick={() => void validateDiagram()}>{isValidating ? 'Đang kiểm tra...' : 'Kiểm tra quy trình'}</button>}
+        {isEditable && canPublish && <button className="primary-button compact-button" type="button" disabled={isSaving || isValidating || isPublishing} onClick={() => setConfirmAction('PUBLISH')}>{isPublishing ? 'Đang công bố...' : 'Công bố'}</button>}
+      </div>
+    </section>
+
     {!isDraft && <div className="form-builder-readonly-notice">Workflow đã công bố được mở bằng BPMN Viewer. Hãy tạo phiên bản mới để chỉnh sửa.</div>}
     {!isEditable && isDraft && <div className="form-builder-readonly-notice">Bạn chưa được cấp quyền chỉnh sửa Workflow này.</div>}
     {generalError && <div className="form-builder-server-error" role="alert">{generalError}</div>}
+
+    <SurfaceCard className="form-builder-info-card workflow-builder-info-card">
+      <div className={`form-builder-info-heading${isInfoCollapsed ? ' is-collapsed' : ''}`}>
+        <div className="form-builder-info-title"><h2>Thông tin Workflow</h2></div>
+        <button className="form-builder-info-toggle" type="button" aria-expanded={!isInfoCollapsed} aria-controls="workflow-builder-general-information" onClick={() => setIsInfoCollapsed((current) => !current)}>
+          {isInfoCollapsed ? 'Mở rộng' : 'Thu gọn'}
+          {isInfoCollapsed ? <ChevronDown size={15} strokeWidth={1.8} aria-hidden="true" /> : <ChevronUp size={15} strokeWidth={1.8} aria-hidden="true" />}
+        </button>
+      </div>
+      {!isInfoCollapsed && <div id="workflow-builder-general-information" className="form-builder-info-grid">
+        <label className="form-builder-top-field">
+          <span className="required-field-label">Mã Workflow</span>
+          <input placeholder="VD: QUY_TRINH_NGHI_PHEP" value={draft.code} disabled={!isEditable || Boolean(definition)} maxLength={80} aria-invalid={Boolean(metadataIssue('code'))} onChange={(event) => changeDraft({ code: event.target.value.toUpperCase() })} />
+          {metadataIssue('code') && <small className="field-error">{metadataIssue('code')}</small>}
+        </label>
+        <label className="form-builder-top-field">
+          <span className="required-field-label">Tên Workflow</span>
+          <input placeholder="VD: Quy trình duyệt nghỉ phép" value={draft.name} disabled={!isEditable} maxLength={160} aria-invalid={Boolean(metadataIssue('name'))} onChange={(event) => changeDraft({ name: event.target.value })} />
+          {metadataIssue('name') && <small className="field-error">{metadataIssue('name')}</small>}
+        </label>
+        <div className="form-builder-top-field">
+          <span className="required-field-label">Biểu mẫu liên kết</span>
+          <FilterSelect disabled={!isEditable || Boolean(definition)} ariaLabel="Chọn biểu mẫu liên kết" value={draft.formDefinitionId} options={[{ value: '', label: 'Chọn biểu mẫu nháp hoặc đã phát hành' }, ...availableForms.map((form) => ({ value: form.id, label: `${form.code} · v${form.version} · ${form.name}` }))]} onChange={(value) => changeDraft({ formDefinitionId: value })} />
+          {metadataIssue('formDefinitionId') && <small className="field-error">{metadataIssue('formDefinitionId')}</small>}
+        </div>
+        <label className="form-builder-top-field form-builder-top-field-description">
+          <span>Mô tả</span>
+          <textarea placeholder="Mục đích hoặc phạm vi áp dụng của quy trình" value={draft.description} disabled={!isEditable} rows={1} maxLength={2000} onChange={(event) => changeDraft({ description: event.target.value })} />
+        </label>
+        <div className="form-builder-top-field">
+          <span>Trạng thái</span>
+          <div className="form-builder-status-field" aria-label="Trạng thái Workflow"><DefinitionStatusBadge status={definition?.status ?? 'DRAFT'} /></div>
+        </div>
+      </div>}
+    </SurfaceCard>
+
     <SurfaceCard className="workflow-builder-editor-card">
       <div className="form-builder-editor-toolbar"><strong>Sơ đồ BPMN</strong><span>{serverIssues.length ? `${serverIssues.length} lỗi cần xử lý` : 'Start Event · User Task · Exclusive Gateway · End Event'}</span></div>
       {serverIssues.length > 0 && <div className="workflow-validation-list" role="alert">{serverIssues.map((issue, index) => <button key={`${issue.code}-${issue.elementId ?? issue.path}-${index}`} type="button" onClick={() => focusIssue(issue)}><strong>{issue.elementId ?? issue.stepKey ?? issue.path}</strong><span>{issue.message}</span></button>)}</div>}
@@ -370,7 +427,7 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
           onChanged={diagramChanged}
           onError={(message) => { setGeneralError(message); onNotify(message, 'error') }}
         /></main>
-        <aside className="workflow-builder-properties"><div className="form-builder-pane-heading"><div><h2>{selection ? 'Thuộc tính phần tử' : 'Thuộc tính Workflow'}</h2><p>{selection ? 'Cấu hình metadata nghiệp vụ trong BPMN XML.' : 'Cấu hình phiên bản và Form liên kết.'}</p></div>{selection && <button className="text-action-button" type="button" onClick={() => setSelection(null)}>Workflow</button>}</div><WorkflowPropertiesPanel
+        <aside className="workflow-builder-properties"><div className="form-builder-pane-heading"><div><h2>Thuộc tính phần tử</h2><p>{selection ? 'Cấu hình nghiệp vụ cho phần tử đang chọn.' : 'Chọn một phần tử trên sơ đồ để cấu hình.'}</p></div>{selection && <button className="text-action-button" type="button" onClick={() => setSelection(null)}>Bỏ chọn</button>}</div>{selection ? <WorkflowPropertiesPanel
           workflow={draft}
           definition={definition}
           forms={availableForms}
@@ -382,14 +439,9 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
           onNodeChange={changeNode}
           onDeleteNode={() => canvasRef.current?.deleteSelected()}
           onClearSelection={() => setSelection(null)}
-        /></aside>
+        /> : <div className="workflow-properties-empty"><strong>Chưa chọn phần tử</strong><p>Chọn bước phê duyệt, điều kiện hoặc điểm kết thúc trên sơ đồ để chỉnh sửa thuộc tính.</p></div>}</aside>
       </div>
     </SurfaceCard>
-    {isEditable && <div className="workflow-builder-action-bar"><div><strong>{isDirty ? 'Có thay đổi chưa lưu' : 'Workflow đã được lưu'}</strong><span>Backend biên dịch BPMN XML thành các bước thực thi khi lưu.</span></div><div>
-      <button className="secondary-button" type="button" disabled={isSaving || isValidating || isPublishing} onClick={() => void save()}>{isSaving ? 'Đang lưu...' : 'Lưu nháp'}</button>
-      <button className="secondary-button" type="button" disabled={isSaving || isValidating || isPublishing} onClick={() => void validateDiagram()}>{isValidating ? 'Đang kiểm tra...' : 'Kiểm tra quy trình'}</button>
-      {canPublish && <button className="primary-button" type="button" disabled={isSaving || isValidating || isPublishing} onClick={() => setConfirmAction('PUBLISH')}>{isPublishing ? 'Đang công bố...' : 'Công bố'}</button>}
-    </div></div>}
     {confirmAction === 'DELETE' && <ConfirmDialog title="Xóa Workflow nháp" description="Bạn có chắc chắn muốn xóa Workflow nháp này?" confirmLabel="Xóa" tone="danger" onCancel={() => setConfirmAction(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." compact />}
     {confirmAction === 'CLONE_WORKFLOW' && <ConfirmDialog title="Chỉ cập nhật quy trình?" description={`Hệ thống sẽ tạo Workflow DRAFT mới và giữ nguyên Form v${definition?.formDefinition?.version ?? ''}.`} confirmLabel="Tạo Workflow mới" onCancel={() => setConfirmAction(null)} onConfirm={() => void cloneVersion('WORKFLOW_ONLY')} isConfirming={isCloning} confirmingLabel="Đang tạo..." />}
     {confirmAction === 'CLONE_PACKAGE' && <ConfirmDialog title="Tạo phiên bản Form + Workflow?" description="Hệ thống sẽ clone Form và toàn bộ BPMN XML thành một cặp DRAFT mới." confirmLabel="Tạo full package" onCancel={() => setConfirmAction(null)} onConfirm={() => void cloneVersion('FULL_PACKAGE')} isConfirming={isCloning} confirmingLabel="Đang tạo..." />}

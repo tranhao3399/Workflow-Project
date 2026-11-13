@@ -156,4 +156,47 @@ describe('request-data autoFill helpers', () => {
       reason: 'Nghỉ phép năm',
     });
   });
+
+  it('given annual leave and direct manager autoFill fields including zero balance, when initializing and enforcing form data, then numeric balance and manager name are preserved and cannot be spoofed', () => {
+    const leaveFields = [
+      {
+        key: 'annual_leave_days',
+        label: 'Số ngày phép còn lại',
+        type: 'NUMBER',
+        required: false,
+        order: 10,
+        autoFill: { source: 'REQUESTER_ANNUAL_LEAVE_DAYS', readOnly: true },
+      },
+      {
+        key: 'direct_manager_name',
+        label: 'Quản lý trực tiếp',
+        type: 'TEXT',
+        required: false,
+        order: 20,
+        autoFill: { source: 'REQUESTER_DIRECT_MANAGER_NAME', readOnly: true },
+      },
+    ];
+    const zeroProfile: RequestActorAutoFillProfile = {
+      ...sampleProfile,
+      availableAnnualLeaveDays: 0,
+      directManagerName: 'Trần Quốc Bảo',
+    };
+
+    const initial = buildInitialRequestFormData(leaveFields, zeroProfile);
+    expect(initial).toEqual({
+      annual_leave_days: 0,
+      direct_manager_name: 'Trần Quốc Bảo',
+    });
+
+    const enforced = enforceLockedAutoFillFormData(
+      leaveFields,
+      { annual_leave_days: 99, direct_manager_name: 'Giả Mạo' },
+      initial,
+      { ...sampleProfile, availableAnnualLeaveDays: 7.5, directManagerName: 'Trần Quốc Bảo' },
+    );
+    expect(enforced).toEqual({
+      annual_leave_days: 7.5,
+      direct_manager_name: 'Trần Quốc Bảo',
+    });
+  });
 });

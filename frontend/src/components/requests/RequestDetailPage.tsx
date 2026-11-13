@@ -21,6 +21,7 @@ import {
   type Request as RequestRecord,
 } from '../../types/workflow'
 import { isApiErrorCode } from '../../utils/api-errors'
+import { formatAuditSentence } from '../../utils/audit-display'
 import { notifyRequestMutation } from '../../utils/request-events'
 import { formatDateTime } from '../../utils/formatters'
 import { workflowStatusLabel } from '../../utils/workflow-status'
@@ -44,22 +45,6 @@ interface RequestDetailPageProps {
 type ConfirmAction = 'cancel' | 'void' | 'delete'
 type DecisionAction = 'approve' | 'reject' | 'revision'
 type AccessError = 'forbidden' | 'not-found' | 'general' | null
-
-const historyLabels: Record<ApprovalHistory['action'], string> = {
-  CREATED: 'Tạo phiếu nháp',
-  SUBMITTED: 'Gửi phiếu',
-  ASSIGNED: 'Giao phê duyệt',
-  CONDITION_EVALUATED: 'Đánh giá điều kiện',
-  APPROVED: 'Đã phê duyệt',
-  REJECTED: 'Đã từ chối',
-  REVISION_REQUESTED: 'Yêu cầu bổ sung',
-  REASSIGNED: 'Chuyển người phê duyệt',
-  RESUBMITTED: 'Gửi lại phiếu',
-  CANCELLED: 'Đã hủy',
-  VOIDED: 'Đã vô hiệu hóa',
-  AUTO_SKIPPED: 'Tự động bỏ qua',
-  COMPLETED: 'Hoàn tất quy trình',
-}
 
 export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, onDeleted, onOpenRequest, onNotify }: RequestDetailPageProps) {
   const rendererRef = useRef<DynamicFormRendererHandle>(null)
@@ -344,6 +329,21 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
       <div><span>Cập nhật</span><strong>{formatDateTime(request.updatedAt)}</strong></div>
     </SurfaceCard>
 
+    {request.leaveDeductionApplied && (
+      <section className="request-leave-deduction-callout" role="status">
+        <strong>
+          {request.leaveDeductionApplied.refundedAt
+            ? `Đã hoàn lại ${request.leaveDeductionApplied.days} ngày phép năm`
+            : `Đã trừ ${request.leaveDeductionApplied.days} ngày phép năm`}
+        </strong>
+        <span>
+          {request.leaveDeductionApplied.refundedAt
+            ? `Hoàn quỹ phép lúc ${formatDateTime(request.leaveDeductionApplied.refundedAt)} sau khi vô hiệu hóa phiếu (đã khấu trừ lúc ${formatDateTime(request.leaveDeductionApplied.deductedAt)}).`
+            : `Khấu trừ tự động từ trường "${request.leaveDeductionApplied.fieldKey}" khi phê duyệt lúc ${formatDateTime(request.leaveDeductionApplied.deductedAt)}.`}
+        </span>
+      </section>
+    )}
+
     {request.definitionVersion.status === 'OUTDATED' && (
       <section className="request-version-callout" role="alert">
         <div>
@@ -383,7 +383,7 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
           ref={rendererRef}
           formSnapshot={request.formSnapshot}
           initialValues={request.formData}
-          systemAutoFillValues={{
+          systemAutoFillValues={request.systemAutoFillValues ?? {
             REQUEST_CODE: request.requestNo,
             REQUEST_STATUS: request.currentStepName
               ? `${workflowStatusLabel(request.status)} · ${request.currentStepName}`
@@ -400,7 +400,7 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
         <header className="request-section-heading"><div><h2>Lịch sử xử lý</h2><p>{history.length} hoạt động</p></div></header>
         {history.length === 0 ? <p className="request-history-empty">Chưa có lịch sử xử lý.</p> : <ol className="request-timeline">{history.map((item) => <li key={item._id} className={item.action === 'REVISION_REQUESTED' ? 'is-revision' : ''}>
           <span className="request-timeline-marker" aria-hidden="true" />
-          <div><strong>{historyLabels[item.action]}</strong><time>{formatDateTime(item.occurredAt)}</time>{(historyRevisionRound(item) !== undefined || item.stepRunNo !== undefined) && <span className="request-history-cycle">Vòng bổ sung {historyRevisionRound(item) ?? 0} · Lần chạy bước {item.stepRunNo ?? '—'}</span>}{item.actorSnapshot && <span>{actorName(item)}</span>}{item.comment && <p>{item.comment}</p>}</div>
+          <div><strong className="request-timeline-actor">{formatAuditSentence({ action: item.action, actor: item.actorSnapshot ? { userId: item.actorUserId, fullName: actorName(item), employeeCode: item.actorSnapshot.employeeCode } : undefined, currentUserId, resourceType: 'REQUEST', resourceName: request.title ? `${request.title} (${request.requestNo})` : request.requestNo })}</strong><time>{formatDateTime(item.occurredAt)}</time>{(historyRevisionRound(item) !== undefined || item.stepRunNo !== undefined) && <span className="request-history-cycle">Vòng bổ sung {historyRevisionRound(item) ?? 0} · Lần chạy bước {item.stepRunNo ?? '—'}</span>}{item.comment && <p>{item.comment}</p>}</div>
         </li>)}</ol>}
       </SurfaceCard>
     </div>
@@ -411,7 +411,7 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
         {canRequestRevision && <button className="secondary-button" type="button" disabled={Boolean(mutation)} onClick={() => { setDecisionComment(''); setDecisionAction('revision') }}>Yêu cầu bổ sung</button>}
         {canReject && <button className="danger-button" type="button" disabled={Boolean(mutation)} onClick={() => { setDecisionComment(''); setDecisionAction('reject') }}>Từ chối</button>}
         {canApprove && <button className="primary-button" type="button" disabled={Boolean(mutation)} onClick={() => { setDecisionComment(''); setDecisionAction('approve') }}>Phê duyệt</button>}
-        {request.availableActions.canDelete && <button className="danger-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('delete') }}>Xóa phiếu nháp</button>}
+        {request.availableActions.canDelete && <button className="danger-outline-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('delete') }}>Xóa phiếu nháp</button>}
         {request.availableActions.canCancel && <button className="secondary-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('cancel') }}>Hủy phiếu</button>}
         {request.availableActions.canVoid && <button className="danger-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('void') }}>Vô hiệu hóa</button>}
         {editable && <button className="secondary-button" type="button" disabled={Boolean(mutation) || !isDirty} onClick={() => void saveDraft()}>{mutation === 'save' ? 'Đang lưu...' : 'Lưu nháp'}</button>}

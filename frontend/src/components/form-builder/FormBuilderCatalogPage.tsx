@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, CopyPlus, FolderInput, FolderOpen, Settings2, Trash2 } from 'lucide-react'
-import { ApiError } from '../../services/api-client'
+import { ArrowLeft, CopyPlus, FolderOpen, Settings2 } from 'lucide-react'
 import {
   cloneFormDefinition,
-  assignFormDefinitionGroup,
-  deleteFormDefinition,
   listFormDefinitions,
   listFormGroups,
 } from '../../services/form-definitions.service'
@@ -19,7 +16,6 @@ import { formatDateTime, normalizeSearchText } from '../../utils/formatters'
 import { DefinitionStatusBadge } from '../StatusBadge'
 import { EmptyState, ErrorState, LoadingState } from '../DataStates'
 import { AdvancedFilterPanel } from '../ui/AdvancedFilterPanel'
-import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { DataTable, EmptyTableRow } from '../ui/DataTable'
 import { FilterSelect } from '../ui/FilterSelect'
 import { ListToolbar } from '../ui/ListToolbar'
@@ -86,12 +82,7 @@ export function FormBuilderCatalogPage({
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [hasError, setHasError] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
-  const [deleteTarget, setDeleteTarget] = useState<FormDefinition | null>(null)
-  const [isDeleting, setIsDeleting] = useState(false)
   const [cloningId, setCloningId] = useState<string | null>(null)
-  const [moveTarget, setMoveTarget] = useState<FormDefinition | null>(null)
-  const [moveGroupId, setMoveGroupId] = useState('')
-  const [isMoving, setIsMoving] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
   const allGroups = useMemo<CatalogGroup[]>(() => [
@@ -181,38 +172,6 @@ export function FormBuilderCatalogPage({
     }
   }
 
-  async function remove() {
-    if (!deleteTarget) return
-    setIsDeleting(true)
-    try {
-      await deleteFormDefinition(deleteTarget.id)
-      onNotify('Xóa biểu mẫu nháp thành công.')
-      setDeleteTarget(null)
-      setReloadVersion((value) => value + 1)
-      await loadGroups()
-    } catch (error) {
-      onNotify(error instanceof ApiError ? error.message : 'Không thể xóa biểu mẫu nháp.', 'error')
-    } finally {
-      setIsDeleting(false)
-    }
-  }
-
-  async function moveForm() {
-    if (!moveTarget || isMoving) return
-    setIsMoving(true)
-    try {
-      await assignFormDefinitionGroup(moveTarget.id, moveGroupId || null)
-      onNotify('Đã chuyển nhóm biểu mẫu.')
-      setMoveTarget(null)
-      await loadGroups()
-      setReloadVersion((value) => value + 1)
-    } catch (error) {
-      onNotify(error instanceof Error ? error.message : 'Không thể chuyển nhóm biểu mẫu.', 'error')
-    } finally {
-      setIsMoving(false)
-    }
-  }
-
   function openGroup(group: CatalogGroup) {
     setSelectedGroupId(group.id)
     setSearchInput('')
@@ -279,6 +238,16 @@ export function FormBuilderCatalogPage({
   }
 
   return <>
+    {selectedGroup && (
+      <nav className="detail-breadcrumb" aria-label="Điều hướng quản lý biểu mẫu">
+        <button className="breadcrumb-link" type="button" onClick={backToGroups}>
+          Quản lý biểu mẫu
+        </button>
+        <span aria-hidden="true">/</span>
+        <strong>Nhóm: {selectedGroup.name}</strong>
+      </nav>
+    )}
+
     <PageHeader
       className="catalog-page-header"
       title={selectedGroup ? selectedGroup.name : 'Quản lý biểu mẫu'}
@@ -331,32 +300,22 @@ export function FormBuilderCatalogPage({
             <SortableTableHeader column="updatedAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Cập nhật lúc</SortableTableHeader>
             <th aria-label="Thao tác" />
           </tr></thead>
-          <tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không tìm thấy biểu mẫu phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id} onClick={() => onOpen(item.id)}>
-            <td><button className="master-code-link" type="button" onClick={(event) => { event.stopPropagation(); onOpen(item.id) }}>{item.code}</button></td>
-            <td><div className="form-builder-catalog-title"><strong>{item.name}</strong>{item.description && <small>{item.description}</small>}</div></td>
+          <tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không tìm thấy biểu mẫu phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id}>
+            <td><button className="master-code-link" type="button" onClick={() => onOpen(item.id)}>{item.code}</button></td>
+            <td><div className="form-builder-catalog-title"><strong>{item.name}</strong></div></td>
             <td><span className="form-builder-version-text">v{item.version}</span></td>
             <td><span className="form-builder-field-count-badge">{item.fields.length} trường</span></td>
             <td><DefinitionStatusBadge status={item.status} /></td><td>{item.updatedBy?.name ?? '—'}</td><td>{formatDateTime(item.updatedAt, 'date-first')}</td>
             <td><div className="form-builder-row-actions">
-              {canUpdate && <button className="icon-action" type="button" title="Chuyển nhóm" aria-label={`Chuyển nhóm ${item.name}`} onClick={(event) => { event.stopPropagation(); setMoveTarget(item); setMoveGroupId(item.group?.id ?? '') }}><FolderInput size={14} /></button>}
-              {item.status !== 'DRAFT' && canCreate && <button className="secondary-button form-builder-clone-btn" type="button" disabled={cloningId === item.id} onClick={(event) => { event.stopPropagation(); void clone(item) }}><CopyPlus size={13} /><span>{cloningId === item.id ? 'Đang tạo...' : 'Tạo bản nháp'}</span></button>}
-              {item.status === 'DRAFT' && canDeleteDraft && <button className="icon-action danger-icon-action" type="button" title="Xóa bản nháp" aria-label={`Xóa ${item.name}`} onClick={(event) => { event.stopPropagation(); setDeleteTarget(item) }}><Trash2 size={14} /></button>}
+              {item.status !== 'DRAFT' && canCreate && <button className="secondary-button form-builder-clone-btn" type="button" disabled={cloningId === item.id} onClick={() => void clone(item)}><CopyPlus size={13} /><span>{cloningId === item.id ? 'Đang tạo...' : 'Tạo bản nháp'}</span></button>}
             </div></td>
           </tr>)}</tbody>
         </DataTable>
-        <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setIsLoading(true); setPage((value) => Math.max(1, value - 1)) }} onNext={() => { setIsLoading(true); setPage((value) => Math.min(totalPages, value + 1)) }} rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} biểu mẫu`} pageSize={limit} pageSizes={pageSizes} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
+        <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setIsLoading(true); setPage((value) => Math.max(1, value - 1)) }} onNext={() => { setIsLoading(true); setPage((value) => Math.min(totalPages, value + 1)) }} onPageChange={(value) => { setIsLoading(true); setPage(value) }} rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} biểu mẫu`} pageSize={limit} pageSizes={pageSizes} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
       </>}
     </SurfaceCard>
 
     {isManagingGroups && <FormGroupManagerDialog groups={groups} canCreate={canCreate} canUpdate={canUpdate} canDelete={canDeleteDraft} onClose={() => setIsManagingGroups(false)} onChanged={async () => { await loadGroups(); setReloadVersion((value) => value + 1) }} onNotify={onNotify} />}
-    {moveTarget && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isMoving) setMoveTarget(null) }}>
-      <section className="modal-panel form-group-move-modal" role="dialog" aria-modal="true" aria-labelledby="move-form-group-title">
-        <header className="modal-header"><div><h2 id="move-form-group-title">Chuyển nhóm biểu mẫu</h2><p>{moveTarget.code} - {moveTarget.name}</p></div><button className="icon-close" type="button" aria-label="Đóng" disabled={isMoving} onClick={() => setMoveTarget(null)}>×</button></header>
-        <div className="form-group-move-body"><label><span>Nhóm biểu mẫu</span><FilterSelect ariaLabel="Chọn nhóm biểu mẫu" value={moveGroupId} options={[{ value: '', label: 'Chưa phân nhóm' }, ...groups.filter((group) => group.isActive || group.id === moveTarget.group?.id).map((group) => ({ value: group.id, label: group.name }))]} onChange={setMoveGroupId} disabled={isMoving} /></label></div>
-        <footer className="modal-actions form-group-move-actions"><button className="secondary-button" type="button" disabled={isMoving} onClick={() => setMoveTarget(null)}>Hủy</button><button className="primary-button" type="button" disabled={isMoving || moveGroupId === (moveTarget.group?.id ?? '')} onClick={() => void moveForm()}>{isMoving ? 'Đang chuyển...' : 'Chuyển nhóm'}</button></footer>
-      </section>
-    </div>}
-    {deleteTarget && <ConfirmDialog title="Xóa biểu mẫu nháp" description={`Bạn có chắc chắn muốn xóa biểu mẫu ${deleteTarget.code} phiên bản ${deleteTarget.version}?`} confirmLabel="Xóa" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." compact />}
   </>
 }
 

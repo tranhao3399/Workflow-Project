@@ -107,10 +107,10 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
       </div></ListToolbar>
       {isLoading && !items.length ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }} /> : <>
         <DataTable className="admin-table workflow-builder-table" fixedLayout><thead><tr>
-          <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã Workflow</SortableTableHeader>
-          <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Tên Workflow</SortableTableHeader>
-          <th>Form</th><th>Form version</th>
-          <SortableTableHeader column="version" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Workflow version</SortableTableHeader>
+          <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã quy trình</SortableTableHeader>
+          <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Tên quy trình</SortableTableHeader>
+          <th>Biểu mẫu</th><th>Phiên bản biểu mẫu</th>
+          <SortableTableHeader column="version" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Phiên bản quy trình</SortableTableHeader>
           <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
           <SortableTableHeader column="updatedAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Ngày cập nhật</SortableTableHeader>
           <th aria-label="Thao tác" />
@@ -124,7 +124,7 @@ export function WorkflowBuilderCatalogPage({ canCreate, canDeleteDraft, onCreate
               <td>{formatDateTime(item.updatedAt, 'date-first')}</td>
           <td><div className="form-builder-row-actions">{item.status === 'DRAFT' && canDeleteDraft && <button className="icon-action danger-icon-action" type="button" title="Xóa bản nháp" aria-label={`Xóa ${item.name}`} onClick={(event) => { event.stopPropagation(); setDeleteTarget(item) }}>×</button>}</div></td>
         </tr>)}</tbody></DataTable>
-        <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setIsLoading(true); setPage((value) => Math.max(1, value - 1)) }} onNext={() => { setIsLoading(true); setPage((value) => Math.min(totalPages, value + 1)) }} rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} Workflow`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
+        <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setIsLoading(true); setPage((value) => Math.max(1, value - 1)) }} onNext={() => { setIsLoading(true); setPage((value) => Math.min(totalPages, value + 1)) }} onPageChange={(value) => { setIsLoading(true); setPage(value) }} rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} Workflow`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
       </>}
     </SurfaceCard>
     {deleteTarget && <ConfirmDialog title="Xóa Workflow nháp" description={`Bạn có chắc chắn muốn xóa Workflow ${deleteTarget.code} phiên bản ${deleteTarget.version}?`} confirmLabel="Xóa" tone="danger" onCancel={() => setDeleteTarget(null)} onConfirm={() => void remove()} isConfirming={isDeleting} confirmingLabel="Đang xóa..." compact />}

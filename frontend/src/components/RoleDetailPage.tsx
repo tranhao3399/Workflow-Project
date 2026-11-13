@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { ApiError } from '../services/api-client'
 import { createRoleFromApi, deleteRoleFromApi, getPermissionRegistryFromApi, getRoleAuditLogs, getRoleFromApi, updateRoleFromApi, updateRoleStatusFromApi } from '../services/roles.service'
 import type { PermissionDefinition, RoleAuditLog, RoleRecord } from '../types/roles'
-import { auditActorLabel, auditChangeDetails, auditValue } from '../utils/audit-display'
+import { auditChangeDetails, auditValue, formatAuditSentence } from '../utils/audit-display'
 import { formatDateTime, normalizeSearchText } from '../utils/formatters'
 import { ErrorState, LoadingState } from './DataStates'
 import { ConfirmDialog } from './ui/ConfirmDialog'
@@ -33,7 +33,6 @@ interface PermissionModule {
   permissions: PermissionDefinition[]
 }
 
-type MatrixColumn = 'VIEW' | 'CREATE' | 'UPDATE' | 'DELETE'
 type PermissionGroup = 'PROCESS_OPERATIONS' | 'ORGANIZATION' | 'SYSTEM_ADMINISTRATION'
 type RoleField = 'name' | 'key'
 type FieldErrors = Partial<Record<RoleField, string>>
@@ -42,13 +41,6 @@ interface PermissionGroupDefinition {
   key: PermissionGroup
   label: string
 }
-
-const matrixColumns: Array<{ key: MatrixColumn; label: string }> = [
-  { key: 'VIEW', label: 'Xem' },
-  { key: 'CREATE', label: 'Tạo' },
-  { key: 'UPDATE', label: 'Chỉnh sửa' },
-  { key: 'DELETE', label: 'Xóa' },
-]
 
 const permissionGroups: PermissionGroupDefinition[] = [
   { key: 'PROCESS_OPERATIONS', label: 'Quy trình & vận hành' },
@@ -73,7 +65,12 @@ const moduleDisplayOrder: Record<string, number> = {
   AUDIT_LOG: 40,
 }
 
-const emptyForm: RoleFormState = { name: '', key: '', permissionKeys: [], isActive: true }
+const emptyForm: RoleFormState = {
+  name: '',
+  key: '',
+  permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW'],
+  isActive: true,
+}
 
 function groupForModule(moduleKey: string): PermissionGroup {
   if (moduleKey === 'FORM_BUILDER' || moduleKey === 'WORKFLOW_BUILDER' || moduleKey === 'REQUESTS' || moduleKey === 'APPROVALS' || moduleKey === 'DASHBOARD' || moduleKey === 'NOTIFICATION') return 'PROCESS_OPERATIONS'
@@ -81,18 +78,9 @@ function groupForModule(moduleKey: string): PermissionGroup {
   return 'SYSTEM_ADMINISTRATION'
 }
 
-function matrixColumnFor(permission: PermissionDefinition): MatrixColumn | null {
-  if (permission.matrixColumn !== 'SPECIAL') return permission.matrixColumn
-  if (permission.key === 'REQUESTS.SUBMIT') return 'CREATE'
-  if (permission.key === 'REQUESTS.VOID') return 'DELETE'
-  if (permission.key === 'REQUESTS.VIEW_ALL' || permission.key === 'REQUESTS.VIEW_SCOPE') return null
-  return 'UPDATE'
-}
-
 function toPermissionModules(registry: PermissionDefinition[]): PermissionModule[] {
   const grouped = new Map<string, PermissionModule>()
   for (const permission of registry) {
-    if (permission.module === 'DASHBOARD' || permission.module === 'NOTIFICATION' || permission.module === 'POSITION' || permission.key === 'REQUESTS.VIEW_ALL' || permission.key === 'REQUESTS.VIEW_SCOPE') continue
     const current = grouped.get(permission.module)
     if (current) current.permissions.push(permission)
     else grouped.set(permission.module, { key: permission.module, label: permission.moduleLabel, permissions: [permission] })
@@ -110,9 +98,9 @@ function toForm(role: RoleRecord): RoleFormState {
 function validate(form: RoleFormState, canEditKey: boolean): FieldErrors {
   const errors: FieldErrors = {}
   if (!form.name.trim()) errors.name = 'Tên vai trò không được để trống.'
-  else if (form.name.trim().length > 100) errors.name = 'Tên vai trò không được để trống.'
+  else if (form.name.trim().length > 100) errors.name = 'Tên vai trò không được vượt quá 100 ký tự.'
   if (canEditKey && !form.key.trim()) errors.key = 'Mã vai trò không được để trống.'
-  else if (canEditKey && !/^[A-Z][A-Z0-9_]*$/.test(form.key.trim())) errors.key = 'Mã vai trò không được để trống.'
+  else if (canEditKey && !/^[A-Z][A-Z0-9_]*$/.test(form.key.trim())) errors.key = 'Mã vai trò phải bắt đầu bằng chữ in hoa và chỉ gồm A-Z, 0-9 hoặc dấu gạch dưới.'
   return errors
 }
 
@@ -122,15 +110,6 @@ function samePermissionKeys(first: readonly string[], second: readonly string[])
 
 function sameForm(first: RoleFormState, second: RoleFormState) {
   return first.name === second.name && first.key === second.key && first.isActive === second.isActive && samePermissionKeys(first.permissionKeys, second.permissionKeys)
-}
-
-function activityDescription(log: RoleAuditLog, roleName: string, currentUserId: string) {
-  const actor = auditActorLabel(log.actor, currentUserId)
-  if (log.action === 'ROLE.CREATED') return `${actor} đã tạo mới vai trò ${roleName}.`
-  if (log.action === 'ROLE.PERMISSIONS_UPDATED') return `${actor} đã cập nhật phân quyền cho vai trò ${roleName}.`
-  if (log.action === 'ROLE.STATUS_CHANGED') return `${actor} đã thay đổi trạng thái vai trò ${roleName}.`
-  if (log.action === 'ROLE.DELETED') return `${actor} đã xóa vai trò ${roleName}.`
-  return `${actor} đã chỉnh sửa thông tin vai trò ${roleName}.`
 }
 
 function roleChangeDetails(log: RoleAuditLog): string[] {
@@ -152,12 +131,8 @@ function MatrixCheckbox({ checked, indeterminate = false, onChange, ariaLabel }:
 }
 
 function StaticPermissionMark({ granted, partial = false }: { granted: boolean; partial?: boolean }) {
-  const label = granted ? 'Đã cấp toàn bộ quyền trong nhóm' : partial ? 'Đã cấp một phần quyền trong nhóm' : 'Chưa cấp'
+  const label = granted ? 'Đã cấp quyền' : partial ? 'Đã cấp một phần quyền' : 'Chưa cấp'
   return <span className={granted ? 'role-matrix-readonly-check is-granted' : partial ? 'role-matrix-readonly-check is-partial' : 'role-matrix-readonly-check'} aria-label={label}>{granted ? '✓' : partial ? '−' : ''}</span>
-}
-
-function UnavailablePermissionMark() {
-  return <span className="role-matrix-unavailable" aria-label="Không có quyền này">—</span>
 }
 
 export function RoleDetailPage({ roleId, currentUserId, onBack, onSaved, canUpdateRole, canDeleteRole }: RoleDetailPageProps) {
@@ -198,7 +173,12 @@ export function RoleDetailPage({ roleId, currentUserId, onBack, onSaved, canUpda
       return matchesSearch && (!grantedOnly || module.permissions.some((permission) => selectedKeys.has(permission.key)))
     })
   }, [grantedOnly, modules, searchQuery, selectedKeys])
-  const groupedModules = useMemo(() => permissionGroups.map((group) => ({ ...group, modules: filteredModules.filter((module) => groupForModule(module.key) === group.key) })).filter((group) => group.modules.length > 0), [filteredModules])
+  const groupedModules = useMemo(
+    () => permissionGroups
+      .map((group) => ({ ...group, modules: filteredModules.filter((module) => groupForModule(module.key) === group.key) }))
+      .filter((group) => group.modules.length > 0),
+    [filteredModules],
+  )
 
   useLayoutEffect(() => {
     window.dispatchEvent(new Event('workflow:sync-scrollbar-layout'))
@@ -259,27 +239,26 @@ export function RoleDetailPage({ roleId, currentUserId, onBack, onSaved, canUpda
     if (touched[field]) setErrors((current) => ({ ...current, [field]: validate(next, canEditKey)[field] }))
   }
 
-  function selectablePermissionsForModule(module: PermissionModule) {
-    return module.permissions.filter((permission) => matrixColumnFor(permission) !== null)
+  function updateModulePermissions(module: PermissionModule, checked: boolean) {
+    setForm((current) => {
+      const next = new Set(current.permissionKeys)
+      for (const permission of module.permissions) {
+        if (checked) next.add(permission.key)
+        else next.delete(permission.key)
+      }
+      return { ...current, permissionKeys: [...next] }
+    })
   }
 
-  function permissionsForColumn(module: PermissionModule, column: MatrixColumn) {
-    return selectablePermissionsForModule(module).filter((permission) => matrixColumnFor(permission) === column)
-  }
-
-  function updatePermission(module: PermissionModule, column: MatrixColumn, checked: boolean) {
-    const permissions = permissionsForColumn(module, column)
-    const viewPermissions = permissionsForColumn(module, 'VIEW')
+  function updateSinglePermission(module: PermissionModule, permission: PermissionDefinition, checked: boolean) {
+    const viewPermissions = module.permissions.filter((item) => item.matrixColumn === 'VIEW')
     setForm((current) => {
       const next = new Set(current.permissionKeys)
       if (checked) {
-        for (const permission of permissions) next.add(permission.key)
-        if (column !== 'VIEW') for (const permission of viewPermissions) next.add(permission.key)
-      } else if (column === 'VIEW') {
-        for (const permission of module.permissions) next.delete(permission.key)
-        if (module.key === 'REQUESTS') next.delete('REQUESTS.VIEW_ALL')
+        next.add(permission.key)
+        for (const viewPermission of viewPermissions) next.add(viewPermission.key)
       } else {
-        for (const permission of permissions) next.delete(permission.key)
+        next.delete(permission.key)
       }
       return { ...current, permissionKeys: [...next] }
     })
@@ -297,7 +276,7 @@ export function RoleDetailPage({ roleId, currentUserId, onBack, onSaved, canUpda
   function groupPermissionState(groupKey: PermissionGroup) {
     const permissions = modules
       .filter((module) => groupForModule(module.key) === groupKey)
-      .flatMap((module) => selectablePermissionsForModule(module))
+      .flatMap((module) => module.permissions)
     const selectedCount = permissions.filter((permission) => selectedKeys.has(permission.key)).length
     return {
       checked: permissions.length > 0 && selectedCount === permissions.length,
@@ -310,41 +289,13 @@ export function RoleDetailPage({ roleId, currentUserId, onBack, onSaved, canUpda
       const next = new Set(current.permissionKeys)
       for (const module of modules) {
         if (groupForModule(module.key) !== groupKey) continue
-        for (const permission of checked ? selectablePermissionsForModule(module) : module.permissions) {
+        for (const permission of module.permissions) {
           if (checked) next.add(permission.key)
           else next.delete(permission.key)
         }
-        if (!checked && module.key === 'REQUESTS') next.delete('REQUESTS.VIEW_ALL')
       }
       return { ...current, permissionKeys: [...next] }
     })
-  }
-
-  function updateColumnPermissions(column: MatrixColumn, checked: boolean) {
-    setForm((current) => {
-      const next = new Set(current.permissionKeys)
-      for (const module of filteredModules) {
-        const permissions = permissionsForColumn(module, column)
-        if (!permissions.length) continue
-        const viewPermissions = permissionsForColumn(module, 'VIEW')
-        if (checked) {
-          for (const permission of permissions) next.add(permission.key)
-          if (column !== 'VIEW') for (const permission of viewPermissions) next.add(permission.key)
-        } else if (column === 'VIEW') {
-          for (const permission of module.permissions) next.delete(permission.key)
-          if (module.key === 'REQUESTS') next.delete('REQUESTS.VIEW_ALL')
-        } else {
-          for (const permission of permissions) next.delete(permission.key)
-        }
-      }
-      return { ...current, permissionKeys: [...next] }
-    })
-  }
-
-  function columnState(column: MatrixColumn) {
-    const items = filteredModules.flatMap((module) => permissionsForColumn(module, column))
-    const selectedCount = items.filter((permission) => selectedKeys.has(permission.key)).length
-    return { checked: items.length > 0 && selectedCount === items.length, indeterminate: selectedCount > 0 && selectedCount < items.length, hasItems: items.length > 0 }
   }
 
   function cancelEditing() {
@@ -445,7 +396,7 @@ export function RoleDetailPage({ roleId, currentUserId, onBack, onSaved, canUpda
     <section className="department-detail-summary role-detail-summary">
       <div className="department-detail-summary-main"><h1>{roleName}</h1></div>
       <div className="department-detail-actions">
-        {isEditing ? <><button className="secondary-button compact-button" type="button" disabled={isSaving} onClick={cancelEditing}>Hủy</button><button className="primary-button compact-button" type="submit" form="role-form" disabled={!isDirty || isSaving}>{isSaving ? 'Đang lưu...' : isCreating ? 'Lưu' : 'Lưu thay đổi'}</button></> : <><button className="secondary-button compact-button" type="button" onClick={requestBack}>← Quay lại</button>{canUpdateRole && <button className="secondary-button compact-button" type="button" onClick={() => setIsEditing(true)}>Chỉnh sửa</button>}{canDeleteRole && <button className="danger-button compact-button" type="button" onClick={() => setShowDeleteConfirm(true)} disabled={isSaving}>Xóa</button>}</>}
+        {isEditing ? <><button className="secondary-button compact-button" type="button" disabled={isSaving} onClick={cancelEditing}>Hủy</button><button className="primary-button compact-button" type="submit" form="role-form" disabled={!isDirty || isSaving}>{isSaving ? 'Đang lưu...' : isCreating ? 'Lưu' : 'Lưu thay đổi'}</button></> : <><button className="secondary-button compact-button" type="button" onClick={requestBack}>← Quay lại</button>{canUpdateRole && <button className="secondary-button compact-button" type="button" onClick={() => setIsEditing(true)}>Chỉnh sửa</button>}{canDeleteRole && <button className="danger-outline-button compact-button" type="button" onClick={() => setShowDeleteConfirm(true)} disabled={isSaving}>Xóa</button>}</>}
       </div>
     </section>
     <form id="role-form" onSubmit={requestSave} noValidate>
@@ -459,49 +410,118 @@ export function RoleDetailPage({ roleId, currentUserId, onBack, onSaved, canUpda
           </div>
         </section>
         <section className="role-permissions-section" aria-labelledby="role-permissions-title">
-          <div className="role-permissions-heading"><div><h2 id="role-permissions-title">Phân quyền</h2></div><div className="role-permission-summary"><span><strong>{grantedPermissionCount}</strong> quyền đã cấp</span><span><strong>{grantedModuleCount}</strong>/{modules.length} module</span></div></div>
-          <div className="role-matrix-toolbar"><div className="role-matrix-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg><input aria-label="Tìm module hoặc chức năng" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Tìm module hoặc chức năng" />{searchQuery && <button type="button" aria-label="Xóa nội dung tìm kiếm" title="Xóa tìm kiếm" onClick={() => setSearchQuery('')}>×</button>}</div><div className="role-matrix-toolbar-end"><label className="role-granted-filter"><input className="visually-hidden" type="checkbox" checked={grantedOnly} onChange={(event) => setGrantedOnly(event.target.checked)} /><span className="role-filter-switch" aria-hidden="true"><span /></span><span>Chỉ hiển thị quyền đã cấp</span></label></div></div>
+          <div className="role-permissions-heading">
+            <div><h2 id="role-permissions-title">Phân quyền</h2></div>
+            <div className="role-permission-summary">
+              <span><strong>{grantedPermissionCount}</strong> quyền đã cấp</span>
+              <span><strong>{grantedModuleCount}</strong>/{modules.length} module</span>
+            </div>
+          </div>
+          <div className="role-matrix-toolbar">
+            <div className="role-matrix-search">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>
+              <input aria-label="Tìm module hoặc chức năng" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Tìm module hoặc chức năng" />
+              {searchQuery && <button type="button" aria-label="Xóa nội dung tìm kiếm" title="Xóa tìm kiếm" onClick={() => setSearchQuery('')}>×</button>}
+            </div>
+            <div className="role-matrix-toolbar-end">
+              <label className="role-granted-filter">
+                <input className="visually-hidden" type="checkbox" checked={grantedOnly} onChange={(event) => setGrantedOnly(event.target.checked)} />
+                <span className="role-filter-switch" aria-hidden="true"><span /></span>
+                <span>Chỉ hiển thị quyền đã cấp</span>
+              </label>
+            </div>
+          </div>
           {!isEditing && !hasGrantedPermissions ? <p className="role-matrix-empty">Vai trò này chưa được cấp quyền truy cập nào.</p> : (
-            <div className="role-matrix-scroll">
-              <table className="role-matrix-table">
-                <thead>
-                  <tr>
-                    <th><span className="role-matrix-header-label">Module</span></th>
-                    {matrixColumns.map((column) => {
-                      const state = columnState(column.key)
-                      return <th key={column.key}><div className="role-matrix-column-heading">{isEditing && state.hasItems ? <MatrixCheckbox checked={state.checked} indeterminate={state.indeterminate} onChange={(checked) => updateColumnPermissions(column.key, checked)} ariaLabel={`Chọn toàn bộ quyền ${column.label} đang hiển thị`} /> : null}<span>{column.label}</span></div></th>
-                    })}
-                  </tr>
-                </thead>
-                {groupedModules.map((group) => {
-                  const isExpanded = !collapsedGroupKeys.has(group.key)
-                  const groupState = groupPermissionState(group.key)
-                  return <tbody key={group.key}>
-                    <tr className="role-matrix-group-row"><th colSpan={5} scope="rowgroup"><div className="role-group-heading"><button className="role-group-disclosure" type="button" aria-expanded={isExpanded} onClick={() => toggleGroupExpanded(group.key)}><span aria-hidden="true" />{group.label}</button>{isEditing && <label className="role-group-permission-toggle"><MatrixCheckbox checked={groupState.checked} indeterminate={groupState.indeterminate} onChange={(checked) => updateGroupPermissions(group.key, checked)} ariaLabel={`Cấp toàn bộ quyền nhóm ${group.label}`} /><span>Toàn quyền nhóm</span></label>}</div></th></tr>
-                    {isExpanded && group.modules.map((module) => {
-                      const selectedModuleCount = module.permissions.filter((permission) => selectedKeys.has(permission.key)).length
-                      return <tr key={module.key} className={selectedModuleCount > 0 ? 'has-permissions' : undefined}>
-                        <th scope="row"><div className="role-module-cell"><span><strong>{module.label}</strong></span></div></th>
-                        {matrixColumns.map((column) => {
-                          const permissions = permissionsForColumn(module, column.key)
-                          const selectedCount = permissions.filter((permission) => selectedKeys.has(permission.key)).length
-                          const isSelected = permissions.length > 0 && selectedCount === permissions.length
-                          return <td key={column.key}>{permissions.length ? isEditing ? <MatrixCheckbox checked={isSelected} indeterminate={selectedCount > 0 && !isSelected} onChange={(checked) => updatePermission(module, column.key, checked)} ariaLabel={`${column.label} ${module.label}`} /> : <StaticPermissionMark granted={isSelected} partial={selectedCount > 0 && !isSelected} /> : <UnavailablePermissionMark />}</td>
+            <div className="role-permission-groups-container">
+              {groupedModules.map((group) => {
+                const isExpanded = !collapsedGroupKeys.has(group.key)
+                const groupState = groupPermissionState(group.key)
+                return (
+                  <section className="role-permission-group-section" key={group.key}>
+                    <header className="role-permission-group-bar">
+                      <div className="role-group-heading">
+                        <button className="role-group-disclosure" type="button" aria-expanded={isExpanded} onClick={() => toggleGroupExpanded(group.key)}>
+                          <span aria-hidden="true" />
+                          {group.label}
+                        </button>
+                        {isEditing && (
+                          <label className="role-group-permission-toggle">
+                            <MatrixCheckbox
+                              checked={groupState.checked}
+                              indeterminate={groupState.indeterminate}
+                              onChange={(checked) => updateGroupPermissions(group.key, checked)}
+                              ariaLabel={`Cấp toàn bộ quyền nhóm ${group.label}`}
+                            />
+                            <span>Toàn quyền nhóm</span>
+                          </label>
+                        )}
+                      </div>
+                    </header>
+                    {isExpanded && (
+                      <div className="role-permission-card-list">
+                        {group.modules.map((module) => {
+                          const selectedModuleCount = module.permissions.filter((permission) => selectedKeys.has(permission.key)).length
+                          const allModuleSelected = module.permissions.length > 0 && selectedModuleCount === module.permissions.length
+                          const visiblePermissions = grantedOnly
+                            ? module.permissions.filter((permission) => selectedKeys.has(permission.key))
+                            : module.permissions
+                          return (
+                            <article className="role-permission-module-card" key={module.key}>
+                              <header className="role-permission-card-header">
+                                <h3>{module.label}</h3>
+                                <label className={isEditing ? 'role-module-activate-toggle' : 'role-module-activate-toggle is-readonly'}>
+                                  <span>Kích hoạt</span>
+                                  <input
+                                    className="visually-hidden"
+                                    type="checkbox"
+                                    checked={allModuleSelected}
+                                    disabled={!isEditing}
+                                    aria-label={`Kích hoạt ${module.label}`}
+                                    onChange={(event) => updateModulePermissions(module, event.target.checked)}
+                                  />
+                                  <span className="role-module-activate-switch" aria-hidden="true">
+                                    <span />
+                                  </span>
+                                </label>
+                              </header>
+                              <div className="role-permission-button-grid">
+                                {visiblePermissions.map((permission) => {
+                                  const granted = selectedKeys.has(permission.key)
+                                  const itemClassName = granted ? 'role-permission-button-item is-granted' : 'role-permission-button-item'
+                                  return isEditing ? (
+                                    <label className={itemClassName} key={permission.key}>
+                                      <MatrixCheckbox
+                                        checked={granted}
+                                        onChange={(checked) => updateSinglePermission(module, permission, checked)}
+                                        ariaLabel={`${permission.label} - ${module.label}`}
+                                      />
+                                      <span>{permission.label}</span>
+                                    </label>
+                                  ) : (
+                                    <div className={itemClassName} key={permission.key}>
+                                      <StaticPermissionMark granted={granted} />
+                                      <span>{permission.label}</span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </article>
+                          )
                         })}
-                      </tr>
-                    })}
-                  </tbody>
-                })}
-              </table>
+                      </div>
+                    )}
+                  </section>
+                )
+              })}
               {filteredModules.length === 0 && <p className="role-matrix-filter-empty">Không tìm thấy module hoặc quyền phù hợp.</p>}
             </div>
           )}
         </section>
       </SurfaceCard>
     </form>
-    {!isCreating && <section className="employee-activity-section role-audit-section"><div className="employee-activity-heading"><div><h2>Lịch sử</h2></div></div><SurfaceCard className="employee-activity-card">{activity.length ? <div className="employee-activity-list">{activity.map((log) => { const changes = roleChangeDetails(log); return <article className="activity-log-row" key={log.id}><div><strong>{activityDescription(log, roleName, currentUserId)}</strong>{changes.length > 0 && <p>Thay đổi: {changes.join(' · ')}</p>}</div><time>{formatDateTime(log.occurredAt)}</time></article> })}</div> : <p className="employee-activity-empty">Chưa có lịch sử liên quan đến vai trò này.</p>}{hasMoreActivity && <div className="employee-activity-more"><button className="secondary-button" type="button" disabled={isLoadingActivity} onClick={() => void loadActivity(activityPage + 1)}>{isLoadingActivity ? 'Đang tải...' : 'Xem thêm'}</button></div>}</SurfaceCard></section>}
+    {!isCreating && <section className="employee-activity-section role-audit-section"><div className="employee-activity-heading"><div><h2>Lịch sử</h2></div></div><SurfaceCard className="employee-activity-card">{activity.length ? <div className="employee-activity-list">{activity.map((log) => { const changes = roleChangeDetails(log); return <article className="activity-log-row" key={log.id}><div><strong>{formatAuditSentence({ action: log.action, actor: log.actor, currentUserId, resourceType: 'ROLE', resourceName: roleName })}</strong>{changes.length > 0 && <p>Thay đổi: {changes.join(' · ')}</p>}</div><time>{formatDateTime(log.occurredAt)}</time></article> })}</div> : <p className="employee-activity-empty">Chưa có lịch sử liên quan đến vai trò này.</p>}{hasMoreActivity && <div className="employee-activity-more"><button className="secondary-button" type="button" disabled={isLoadingActivity} onClick={() => void loadActivity(activityPage + 1)}>{isLoadingActivity ? 'Đang tải...' : 'Xem thêm'}</button></div>}</SurfaceCard></section>}
     {successMessage && <div className={`toast-message${toastIsError ? ' toast-error' : ''}`} role={toastIsError ? 'alert' : 'status'}>{successMessage}</div>}
-    {showLeaveConfirm && <ConfirmDialog title="Chưa lưu thay đổi" description="Thông tin vai trò đang chỉnh sửa sẽ bị hủy nếu bạn rời khỏi trang." confirmLabel="Rời khỏi trang" tone="danger" onCancel={() => setShowLeaveConfirm(false)} onConfirm={onBack} />}
+      {showLeaveConfirm && <ConfirmDialog title="Chưa lưu thay đổi" description="Thông tin vai trò đang chỉnh sửa chưa được lưu. Bạn có chắc chắn muốn rời khỏi trang?" confirmLabel="Rời khỏi trang" variant="discard-changes" onCancel={() => setShowLeaveConfirm(false)} onConfirm={onBack} />}
     {showDeleteConfirm && <ConfirmDialog title="Xóa vai trò" description="Bạn có chắc chắn muốn xóa vai trò này?" confirmLabel="Xóa" confirmingLabel="Đang xóa..." tone="danger" isConfirming={isSaving} onCancel={() => setShowDeleteConfirm(false)} onConfirm={() => void deleteRole()} compact />}
     {showInactiveConfirm && <ConfirmDialog title="Ngưng hoạt động vai trò?" description="Vai trò sẽ không thể được cấp mới hoặc sử dụng cho các lần đăng nhập tiếp theo. Các tài khoản đang được gán vai trò này vẫn được giữ nguyên liên kết." confirmLabel="Ngưng hoạt động" tone="danger" isConfirming={isSaving} onCancel={() => setShowInactiveConfirm(false)} onConfirm={() => void persist()} />}
   </>

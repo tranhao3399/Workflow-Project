@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { ClientSession, Model, QueryFilter } from 'mongoose';
 import { Types } from 'mongoose';
@@ -11,6 +11,11 @@ import { WorkflowDefinition } from '../workflow-definitions/schemas/workflow-def
 import { WorkspaceModule } from '../workspace-modules/schemas/workspace-module.schema.js';
 import type { ListRequestsDto } from './dto/request.dto.js';
 import { RequestAccessPolicy } from './request-access.policy.js';
+import { RequestActorContextService } from './request-actor-context.service.js';
+import {
+  hasAnnualLeaveAutoFillField,
+  refreshAnnualLeaveAutoFillFormData,
+} from './request-data.helpers.js';
 import { RequestSnapshotFactory } from './request-snapshot.factory.js';
 import type {
   AvailableActions,
@@ -30,6 +35,16 @@ const REQUEST_STATUS_GROUPS: Readonly<Record<NonNullable<ListRequestsDto['status
   CANCELLED: ['CANCELLED', 'VOIDED'],
 };
 
+const REQUEST_STATUS_LABELS: Readonly<Record<RequestStatus, string>> = {
+  DRAFT: 'Nháp',
+  IN_PROGRESS: 'Đang xử lý',
+  REVISION_REQUESTED: 'Yêu cầu bổ sung',
+  APPROVED: 'Đã phê duyệt',
+  REJECTED: 'Đã từ chối',
+  CANCELLED: 'Đã hủy',
+  VOIDED: 'Đã vô hiệu hóa',
+};
+
 @Injectable()
 export class RequestQueryService {
   constructor(
@@ -42,6 +57,7 @@ export class RequestQueryService {
     private readonly accessPolicy: RequestAccessPolicy,
     private readonly snapshots: RequestSnapshotFactory,
     private readonly organizationScope: OrganizationScopeService,
+    @Optional() private readonly actorContext?: RequestActorContextService,
   ) {}
 
   async availableForms() {
@@ -122,6 +138,30 @@ export class RequestQueryService {
       if (form) stored.formSnapshot = this.snapshots.createFormSnapshot(form as FormDefinition & { _id: Types.ObjectId });
     }
     await this.accessPolicy.requireReadAccess(stored, userId, permissionKeys);
+    if (
+      (stored.status === 'DRAFT' || stored.status === 'REVISION_REQUESTED') &&
+      this.actorContext
+    ) {
+      const snapshotFields = Array.isArray((stored.formSnapshot as { fields?: unknown } | undefined)?.fields)
+        ? ((stored.formSnapshot as { fields: unknown[] }).fields)
+        : [];
+      if (hasAnnualLeaveAutoFillField(snapshotFields)) {
+        try {
+          const actor = await this.actorContext.resolve(
+            stored.requesterUserId.toString(),
+            undefined,
+            { excludeRequestId: stored._id },
+          );
+          stored.formData = refreshAnnualLeaveAutoFillFormData(
+            snapshotFields,
+            stored.formData ?? {},
+            actor.autoFillProfile,
+          );
+        } catch {
+          // Keep stored formData if requester profile is inactive or unresolvable on read.
+        }
+      }
+    }
     const currentApprovalTaskId = await this.accessPolicy.currentApprovalTaskId(stored, userId, permissionKeys);
     const definitionVersion = await this.getDefinitionVersion(stored);
     return this.toDetail(
@@ -308,11 +348,19 @@ export class RequestQueryService {
     currentApprovalTaskId?: string,
     definitionVersion: RequestDefinitionVersion = { status: 'SNAPSHOT_LOCKED' },
   ) {
+    const currentStepName = this.currentStepName(request);
+    const statusLabel = REQUEST_STATUS_LABELS[request.status];
     return {
       ...this.toSummary(request),
       workflowDefinitionId: request.workflowDefinitionId.toString(),
       workflowVersion: request.workflowVersion,
       formData: request.formData,
+      systemAutoFillValues: {
+        REQUEST_CODE: request.requestNo,
+        REQUEST_STATUS: currentStepName
+          ? `${statusLabel} · ${currentStepName}`
+          : statusLabel,
+      },
       formSnapshot: this.snapshots.normalizeFormSnapshot(request.formSnapshot),
       workflowSnapshot: request.workflowSnapshot,
       currentStepKey: request.currentStepKey,
@@ -323,6 +371,7 @@ export class RequestQueryService {
       cancelReason: request.cancelReason,
       voidedAt: request.voidedAt,
       voidReason: request.voidReason,
+      ...(request.leaveDeductionApplied ? { leaveDeductionApplied: request.leaveDeductionApplied } : {}),
       currentApprovalTaskId,
       definitionVersion,
       availableActions,

@@ -122,7 +122,7 @@ export function NotificationCenterPage({ onOpenNotification, onNotify }: Notific
           </button>
           {!item.isRead && <button className="text-action-button notification-read-action" type="button" disabled={busyId === item._id} onClick={() => void markRead(item)}>{busyId === item._id ? 'Đang cập nhật...' : 'Đánh dấu đã đọc'}</button>}
         </article>)}</div>
-        <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} thông báo`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
+        <TablePagination currentPage={page} totalPages={totalPages} onPrevious={() => { setPage((value) => Math.max(1, value - 1)); setIsLoading(true) }} onNext={() => { setPage((value) => Math.min(totalPages, value + 1)); setIsLoading(true) }} onPageChange={(value) => { setPage(value); setIsLoading(true) }} rangeLabel={`${rangeStart}-${rangeEnd} trên ${total} thông báo`} pageSize={limit} pageSizes={[10, 20, 50]} onPageSizeChange={(value) => { setLimit(value); setPage(1); setIsLoading(true) }} />
       </>}
     </SurfaceCard>
   </>

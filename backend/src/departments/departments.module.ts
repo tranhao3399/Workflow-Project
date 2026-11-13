@@ -8,10 +8,12 @@ import { DepartmentsService } from './departments.service.js';
 import { Department, DepartmentSchema } from './schemas/department.schema.js';
 import { Position, PositionSchema } from '../positions/schemas/position.schema.js';
 import { DepartmentPosition, DepartmentPositionSchema } from './schemas/department-position.schema.js';
+import { OrganizationScopeModule } from '../common/organization/organization-scope.module.js';
 
 @Module({
   imports: [
     AuditLogModule,
+    OrganizationScopeModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     MongooseModule.forFeature([
       { name: Department.name, schema: DepartmentSchema },

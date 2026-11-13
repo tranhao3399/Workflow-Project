@@ -30,9 +30,3 @@ export interface LoginInput {
   email: string
   password: string
 }
-
-export interface RegisterInput extends LoginInput {
-  fullName: string
-  role: UserRole
-  department: string
-}

@@ -21,6 +21,7 @@ import type {
 } from './workflow-runtime.types.js';
 
 const APPROVER_PERMISSION = 'APPROVALS.APPROVE_ASSIGNED';
+const MAX_ORGANIZATION_HOPS = 100;
 
 @Injectable()
 export class AssigneeResolverService {
@@ -111,9 +112,10 @@ export class AssigneeResolverService {
     rule: RuntimeAssigneeRule,
     session: ClientSession,
   ): Promise<UserDocument[]> {
+    const requesterDepartmentId = request.requesterSnapshot.departmentId;
     const requesterOrganizationUnitId =
       request.requesterSnapshot.workUnitId ??
-      request.requesterSnapshot.departmentId;
+      requesterDepartmentId;
     switch (rule.type) {
       case 'REQUESTER_DIRECT_MANAGER':
         return this.usersForEmployeeIds(
@@ -122,10 +124,16 @@ export class AssigneeResolverService {
             : [],
           session,
         );
-      case 'REQUESTER_DEPARTMENT_MANAGER': {
+      // REQUESTER_DEPARTMENT_MANAGER is retained for historical workflow snapshots.
+      // It previously resolved the manager of workUnitId first, so keep that behavior.
+      case 'REQUESTER_DEPARTMENT_MANAGER':
+      case 'REQUESTER_WORK_UNIT_MANAGER': {
+        const organizationUnitId = this.requireRequesterOrganizationUnit(
+          requesterOrganizationUnitId,
+        );
         const department = await this.departments
           .findOne({
-            _id: requesterOrganizationUnitId,
+            _id: organizationUnitId,
             isActive: true,
           })
           .select({ managerEmployeeId: 1 })
@@ -136,9 +144,28 @@ export class AssigneeResolverService {
           session,
         );
       }
-      case 'REQUESTER_PARENT_DEPARTMENT_MANAGER': {
+      case 'REQUESTER_FUNCTIONAL_DEPARTMENT_MANAGER': {
+        const departmentId = this.requireRequesterDepartment(
+          requesterDepartmentId,
+        );
         const department = await this.departments
-          .findOne({ _id: requesterOrganizationUnitId, isActive: true })
+          .findOne({ _id: departmentId, isActive: true })
+          .select({ managerEmployeeId: 1 })
+          .session(session)
+          .exec();
+        return this.usersForEmployeeIds(
+          department?.managerEmployeeId ? [department.managerEmployeeId] : [],
+          session,
+        );
+      }
+      // REQUESTER_PARENT_DEPARTMENT_MANAGER is retained for historical workflow snapshots.
+      case 'REQUESTER_PARENT_DEPARTMENT_MANAGER':
+      case 'REQUESTER_PARENT_WORK_UNIT_MANAGER': {
+        const organizationUnitId = this.requireRequesterOrganizationUnit(
+          requesterOrganizationUnitId,
+        );
+        const department = await this.departments
+          .findOne({ _id: organizationUnitId, isActive: true })
           .select({ parentId: 1 })
           .session(session)
           .exec();
@@ -154,9 +181,22 @@ export class AssigneeResolverService {
         );
       }
       case 'COMPANY_MANAGER': {
-        let departmentId: Types.ObjectId | undefined =
-          requesterOrganizationUnitId;
+        let departmentId: Types.ObjectId | undefined = this.requireRequesterOrganizationUnit(
+          requesterOrganizationUnitId,
+        );
+        const visited = new Set<string>();
+        let hops = 0;
         while (departmentId) {
+          const key = departmentId.toString();
+          if (visited.has(key) || hops >= MAX_ORGANIZATION_HOPS) {
+            throw new ConflictException({
+              code: 'INVALID_ORGANIZATION_HIERARCHY',
+              message:
+                'Cáº¥u trÃºc phÃ²ng ban khÃ´ng há»£p lá»‡ nÃªn khÃ´ng thá»ƒ xÃ¡c Ä‘á»‹nh ngÆ°á»i phÃª duyá»‡t.',
+            });
+          }
+          visited.add(key);
+          hops += 1;
           const department = await this.departments
             .findOne({ _id: departmentId, isActive: true })
             .select({ parentId: 1, managerEmployeeId: 1, unitType: 1 })
@@ -227,6 +267,28 @@ export class AssigneeResolverService {
           message: 'Loại quy tắc người phê duyệt không được hỗ trợ.',
         });
     }
+  }
+
+  private requireRequesterOrganizationUnit(
+    organizationUnitId: Types.ObjectId | undefined,
+  ): Types.ObjectId {
+    if (organizationUnitId) return organizationUnitId;
+    throw new ConflictException({
+      code: 'REQUESTER_ORGANIZATION_UNIT_REQUIRED',
+      message:
+        'Há»“ sÆ¡ ngÆ°á»i táº¡o phiáº¿u chÆ°a Ä‘Æ°á»£c xáº¿p vÃ o phÃ²ng ban trá»±c thuá»™c nÃªn khÃ´ng thá»ƒ xÃ¡c Ä‘á»‹nh cáº¥p phÃª duyá»‡t.',
+    });
+  }
+
+  private requireRequesterDepartment(
+    departmentId: Types.ObjectId | undefined,
+  ): Types.ObjectId {
+    if (departmentId) return departmentId;
+    throw new ConflictException({
+      code: 'REQUESTER_DEPARTMENT_REQUIRED',
+      message:
+        'Hồ sơ người tạo phiếu chưa được xếp vào phòng ban chuyên môn nên không thể xác định trưởng phòng.',
+    });
   }
 
   private async activeRuleRoleIds(

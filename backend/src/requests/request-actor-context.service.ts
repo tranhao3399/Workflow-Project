@@ -6,7 +6,12 @@ import { Department } from '../departments/schemas/department.schema.js';
 import { Employee } from '../employees/schemas/employee.schema.js';
 import { Position } from '../positions/schemas/position.schema.js';
 import { User } from '../users/schemas/user.schema.js';
-import type { RequesterSnapshot } from './schemas/request.schema.js';
+import {
+  extractLeaveDeductionConfig,
+  extractLeaveDaysFromFormData,
+  roundLeaveDays,
+} from './leave-deduction.helper.js';
+import { Request, type RequesterSnapshot } from './schemas/request.schema.js';
 
 export interface RequestActorAutoFillProfile {
   employeeCode: string;
@@ -16,6 +21,10 @@ export interface RequestActorAutoFillProfile {
   departmentName: string;
   workUnitName: string;
   positionName: string;
+  directManagerName?: string;
+  annualLeaveDays?: number;
+  pendingHeldLeaveDays?: number;
+  availableAnnualLeaveDays?: number;
 }
 
 export interface RequestActorContext {
@@ -33,16 +42,19 @@ export class RequestActorContextService {
     @InjectModel(Department.name)
     private readonly departments: Model<Department>,
     @InjectModel(Position.name) private readonly positions: Model<Position>,
+    @InjectModel(Request.name) private readonly requests: Model<Request>,
   ) {}
 
   async resolve(
     userId: string,
-    session: ClientSession,
+    session?: ClientSession,
+    options?: { excludeRequestId?: Types.ObjectId | string },
   ): Promise<RequestActorContext> {
+    const querySession = session ?? null;
     const user = await this.users
       .findOne({ _id: userId, isActive: true })
       .select({ _id: 1, email: 1, employeeId: 1 })
-      .session(session)
+      .session(querySession)
       .lean()
       .exec();
     if (!user?.employeeId) throw this.activeEmployeeRequired();
@@ -58,33 +70,58 @@ export class RequestActorContextService {
         workUnitId: 1,
         positionId: 1,
         managerId: 1,
+        annualLeaveDays: 1,
       })
-      .session(session)
+      .session(querySession)
       .lean()
       .exec();
     if (!employee) throw this.activeEmployeeRequired();
 
-    const [department, position, workUnit] = await Promise.all([
+    const excludeId = options?.excludeRequestId
+      ? new Types.ObjectId(options.excludeRequestId.toString())
+      : undefined;
+
+    const [department, position, workUnit, manager, pendingLeaveRequests] = await Promise.all([
       this.departments
         .findById(employee.departmentId)
         .select({ name: 1 })
-        .session(session)
+        .session(querySession)
         .lean()
         .exec(),
       this.positions
         .findById(employee.positionId)
         .select({ name: 1 })
-        .session(session)
+        .session(querySession)
         .lean()
         .exec(),
       employee.workUnitId
         ? this.departments
             .findById(employee.workUnitId)
             .select({ name: 1 })
-            .session(session)
+            .session(querySession)
             .lean()
             .exec()
         : Promise.resolve(null),
+      employee.managerId
+        ? this.employees
+            .findById(employee.managerId)
+            .select({ fullName: 1 })
+            .session(querySession)
+            .lean()
+            .exec()
+        : Promise.resolve(null),
+      this.requests
+        .find({
+          requesterEmployeeId: employee._id,
+          status: { $in: ['IN_PROGRESS', 'REVISION_REQUESTED'] },
+          'formSnapshot.settings.leaveDeduction.enabled': true,
+          leaveDeductionApplied: { $exists: false },
+          ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+        })
+        .select({ formData: 1, 'formSnapshot.settings.leaveDeduction': 1 })
+        .session(querySession)
+        .lean()
+        .exec(),
     ]);
     if (!department || !position) {
       throw new ConflictException({
@@ -93,6 +130,26 @@ export class RequestActorContextService {
           'Thông tin phòng ban hoặc chức danh của nhân viên không hợp lệ.',
       });
     }
+
+    let pendingHeldLeaveDays = 0;
+    for (const pending of pendingLeaveRequests) {
+      const cfg = extractLeaveDeductionConfig(
+        (pending.formSnapshot as { settings?: unknown } | undefined)?.settings,
+      );
+      if (!cfg?.enabled) continue;
+      const days = extractLeaveDaysFromFormData(pending.formData, cfg.fieldKey);
+      if (days !== undefined && days > 0) {
+        pendingHeldLeaveDays = roundLeaveDays(pendingHeldLeaveDays + days);
+      }
+    }
+    const rawAnnualLeaveDays =
+      typeof employee.annualLeaveDays === 'number' && Number.isFinite(employee.annualLeaveDays)
+        ? roundLeaveDays(employee.annualLeaveDays)
+        : undefined;
+    const availableAnnualLeaveDays = rawAnnualLeaveDays !== undefined
+      ? roundLeaveDays(rawAnnualLeaveDays - pendingHeldLeaveDays)
+      : undefined;
+
     return {
       userId: user._id,
       employeeId: employee._id,
@@ -116,6 +173,12 @@ export class RequestActorContextService {
         departmentName: department.name,
         workUnitName: workUnit?.name ?? department.name,
         positionName: position.name,
+        ...(manager?.fullName ? { directManagerName: manager.fullName } : {}),
+        ...(rawAnnualLeaveDays !== undefined ? {
+          annualLeaveDays: rawAnnualLeaveDays,
+          pendingHeldLeaveDays,
+          availableAnnualLeaveDays,
+        } : {}),
       },
     };
   }

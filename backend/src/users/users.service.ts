@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
-import { Model, Types } from 'mongoose';
+import { Model, PipelineStage, Types } from 'mongoose';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto.js';
 import { UpdateManagedUserDto } from './dto/update-managed-user.dto.js';
 import { ListUsersDto } from './dto/list-users.dto.js';
@@ -182,10 +182,42 @@ export class UsersService {
       filter.$or = [{ email: search }, { displayName: search }, { employeeId: { $in: employees.map((employee) => employee._id) } }];
     }
     const skip = (query.page - 1) * query.limit;
-    const [users, total] = await Promise.all([
-      this.userModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(query.limit).exec(),
+    const direction = query.sortOrder === 'asc' ? 1 : -1;
+    const sortField = {
+      createdAt: 'createdAt',
+      email: 'email',
+      employeeCode: 'employeeProfile.employeeCode',
+      fullName: 'employeeProfile.fullNameNormalized',
+      status: 'isActive',
+    }[query.sortBy];
+    const pipeline: PipelineStage[] = [
+      { $match: filter },
+      {
+        $lookup: {
+          from: 'employees',
+          localField: 'employeeId',
+          foreignField: '_id',
+          as: 'employeeProfile',
+        },
+      },
+      { $unwind: { path: '$employeeProfile', preserveNullAndEmptyArrays: true } },
+      { $sort: { [sortField]: direction, _id: 1 } },
+      { $skip: skip },
+      { $limit: query.limit },
+      { $project: { _id: 1 } },
+    ];
+    const [pageItems, total] = await Promise.all([
+      this.userModel.aggregate<{ _id: Types.ObjectId }>(pipeline).exec(),
       this.userModel.countDocuments(filter).exec(),
     ]);
+    const pageIds = pageItems.map((item) => item._id);
+    const unorderedUsers = pageIds.length
+      ? await this.userModel.find({ _id: { $in: pageIds } }).exec()
+      : [];
+    const pageOrder = new Map(pageIds.map((id, index) => [id.toString(), index]));
+    const users = unorderedUsers.sort(
+      (left, right) => (pageOrder.get(left.id) ?? 0) - (pageOrder.get(right.id) ?? 0),
+    );
     const [roleMap, profileMap] = await Promise.all([
       this.loadRoleMap(users.flatMap((user) => user.roleIds ?? [])),
       this.loadProfileMap(users),

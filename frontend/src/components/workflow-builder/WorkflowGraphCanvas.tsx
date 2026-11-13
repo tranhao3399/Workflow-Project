@@ -437,6 +437,9 @@ function readSelection(element: DiagramElement): BpmnNodeSelection | null {
     assigneeRule: {
       type: oneOf(textAttribute(metadata, 'assigneeRuleType'), [
         'REQUESTER_DIRECT_MANAGER',
+        'REQUESTER_WORK_UNIT_MANAGER',
+        'REQUESTER_FUNCTIONAL_DEPARTMENT_MANAGER',
+        'REQUESTER_PARENT_WORK_UNIT_MANAGER',
         'REQUESTER_DEPARTMENT_MANAGER',
         'REQUESTER_PARENT_DEPARTMENT_MANAGER',
         'COMPANY_MANAGER',

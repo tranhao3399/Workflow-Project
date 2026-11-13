@@ -25,7 +25,7 @@ import {
 } from './dto/form-definition.dto.js';
 import { DynamicFormValidatorService, type DynamicFormValidationResult } from './dynamic-form-validator.service.js';
 import { FormGroupsService } from './form-groups.service.js';
-import { FormDefinition, type FormDefinitionDocument } from './schemas/form-definition.schema.js';
+import { FormDefinition, type FormDefinitionDocument, type FormField } from './schemas/form-definition.schema.js';
 import { FormGroup } from './schemas/form-group.schema.js';
 
 type StoredFormDefinition = FormDefinition & { _id: Types.ObjectId };
@@ -49,7 +49,8 @@ export class FormDefinitionsService {
     if (query.status) filter.status = query.status;
     if (query.category) filter.category = query.category;
     if (query.groupId) filter.groupId = new Types.ObjectId(query.groupId);
-    if (query.ungrouped === 'true') filter.groupId = { $exists: false };
+    // MongoDB equality with null matches both explicit null and a missing field.
+    if (query.ungrouped === 'true') filter.groupId = null;
     if (query.search) {
       const search = new RegExp(escapeRegExp(query.search), 'i');
       filter.$or = [{ code: search }, { name: search }];
@@ -86,8 +87,11 @@ export class FormDefinitionsService {
     if (await this.forms.exists({ code })) {
       throw new ConflictException({ message: 'Mã biểu mẫu đã tồn tại. Hãy clone phiên bản hiện có để tạo version mới.', field: 'code' });
     }
-    this.validator.assertDefinitionValid(input.fields);
-    this.validator.assertSystemRequestFieldsValid(input.fields);
+    const fields = this.validator.ensureSystemRequestFields(input.fields) as FormField[];
+    const settings = this.normalizeSettings(input.settings);
+    if (settings) this.validator.assertDefinitionValid(fields, settings);
+    else this.validator.assertDefinitionValid(fields);
+    this.validator.assertSystemRequestFieldsValid(fields);
     const groupId = input.groupId ? await this.formGroups.requireAssignable(input.groupId) : undefined;
     try {
       const item = await this.forms.create({
@@ -98,8 +102,8 @@ export class FormDefinitionsService {
         ...(input.category ? { category: input.category } : {}),
         description: input.description?.trim(),
         status: 'DRAFT',
-        fields: input.fields,
-        settings: input.settings ?? {},
+        fields,
+        settings: settings ?? {},
         createdBy: this.actorId(request),
         updatedBy: this.actorId(request),
       });
@@ -135,39 +139,66 @@ export class FormDefinitionsService {
     if (!current) throw new NotFoundException('Không tìm thấy biểu mẫu.');
     this.requireDraft(current);
     const before = {
+      code: current.code,
       name: current.name,
       version: current.version,
       status: current.status,
     };
 
-    const nextFields = input.fields ?? current.fields;
-    this.validator.assertDefinitionValid(nextFields);
+    const nextCode = input.code?.trim().toUpperCase() ?? current.code;
+    const codeChanged = nextCode !== current.code;
+    if (codeChanged && await this.forms.exists({ code: nextCode, _id: { $ne: current._id } })) {
+      throw new ConflictException({ message: 'Mã biểu mẫu đã tồn tại.', field: 'code' });
+    }
+
+    const currentData = current.toObject();
+    const nextFields = this.validator.ensureSystemRequestFields(
+      input.fields ?? currentData.fields,
+    ) as FormField[];
+    const nextSettings = input.settings !== undefined
+      ? this.normalizeSettings({ ...currentData.settings, ...input.settings })
+      : this.normalizeSettings(currentData.settings);
+    if (nextSettings) this.validator.assertDefinitionValid(nextFields, nextSettings);
+    else this.validator.assertDefinitionValid(nextFields);
     this.validator.assertSystemRequestFieldsValid(nextFields);
     const groupChanged = input.groupId !== undefined
       && (input.groupId ?? '') !== (current.groupId?.toString() ?? '');
     const update: Record<string, unknown> = { updatedBy: this.actorId(request) };
     const unset: Record<string, 1> = {};
+    if (codeChanged) update.code = nextCode;
     if (input.name !== undefined) update.name = input.name.trim();
     if (groupChanged && input.groupId === null) unset.groupId = 1;
     else if (groupChanged && input.groupId != null) update.groupId = await this.formGroups.requireAssignable(input.groupId);
     if (input.category === null) unset.category = 1;
     else if (input.category !== undefined) update.category = input.category;
     if (input.description !== undefined) update.description = input.description.trim();
-    if (input.fields !== undefined) update.fields = input.fields;
+    if (
+      input.fields !== undefined
+      || JSON.stringify(nextFields) !== JSON.stringify(currentData.fields)
+    ) {
+      update.fields = nextFields;
+    }
     if (input.settings !== undefined) {
-      const currentSettings = current.toObject().settings;
-      update.settings = { ...currentSettings, ...input.settings };
+      update.settings = nextSettings ?? {};
     }
 
-    const item = await this.forms.findOneAndUpdate(
-      { _id: current._id, status: 'DRAFT', __v: current.get('__v') },
-      {
-        $set: update,
-        ...(Object.keys(unset).length ? { $unset: unset } : {}),
-        $inc: { __v: 1 },
-      },
-      { returnDocument: 'after', runValidators: true },
-    ).exec();
+    let item: FormDefinitionDocument | null;
+    try {
+      item = await this.forms.findOneAndUpdate(
+        { _id: current._id, status: 'DRAFT', __v: current.get('__v') },
+        {
+          $set: update,
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+          $inc: { __v: 1 },
+        },
+        { returnDocument: 'after', runValidators: true },
+      ).exec();
+    } catch (error) {
+      if (isMongoDuplicateKeyError(error)) {
+        throw new ConflictException({ message: 'Mã biểu mẫu đã tồn tại.', field: 'code' });
+      }
+      throw error;
+    }
     if (!item) {
       const latest = await this.forms.findById(current._id).select({ status: 1 }).lean().exec();
       if (!latest) throw new NotFoundException('Không tìm thấy biểu mẫu.');
@@ -195,12 +226,14 @@ export class FormDefinitionsService {
       changes: {
         before,
         after: {
+          code: item.code,
           name: item.name,
           version: item.version,
           status: item.status,
         },
       },
       metadata: {
+        changedCode: codeChanged,
         changedDefinition: input.fields !== undefined,
         changedSettings: input.settings !== undefined,
         changedDescription: input.description !== undefined,
@@ -478,6 +511,30 @@ export class FormDefinitionsService {
       name: group.name,
       isActive: group.isActive,
     }]));
+  }
+
+  private normalizeSettings(
+    settings?: unknown,
+  ): Partial<FormDefinition['settings']> | undefined {
+    if (!this.isRecord(settings)) return undefined;
+    const plain = { ...settings };
+    const leaveDeduction = this.isRecord(plain.leaveDeduction) ? plain.leaveDeduction : undefined;
+    if (leaveDeduction) {
+      if (leaveDeduction.enabled === true) {
+        const fieldKey = typeof leaveDeduction.fieldKey === 'string' ? leaveDeduction.fieldKey.trim() : '';
+        plain.leaveDeduction = {
+          enabled: true,
+          ...(fieldKey ? { fieldKey } : {}),
+          allowNegative: leaveDeduction.allowNegative === true,
+        };
+      } else {
+        plain.leaveDeduction = {
+          enabled: false,
+          allowNegative: false,
+        };
+      }
+    }
+    return plain as unknown as Partial<FormDefinition['settings']>;
   }
 
   private isRecord(value: unknown): value is Record<string, unknown> {

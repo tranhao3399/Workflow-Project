@@ -46,7 +46,7 @@ export function resetSessionExpiryNotice(): void { sessionExpiryNotified = false
 
 export async function refreshAccessToken(): Promise<RefreshResponse> {
   if (!refreshPromise) {
-    refreshPromise = fetch(`${API_URL}/auth/refresh`, {
+    refreshPromise = fetchWithVietnameseNetworkError(`${API_URL}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
       headers: { Accept: 'application/json' },
@@ -107,7 +107,7 @@ async function authorizedFetch(path: string, options: RequestInit, retried = fal
   }
   const accessToken = getAccessToken()
   if (accessToken && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${accessToken}`)
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetchWithVietnameseNetworkError(`${API_URL}${path}`, {
     ...options,
     credentials: 'include',
     headers,
@@ -166,7 +166,24 @@ async function uploadRequest<T>(
 }
 
 function canRefreshFor(path: string): boolean {
-  return !['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout', '/auth/change-password', '/auth/forgot-password/request', '/auth/forgot-password/verify', '/auth/forgot-password/reset'].includes(path)
+  return !['/auth/login', '/auth/refresh', '/auth/logout', '/auth/change-password', '/auth/forgot-password/request', '/auth/forgot-password/verify', '/auth/forgot-password/reset'].includes(path)
+}
+
+async function fetchWithVietnameseNetworkError(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(input, init)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('Yêu cầu đã bị hủy.', 0)
+    }
+    throw new ApiError(
+      'Không thể kết nối với máy chủ. Vui lòng kiểm tra lại kết nối và thử lại.',
+      0,
+    )
+  }
 }
 
 async function readPayload(response: Response): Promise<unknown> {
@@ -184,7 +201,8 @@ function toApiError(payload: unknown, status: number): ApiError {
     ? result.message as unknown as ErrorPayload
     : undefined
   const messageSource = nested?.message ?? result.message
-  const fallback = Array.isArray(messageSource) ? messageSource.join(', ') : typeof messageSource === 'string' ? messageSource : 'Không thể kết nối với máy chủ. Vui lòng thử lại.'
+  const rawFallback = Array.isArray(messageSource) ? messageSource.join(', ') : typeof messageSource === 'string' ? messageSource : 'Không thể kết nối với máy chủ. Vui lòng thử lại.'
+  const fallback = localizeServerMessage(rawFallback, status)
   const code = normalizeApiErrorCode(result.code ?? nested?.code)
   return new ApiError(
     apiErrorMessage(code, fallback),
@@ -194,6 +212,19 @@ function toApiError(payload: unknown, status: number): ApiError {
     result.errors ?? nested?.errors,
     result.details ?? nested?.details,
   )
+}
+
+function localizeServerMessage(message: string, status: number): string {
+  const technicalEnglish = /\b(failed|failure|error|invalid|unauthorized|forbidden|not found|must|required|cannot|network|fetch|bad request|internal server|already exists|timeout)\b/i
+  if (!technicalEnglish.test(message)) return message
+
+  if (status === 400) return 'Dữ liệu gửi lên chưa hợp lệ. Vui lòng kiểm tra lại.'
+  if (status === 401) return 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.'
+  if (status === 403) return 'Bạn không có quyền thực hiện thao tác này.'
+  if (status === 404) return 'Không tìm thấy dữ liệu được yêu cầu.'
+  if (status === 409) return 'Dữ liệu vừa thay đổi hoặc đã tồn tại. Vui lòng tải lại.'
+  if (status >= 500) return 'Máy chủ đang gặp sự cố. Vui lòng thử lại sau.'
+  return 'Không thể thực hiện yêu cầu. Vui lòng thử lại.'
 }
 
 function expireSession(): void {

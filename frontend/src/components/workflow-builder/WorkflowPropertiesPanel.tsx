@@ -6,7 +6,7 @@ import type {
   WorkflowDefinition,
   WorkflowGraphValidationError,
 } from '../../types/workflow'
-import { approvalModes, assigneeRuleTypes, workflowConditionSources, workflowEndResults } from '../../types/workflow'
+import { approvalModes, legacyAssigneeRuleTypes, selectableAssigneeRuleTypes, workflowConditionSources, workflowEndResults } from '../../types/workflow'
 import { operatorOptionsForField } from '../../utils/workflow-builder'
 import { FilterSelect } from '../ui/FilterSelect'
 import { assigneeRuleLabels, type BpmnNodePatch, type BpmnNodeSelection } from './bpmn-workflow'
@@ -66,7 +66,7 @@ export function WorkflowPropertiesPanel({ workflow, definition, forms, selection
     {selection.kind === 'APPROVAL' && <ApprovalProperties selection={selection} error={elementError} disabled={disabled} options={flowOptions} referenceData={referenceData} update={onNodeChange} />}
     {selection.kind === 'CONDITION' && <ConditionProperties selection={selection} form={forms.find((form) => form.id === workflow.formDefinitionId)} error={elementError} disabled={disabled} options={flowOptions} update={onNodeChange} />}
     {selection.kind === 'END' && <PropertyField label="Kết quả cuối" required error={elementError('endResult')}><FilterSelect disabled={disabled} ariaLabel="Kết quả kết thúc" value={selection.endResult} options={workflowEndResults.map((value) => ({ value, label: value === 'APPROVED' ? 'Phê duyệt' : 'Từ chối' }))} onChange={(value) => onNodeChange({ endResult: value as 'APPROVED' | 'REJECTED' })} /></PropertyField>}
-    {!disabled && selection.kind !== 'SEQUENCE_FLOW' && <button className="secondary-button workflow-delete-element" type="button" onClick={onDeleteNode}>Xóa phần tử</button>}
+    {!disabled && selection.kind !== 'SEQUENCE_FLOW' && <button className="danger-outline-button workflow-delete-element" type="button" onClick={onDeleteNode}>Xóa phần tử</button>}
   </div>
 }
 
@@ -80,6 +80,10 @@ function ApprovalProperties({ selection, error, disabled, options, referenceData
 }) {
   const rule = selection.assigneeRule
   const setRule = (patch: Partial<typeof rule>) => update({ assigneeRule: { ...rule, ...patch, includeInactive: false } })
+  const assigneeRuleOptions = [
+    ...(legacyAssigneeRuleTypes.includes(rule.type as never) ? [rule.type] : []),
+    ...selectableAssigneeRuleTypes,
+  ].map((type) => ({ value: type, label: assigneeRuleLabels[type] }))
   return <>
     <section className="workflow-property-section"><h3>Phê duyệt</h3>
       <PropertyField label="Chế độ" required error={error('approvalMode')}><FilterSelect disabled={disabled} ariaLabel="Chế độ phê duyệt" value={selection.approvalMode} options={approvalModes.map((mode) => ({ value: mode, label: mode === 'ANY' ? 'Một người duyệt' : mode === 'ALL' ? 'Tất cả cùng duyệt' : 'Đa số duyệt' }))} onChange={(value) => update({ approvalMode: value as BpmnNodeSelection['approvalMode'] })} /></PropertyField>
@@ -87,7 +91,7 @@ function ApprovalProperties({ selection, error, disabled, options, referenceData
       <PropertyField label="Thời hạn xử lý (giờ)"><input type="number" min="1" value={selection.dueInHours ?? ''} disabled={disabled} onChange={(event) => update({ dueInHours: event.target.value ? Number(event.target.value) : undefined })} /></PropertyField>
     </section>
     <section className="workflow-property-section"><h3>Người phê duyệt</h3>
-      <PropertyField label="Quy tắc" required error={error('assigneeRule')}><FilterSelect disabled={disabled} ariaLabel="Quy tắc người phê duyệt" value={rule.type} options={assigneeRuleTypes.map((type) => ({ value: type, label: assigneeRuleLabels[type] }))} onChange={(value) => update({ assigneeRule: { type: value as AssigneeRuleType, includeInactive: false } })} /></PropertyField>
+      <PropertyField label="Quy tắc" required error={error('assigneeRule')}><FilterSelect disabled={disabled} ariaLabel="Quy tắc người phê duyệt" value={rule.type} options={assigneeRuleOptions} onChange={(value) => update({ assigneeRule: { type: value as AssigneeRuleType, includeInactive: false } })} /></PropertyField>
       {(rule.type === 'ROLE' || rule.type === 'ROLE_IN_REQUESTER_DEPARTMENT') && <CheckboxCollection label="Vai trò" error={error('roleIds')} items={referenceData.roles.map((item) => ({ id: item.id, label: `${item.name} (${item.key})` }))} selected={rule.roleIds ?? []} disabled={disabled} onChange={(roleIds) => setRule({ roleIds })} />}
       {rule.type === 'POSITION_IN_REQUESTER_DEPARTMENT' && <CheckboxCollection label="Chức danh" error={error('positionIds')} items={referenceData.positions.map((item) => ({ id: item.id, label: `${item.name} (${item.code})` }))} selected={rule.positionIds ?? []} disabled={disabled} onChange={(positionIds) => setRule({ positionIds })} />}
       {rule.type === 'SPECIFIC_USER' && <CheckboxCollection label="Người dùng" error={error('userIds')} items={referenceData.users.map((item) => ({ id: item.id, label: `${item.name} · ${item.email}` }))} selected={rule.userIds ?? []} disabled={disabled} onChange={(userIds) => setRule({ userIds })} />}

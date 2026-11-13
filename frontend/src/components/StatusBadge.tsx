@@ -41,5 +41,5 @@ export function WorkflowStatusBadge({ isPublished }: { isPublished: boolean }) {
 }
 
 export function EmployeeStatusBadge({ isActive }: { isActive: boolean }) {
-  return <span className={isActive ? 'status-badge employee-status-active' : 'status-badge employee-status-inactive'}>{isActive ? 'Đang làm việc' : 'Ngừng làm việc'}</span>
+  return <span className={isActive ? 'status-badge employee-status-active' : 'status-badge employee-status-inactive'}>{isActive ? 'Hoạt động' : 'Ngưng hoạt động'}</span>
 }

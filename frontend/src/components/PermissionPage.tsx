@@ -130,7 +130,7 @@ export function PermissionPage({ onCreateRole, onOpenRole, canCreateRole }: Perm
         <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Vai trò</SortableTableHeader>
         <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
       </tr></thead><tbody>{rows.length === 0 ? <EmptyTableRow colSpan={3} message="Không tìm thấy vai trò phù hợp." /> : rows.map((role) => <tr key={role.id}><td><button className="master-code-link" type="button" onClick={() => onOpenRole(role.id)}>{role.key}</button></td><td><strong className="master-primary-text">{role.name}</strong></td><td><RoleStatusBadge isActive={role.isActive} /></td></tr>)}</tbody></DataTable>
-      <TablePagination currentPage={currentPage} totalPages={totalPages} onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)} rangeLabel={`${rangeStart}–${rangeEnd} trên ${filtered.length} vai trò`} pageSize={pageSize} pageSizes={pageSizes} onPageSizeChange={(value) => { setPageSize(value as PageSize); setPage(1) }} />
+      <TablePagination currentPage={currentPage} totalPages={totalPages} onPrevious={() => setPage(currentPage - 1)} onNext={() => setPage(currentPage + 1)} onPageChange={setPage} rangeLabel={`${rangeStart}–${rangeEnd} trên ${filtered.length} vai trò`} pageSize={pageSize} pageSizes={pageSizes} onPageSizeChange={(value) => { setPageSize(value as PageSize); setPage(1) }} />
     </SurfaceCard>
   </>
 }

@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
-import { ApiError } from '../services/api-client';
+import { ChevronDown, ChevronUp, Search, X } from 'lucide-react';
+import { ApiError, resolveApiAssetUrl } from '../services/api-client';
+import {
+  getEmployeePage,
+  type EmployeePagination,
+} from '../services/employees.service';
 import {
   applyDepartmentJobTitlesFromApi,
   deleteDepartmentFromApi,
@@ -20,10 +24,11 @@ import type {
   OrganizationManagerOption,
   OrganizationUnitType,
 } from '../types/master-data';
+import type { Employee } from '../types/employees';
 import {
-  auditActorLabel,
   auditChangeDetails,
   auditValue,
+  formatAuditSentence,
 } from '../utils/audit-display';
 import {
   formatDateTime as dateTime,
@@ -32,83 +37,58 @@ import {
 import { isOrganizationParentRequired } from '../utils/organization-tree';
 import { ErrorState, LoadingState } from './DataStates';
 import { ConfirmDialog } from './ui/ConfirmDialog';
-import { DataTable } from './ui/DataTable';
+import { DataTable, EmptyTableRow } from './ui/DataTable';
 import { FilterSelect } from './ui/FilterSelect';
 import { DepartmentStatusBadge } from './ui/MasterDataStatusBadge';
 import { OrganizationManagerSelect } from './ui/OrganizationManagerSelect';
 import { OrganizationParentSelect } from './ui/OrganizationParentSelect';
 import { SurfaceCard } from './ui/SurfaceCard';
+import { TablePagination } from './ui/TablePagination';
 
 interface DepartmentDetailPageProps {
   departmentId: string;
   currentUserId: string;
+  canViewEmployees: boolean;
   onBack: () => void;
   onDeleted: () => void;
+  onOpenEmployee: (employeeId: string) => void;
+}
+
+type EmployeePageSize = 5 | 10 | 20;
+const employeePageSizes: EmployeePageSize[] = [5, 10, 20];
+const workUnitTypes = new Set<OrganizationUnitType>([
+  'COMPANY',
+  'HEADQUARTERS',
+  'REGION',
+  'STORE',
+]);
+
+function DepartmentEmployeeAvatar({ employee }: { employee: Employee }) {
+  const [hasImageError, setHasImageError] = useState(false);
+  const avatarUrl =
+    employee.avatarUrl && !hasImageError
+      ? resolveApiAssetUrl(employee.avatarUrl)
+      : '';
+
+  return avatarUrl ? (
+    <img
+      className="department-employee-avatar"
+      src={avatarUrl}
+      alt=""
+      onError={() => setHasImageError(true)}
+    />
+  ) : (
+    <span
+      className="department-employee-avatar department-employee-avatar-fallback"
+      aria-hidden="true"
+    >
+      {employee.fullName.trim().charAt(0).toUpperCase() || 'N'}
+    </span>
+  );
 }
 
 const INVALID_PARENT_MESSAGE =
   "Bạn đang tạo một vòng lặp trong các bản ghi 'Phòng ban'. Một bản ghi không thể là phần tử phụ của chính nó hoặc của một trong các phần tử phụ của nó. Vui lòng chọn một phần tử chính khác.";
-
-function actorName(log: DepartmentAuditLog, currentUserId: string): string {
-  return auditActorLabel(log.actor, currentUserId);
-}
-
-function auditPositionNames(log: DepartmentAuditLog): string[] {
-  const after = log.changes?.after;
-  const positions = Array.isArray(after?.positions)
-    ? after.positions
-    : after?.position
-      ? [after.position]
-      : [];
-  return positions.flatMap((position) => {
-    if (
-      typeof position !== 'object' ||
-      position === null ||
-      !('name' in position)
-    )
-      return [];
-    return typeof position.name === 'string' ? [position.name] : [];
-  });
-}
-
-function auditActionLabel(action: string): string {
-  if (
-    action === 'DEPARTMENT.POSITIONS_ADDED' ||
-    action === 'DEPARTMENT.POSITION_ASSIGNED' ||
-    action === 'DEPARTMENT.POSITIONS_ASSIGNED' ||
-    action === 'DEPARTMENT.POSITIONS_APPLIED'
-  )
-    return 'Gán chức danh';
-  if (
-    action === 'DEPARTMENT.POSITIONS_DELETED' ||
-    action === 'DEPARTMENT.POSITION_DELETED' ||
-    action === 'DEPARTMENT.POSITION_REMOVED'
-  )
-    return 'Gỡ chức danh';
-  if (action === 'DEPARTMENT.CREATED') return 'Tạo phòng ban';
-  if (action === 'DEPARTMENT.DEACTIVATED') return 'Cập nhật trạng thái';
-  return 'Cập nhật thông tin';
-}
-
-function auditDescription(
-  log: DepartmentAuditLog,
-  departmentName: string,
-  currentUserId: string,
-): string {
-  const actor = actorName(log, currentUserId);
-  const positions = auditPositionNames(log)
-    .map((name) => `“${name}”`)
-    .join(', ');
-  if (auditActionLabel(log.action) === 'Gán chức danh')
-    return `${actor} đã gán${positions ? ` chức danh ${positions}` : ' chức danh'} cho phòng ban ${departmentName}.`;
-  if (auditActionLabel(log.action) === 'Gỡ chức danh')
-    return `${actor} đã gỡ${positions ? ` chức danh ${positions}` : ' chức danh'} khỏi phòng ban ${departmentName}.`;
-  if (log.action === 'DEPARTMENT.CREATED')
-    return `${actor} đã tạo phòng ban ${departmentName}.`;
-  if (log.action === 'DEPARTMENT.DEACTIVATED')
-    return `${actor} đã thay đổi trạng thái phòng ban ${departmentName}.`;
-  return `${actor} đã cập nhật thông tin phòng ban ${departmentName}.`;
-}
 
 function departmentChangeDetails(
   log: DepartmentAuditLog,
@@ -158,8 +138,10 @@ function departmentChangeDetails(
 export function DepartmentDetailPage({
   departmentId,
   currentUserId,
+  canViewEmployees,
   onBack,
   onDeleted,
+  onOpenEmployee,
 }: DepartmentDetailPageProps) {
   const [department, setDepartment] = useState<DepartmentPreview | null>(null);
   const [positions, setPositions] = useState<JobTitlePreview[]>([]);
@@ -199,7 +181,22 @@ export function DepartmentDetailPage({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [notice, setNotice] = useState('');
   const [isErrorNotice, setIsErrorNotice] = useState(false);
+  const [departmentEmployees, setDepartmentEmployees] = useState<Employee[]>(
+    [],
+  );
+  const [employeePagination, setEmployeePagination] =
+    useState<EmployeePagination>({ page: 1, limit: 10, total: 0, totalPages: 1 });
+  const [employeePage, setEmployeePage] = useState(1);
+  const [employeePageSize, setEmployeePageSize] =
+    useState<EmployeePageSize>(10);
+  const [areEmployeesLoading, setAreEmployeesLoading] = useState(false);
+  const [hasEmployeeLoadError, setHasEmployeeLoadError] = useState(false);
+  const [employeeRefreshVersion, setEmployeeRefreshVersion] = useState(0);
+  const [isInfoCollapsed, setIsInfoCollapsed] = useState(false);
+  const [isPositionsCollapsed, setIsPositionsCollapsed] = useState(false);
+  const [isEmployeesCollapsed, setIsEmployeesCollapsed] = useState(false);
   const dialogCloseRef = useRef<HTMLButtonElement>(null);
+  const employeeRequestVersion = useRef(0);
 
   function showToast(message: string, isError = false) {
     setIsErrorNotice(isError);
@@ -247,6 +244,56 @@ export function DepartmentDetailPage({
   // Reload detail state when the route identity changes.
   // oxlint-disable-next-line react/set-state-in-effect react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, [departmentId]);
+
+  useEffect(() => {
+    if (!department || !canViewEmployees) return;
+    const currentRequest = ++employeeRequestVersion.current;
+    // Loading flags intentionally synchronize with the active server request.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setAreEmployeesLoading(true);
+    // oxlint-disable-next-line react/set-state-in-effect
+    setHasEmployeeLoadError(false);
+    const scopeQuery = workUnitTypes.has(department.unitType)
+      ? { workUnitId: department.id }
+      : { departmentId: department.id };
+    void getEmployeePage({
+      ...scopeQuery,
+      sortBy: 'fullName',
+      sortOrder: 'asc',
+      page: employeePage,
+      limit: employeePageSize,
+    })
+      .then((result) => {
+        if (currentRequest !== employeeRequestVersion.current) return;
+        const totalPages = Math.max(1, result.pagination.totalPages);
+        if (employeePage > totalPages) {
+          setEmployeePage(totalPages);
+          return;
+        }
+        setDepartmentEmployees(result.data);
+        setEmployeePagination({ ...result.pagination, totalPages });
+      })
+      .catch(() => {
+        if (currentRequest === employeeRequestVersion.current)
+          setHasEmployeeLoadError(true);
+      })
+      .finally(() => {
+        if (currentRequest === employeeRequestVersion.current)
+          setAreEmployeesLoading(false);
+      });
+  }, [
+    canViewEmployees,
+    department,
+    employeePage,
+    employeePageSize,
+    employeeRefreshVersion,
+  ]);
+
+  useEffect(() => {
+    // A different department always starts from the first employee page.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setEmployeePage(1);
+  }, [departmentId]);
 
   const normalizedDraftCode = draftCode.trim().toUpperCase();
   const isCodeValid = /^[A-Z0-9_]+$/.test(normalizedDraftCode);
@@ -419,6 +466,7 @@ export function DepartmentDetailPage({
         parentId: draftParentId || undefined,
         parentName: parent?.name,
         managerEmployeeId: draftManagerEmployeeId || undefined,
+        managerEmployeeCode: manager?.employeeCode,
         managerName: manager?.fullName,
       };
       setDepartment(updatedUnit);
@@ -650,7 +698,7 @@ export function DepartmentDetailPage({
                 Chỉnh sửa
               </button>
               <button
-                className="danger-button compact-button"
+                className="danger-outline-button compact-button department-delete-button"
                 type="button"
                 onClick={() => setShowDeleteConfirm(true)}
                 disabled={isSaving}
@@ -663,10 +711,27 @@ export function DepartmentDetailPage({
       </section>
 
       <SurfaceCard className="department-info-card">
-        <div className="department-info-heading">
+        <div
+          className={`department-info-heading${isInfoCollapsed ? ' is-collapsed' : ''}`}
+        >
           <h2>Thông tin phòng ban</h2>
+          <button
+            className="department-card-toggle"
+            type="button"
+            aria-expanded={!isInfoCollapsed}
+            aria-controls="department-general-information"
+            onClick={() => setIsInfoCollapsed((current) => !current)}
+          >
+            {isInfoCollapsed ? 'Mở rộng' : 'Thu gọn'}
+            {isInfoCollapsed ? (
+              <ChevronDown size={15} strokeWidth={1.8} aria-hidden="true" />
+            ) : (
+              <ChevronUp size={15} strokeWidth={1.8} aria-hidden="true" />
+            )}
+          </button>
         </div>
-        <div className="department-info-grid">
+        {!isInfoCollapsed && (
+        <div id="department-general-information" className="department-info-grid">
           <div className="department-info-field">
             <span
               className={
@@ -817,22 +882,30 @@ export function DepartmentDetailPage({
               />
             ) : (
               <span className="department-info-value">
-                {department.managerName || (
+                {department.managerName ? (
+                  [department.managerEmployeeCode, department.managerName]
+                    .filter(Boolean)
+                    .join(' - ')
+                ) : (
                   <span className="department-info-muted">Chưa phân công</span>
                 )}
               </span>
             )}
           </div>
         </div>
+        )}
       </SurfaceCard>
 
       <SurfaceCard className="department-position-card">
-        <div className="department-position-heading">
+        <div
+          className={`department-position-heading${isPositionsCollapsed ? ' is-collapsed' : ''}`}
+        >
           <div className="department-position-title-group">
-            <h2>Chức danh áp dụng</h2>
+            <h2>Chức danh</h2>
           </div>
-          {isEditing && (
-            <div>
+          <div className="department-card-heading-actions">
+            {isEditing && !isPositionsCollapsed && (
+              <>
               <button
                 className="secondary-button compact-button department-assign-job-title-button"
                 type="button"
@@ -851,9 +924,28 @@ export function DepartmentDetailPage({
                   Gỡ ({selectedPositions.length})
                 </button>
               )}
-            </div>
-          )}
+              </>
+            )}
+            <button
+              className="department-card-toggle"
+              type="button"
+              aria-expanded={!isPositionsCollapsed}
+              aria-controls="department-applied-positions"
+              onClick={() =>
+                setIsPositionsCollapsed((current) => !current)
+              }
+            >
+              {isPositionsCollapsed ? 'Mở rộng' : 'Thu gọn'}
+              {isPositionsCollapsed ? (
+                <ChevronDown size={15} strokeWidth={1.8} aria-hidden="true" />
+              ) : (
+                <ChevronUp size={15} strokeWidth={1.8} aria-hidden="true" />
+              )}
+            </button>
+          </div>
         </div>
+        {!isPositionsCollapsed && (
+        <div id="department-applied-positions">
         {positions.length === 0 ? (
           <p className="department-position-empty">
             Chưa có chức danh nào được áp dụng cho phòng ban này.
@@ -914,6 +1006,122 @@ export function DepartmentDetailPage({
               ))}
             </tbody>
           </DataTable>
+        )}
+        </div>
+        )}
+      </SurfaceCard>
+
+      <SurfaceCard className="department-employee-card">
+        <div
+          className={`department-employee-heading${isEmployeesCollapsed ? ' is-collapsed' : ''}`}
+        >
+          <div>
+            <h2>Danh sách nhân sự</h2>
+            {canViewEmployees &&
+              !areEmployeesLoading &&
+              !hasEmployeeLoadError && (
+              <span>{employeePagination.total} nhân sự</span>
+              )}
+          </div>
+          <button
+            className="department-card-toggle"
+            type="button"
+            aria-expanded={!isEmployeesCollapsed}
+            aria-controls="department-employees"
+            onClick={() => setIsEmployeesCollapsed((current) => !current)}
+          >
+            {isEmployeesCollapsed ? 'Mở rộng' : 'Thu gọn'}
+            {isEmployeesCollapsed ? (
+              <ChevronDown size={15} strokeWidth={1.8} aria-hidden="true" />
+            ) : (
+              <ChevronUp size={15} strokeWidth={1.8} aria-hidden="true" />
+            )}
+          </button>
+        </div>
+        {!isEmployeesCollapsed && (
+        <div id="department-employees">
+        {!canViewEmployees ? (
+          <p className="department-employee-state">
+            Bạn không có quyền xem danh sách nhân sự của phòng ban này.
+          </p>
+        ) : areEmployeesLoading ? (
+          <p className="department-employee-state">
+            Đang tải danh sách nhân sự...
+          </p>
+        ) : hasEmployeeLoadError ? (
+          <div className="department-employee-state department-employee-error">
+            <span>Không thể tải danh sách nhân sự.</span>
+            <button
+              className="secondary-button compact-button"
+              type="button"
+              onClick={() => setEmployeeRefreshVersion((value) => value + 1)}
+            >
+              Thử lại
+            </button>
+          </div>
+        ) : (
+          <>
+            <DataTable className="department-employee-table">
+              <thead>
+                <tr>
+                  <th>Họ và tên</th>
+                  <th>Mã nhân viên</th>
+                  <th>Chức danh</th>
+                </tr>
+              </thead>
+              <tbody>
+                {departmentEmployees.length === 0 ? (
+                  <EmptyTableRow
+                    colSpan={3}
+                    message="Chưa có nhân sự nào được phân công vào phòng ban này."
+                  />
+                ) : (
+                  departmentEmployees.map((employee) => (
+                    <tr key={employee.id}>
+                      <td>
+                        <button
+                          className="department-employee-link"
+                          type="button"
+                          onClick={() => onOpenEmployee(employee.id)}
+                        >
+                          <DepartmentEmployeeAvatar employee={employee} />
+                          <strong>{employee.fullName}</strong>
+                        </button>
+                      </td>
+                      <td>
+                        <button
+                          className="master-code-link"
+                          type="button"
+                          onClick={() => onOpenEmployee(employee.id)}
+                        >
+                          {employee.employeeCode}
+                        </button>
+                      </td>
+                      <td>{employee.position || 'Chưa thiết lập'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </DataTable>
+            {employeePagination.total > 0 && (
+              <TablePagination
+                currentPage={employeePagination.page}
+                totalPages={employeePagination.totalPages}
+                onPrevious={() => setEmployeePage((value) => value - 1)}
+                onNext={() => setEmployeePage((value) => value + 1)}
+                onPageChange={setEmployeePage}
+                rangeLabel={`${(employeePagination.page - 1) * employeePageSize + 1}–${Math.min(employeePagination.page * employeePageSize, employeePagination.total)} trên ${employeePagination.total} nhân sự`}
+                pageSize={employeePageSize}
+                pageSizes={employeePageSizes}
+                onPageSizeChange={(value) => {
+                  setEmployeePageSize(value as EmployeePageSize);
+                  setEmployeePage(1);
+                }}
+              />
+            )}
+          </>
+        )}
+        </div>
         )}
       </SurfaceCard>
 
@@ -1085,11 +1293,13 @@ export function DepartmentDetailPage({
                     >
                       <div>
                         <strong>
-                          {auditDescription(
-                            log,
-                            department.name,
+                          {formatAuditSentence({
+                            action: log.action,
+                            actor: log.actor,
                             currentUserId,
-                          )}
+                            resourceType: 'DEPARTMENT',
+                            resourceName: department.name,
+                          })}
                         </strong>
                         {changeDetails.length > 0 && (
                           <p>Thay đổi: {changeDetails.join(' · ')}</p>
@@ -1163,9 +1373,9 @@ export function DepartmentDetailPage({
       {pendingNavigation && (
         <ConfirmDialog
           title="Chưa lưu thay đổi"
-          description="Bạn đang có thay đổi chưa lưu. Nếu rời trang, các thay đổi này sẽ bị hủy."
+          description="Thông tin phòng ban đang chỉnh sửa chưa được lưu. Bạn có chắc chắn muốn rời khỏi trang?"
           confirmLabel="Rời khỏi trang"
-          tone="danger"
+          variant="discard-changes"
           onCancel={() => setPendingNavigation(false)}
           onConfirm={discardAndBack}
         />

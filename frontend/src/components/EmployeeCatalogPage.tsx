@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { List, Network } from "lucide-react";
 import {
   getEmployeeFilterOptions,
+  getEmployeeHierarchy,
   getEmployeePage,
   type EmployeeFilterOptions,
   type EmployeeSortField,
@@ -16,19 +18,25 @@ import { PageHeader } from "./ui/PageHeader";
 import { SurfaceCard } from "./ui/SurfaceCard";
 import { SortableTableHeader } from "./ui/SortableTableHeader";
 import { TablePagination } from "./ui/TablePagination";
+import { EmployeeHierarchyView } from "./EmployeeHierarchyView";
 
 interface EmployeeCatalogPageProps {
   onOpenEmployee: (employeeId: string) => void;
   onCreateEmployee: () => void;
   canCreateEmployee: boolean;
+  initialViewMode?: ViewMode;
+  onViewModeChange?: (viewMode: ViewMode) => void;
 }
 
 type FilterKey = "workUnit" | "department" | "employmentType" | "status";
+type ViewMode = "LIST" | "TREE";
 type PageSize = 10 | 20 | 50;
 const pageSizes: PageSize[] = [10, 20, 50];
 const employmentTypeLabels: Record<EmploymentType, string> = {
-  FULL_TIME: "Chính thức",
-  CONTRACT: "Hợp đồng",
+  OFFICIAL: "Chính thức",
+  FULL_TIME: "Full-time",
+  PART_TIME: "Part-time",
+  CONTRACT: "Thử việc",
   INTERN: "Thực tập",
 };
 
@@ -36,8 +44,16 @@ export function EmployeeCatalogPage({
   onOpenEmployee,
   onCreateEmployee,
   canCreateEmployee,
+  initialViewMode = "LIST",
+  onViewModeChange,
 }: EmployeeCatalogPageProps) {
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [hierarchyEmployees, setHierarchyEmployees] = useState<Employee[]>([]);
+  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode);
+  const [isHierarchyLoading, setIsHierarchyLoading] = useState(
+    initialViewMode === "TREE",
+  );
+  const [hasHierarchyError, setHasHierarchyError] = useState(false);
   const [filterOptions, setFilterOptions] = useState<EmployeeFilterOptions>({
     departments: [],
     workUnits: [],
@@ -65,6 +81,7 @@ export function EmployeeCatalogPage({
   const [refreshVersion, setRefreshVersion] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const requestVersion = useRef(0);
+  const hierarchyRequestVersion = useRef(0);
 
   useEffect(() => {
     void getEmployeeFilterOptions()
@@ -81,6 +98,7 @@ export function EmployeeCatalogPage({
   }, [searchInput]);
 
   useEffect(() => {
+    if (viewMode !== "LIST") return;
     const currentRequest = ++requestVersion.current;
     void getEmployeePage({
       search: searchQuery || undefined,
@@ -95,9 +113,14 @@ export function EmployeeCatalogPage({
     })
       .then((result) => {
         if (currentRequest !== requestVersion.current) return;
+        const nextTotalPages = Math.max(1, result.pagination.totalPages);
+        if (page > nextTotalPages) {
+          setPage(nextTotalPages);
+          return;
+        }
         setEmployees(result.data);
         setTotal(result.pagination.total);
-        setTotalPages(Math.max(1, result.pagination.totalPages));
+        setTotalPages(nextTotalPages);
         setHasError(false);
       })
       .catch(() => {
@@ -118,6 +141,43 @@ export function EmployeeCatalogPage({
     sortBy,
     sortOrder,
     status,
+    workUnitId,
+    viewMode,
+  ]);
+
+  useEffect(() => {
+    if (viewMode !== "TREE") return;
+    const currentRequest = ++hierarchyRequestVersion.current;
+    // Loading flags intentionally synchronize with the active server request.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setIsHierarchyLoading(true);
+    // oxlint-disable-next-line react/set-state-in-effect
+    setHasHierarchyError(false);
+    void getEmployeeHierarchy({
+      workUnitId: workUnitId === "ALL" ? undefined : workUnitId,
+      departmentId: departmentId === "ALL" ? undefined : departmentId,
+      employmentType: employmentType === "ALL" ? undefined : employmentType,
+      isActive: status === "ALL" ? undefined : status === "ACTIVE",
+    })
+      .then((result) => {
+        if (currentRequest !== hierarchyRequestVersion.current) return;
+        setHierarchyEmployees(result);
+      })
+      .catch(() => {
+        if (currentRequest === hierarchyRequestVersion.current)
+          setHasHierarchyError(true);
+      })
+      .finally(() => {
+        if (currentRequest !== hierarchyRequestVersion.current) return;
+        setIsHierarchyLoading(false);
+        setIsRefreshing(false);
+      });
+  }, [
+    departmentId,
+    employmentType,
+    refreshVersion,
+    status,
+    viewMode,
     workUnitId,
   ]);
 
@@ -161,7 +221,14 @@ export function EmployeeCatalogPage({
     window.requestAnimationFrame(() => inputRef.current?.focus());
   }
 
-  if (isLoading) return <LoadingState />;
+  function changeViewMode(nextViewMode: ViewMode) {
+    if (nextViewMode === "TREE" && hierarchyEmployees.length === 0)
+      setIsHierarchyLoading(true);
+    setViewMode(nextViewMode);
+    onViewModeChange?.(nextViewMode);
+  }
+
+  if (viewMode === "LIST" && isLoading) return <LoadingState />;
   if (hasError)
     return (
       <ErrorState onRetry={() => setRefreshVersion((value) => value + 1)} />
@@ -252,6 +319,28 @@ export function EmployeeCatalogPage({
                 </span>
                 {isRefreshing ? "Đang làm mới..." : "Làm mới"}
               </button>
+              <div
+                className="organization-view-switch employee-view-switch"
+                role="group"
+                aria-label="Kiểu hiển thị nhân viên"
+              >
+                <button
+                  className={viewMode === "LIST" ? "is-active" : ""}
+                  type="button"
+                  onClick={() => changeViewMode("LIST")}
+                >
+                  <List size={14} strokeWidth={2} aria-hidden="true" />
+                  <span>Danh sách</span>
+                </button>
+                <button
+                  className={viewMode === "TREE" ? "is-active" : ""}
+                  type="button"
+                  onClick={() => changeViewMode("TREE")}
+                >
+                  <Network size={14} strokeWidth={2} aria-hidden="true" />
+                  <span>Sơ đồ nhân sự</span>
+                </button>
+              </div>
             </div>
             <AdvancedFilterPanel
               id="employee-filters"
@@ -305,12 +394,12 @@ export function EmployeeCatalogPage({
                     />
                   </label>
                   <label>
-                    <span>Loại nhân viên</span>
+                    <span>Loại hợp đồng</span>
                     <FilterSelect
-                      ariaLabel="Lọc theo loại nhân viên"
+                      ariaLabel="Lọc theo loại hợp đồng"
                       value={employmentType}
                       options={[
-                        { value: "ALL", label: "Tất cả loại nhân viên" },
+                        { value: "ALL", label: "Tất cả loại hợp đồng" },
                         ...Object.entries(employmentTypeLabels).map(
                           ([value, label]) => ({ value, label }),
                         ),
@@ -326,14 +415,14 @@ export function EmployeeCatalogPage({
                     />
                   </label>
                   <label>
-                    <span>Trạng thái làm việc</span>
+                    <span>Trạng thái</span>
                     <FilterSelect
-                      ariaLabel="Lọc theo trạng thái làm việc"
+                      ariaLabel="Lọc theo trạng thái nhân viên"
                       value={status}
                       options={[
                         { value: "ALL", label: "Tất cả trạng thái" },
-                        { value: "ACTIVE", label: "Đang làm việc" },
-                        { value: "INACTIVE", label: "Ngừng làm việc" },
+                        { value: "ACTIVE", label: "Hoạt động" },
+                        { value: "INACTIVE", label: "Ngưng hoạt động" },
                       ]}
                       onChange={(value) => {
                         setStatus(value as typeof status);
@@ -350,7 +439,7 @@ export function EmployeeCatalogPage({
             </AdvancedFilterPanel>
           </div>
         </ListToolbar>
-        <DataTable className="admin-table employee-catalog-table" fixedLayout>
+        {viewMode === "LIST" ? <><DataTable className="admin-table employee-catalog-table" fixedLayout>
           <thead>
             <tr>
               <SortableTableHeader column="employeeCode" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã nhân viên</SortableTableHeader>
@@ -359,14 +448,13 @@ export function EmployeeCatalogPage({
               <th>Đơn vị làm việc</th>
               <th>Phòng ban</th>
               <th>Chức danh</th>
-              <SortableTableHeader column="employmentType" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Loại nhân viên</SortableTableHeader>
-              <SortableTableHeader column="isActive" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái làm việc</SortableTableHeader>
+                      <SortableTableHeader column="isActive" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
             </tr>
           </thead>
           <tbody>
             {employees.length === 0 ? (
               <EmptyTableRow
-                colSpan={8}
+                colSpan={7}
                 message="Không tìm thấy nhân viên phù hợp."
               />
             ) : (
@@ -395,13 +483,6 @@ export function EmployeeCatalogPage({
                   <td>{employee.department}</td>
                   <td>{employee.position}</td>
                   <td>
-                    {
-                      employmentTypeLabels[
-                        employee.employmentType ?? "FULL_TIME"
-                      ]
-                    }
-                  </td>
-                  <td>
                     <EmployeeStatusBadge isActive={employee.isActive} />
                   </td>
                 </tr>
@@ -414,6 +495,7 @@ export function EmployeeCatalogPage({
           totalPages={totalPages}
           onPrevious={() => setPage(currentPage - 1)}
           onNext={() => setPage(currentPage + 1)}
+          onPageChange={setPage}
           rangeLabel={`${rangeStart}–${rangeEnd} trên ${total} nhân viên`}
           pageSize={pageSize}
           pageSizes={pageSizes}
@@ -421,7 +503,14 @@ export function EmployeeCatalogPage({
             setPageSize(value as PageSize);
             setPage(1);
           }}
-        />
+        /></> : <EmployeeHierarchyView
+          employees={hierarchyEmployees}
+          search={searchInput}
+          isLoading={isHierarchyLoading}
+          hasError={hasHierarchyError}
+          onRetry={() => setRefreshVersion((value) => value + 1)}
+          onOpenEmployee={onOpenEmployee}
+        />}
       </SurfaceCard>
     </>
   );

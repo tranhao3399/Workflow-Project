@@ -43,6 +43,8 @@ export const formAutoFillSources = [
   'REQUESTER_DEPARTMENT_NAME',
   'REQUESTER_WORK_UNIT_NAME',
   'REQUESTER_POSITION_NAME',
+  'REQUESTER_ANNUAL_LEAVE_DAYS',
+  'REQUESTER_DIRECT_MANAGER_NAME',
   'CURRENT_DATE',
 ] as const;
 export type FormAutoFillSource = (typeof formAutoFillSources)[number];
@@ -101,6 +103,7 @@ export class FormTableColumn {
   @Prop({ required: false, trim: true, maxlength: 300 }) placeholder?: string;
   @Prop({ type: [FormFieldOptionSchema], required: false, default: undefined }) options?: FormFieldOption[];
   @Prop({ type: FormFieldValidationSchema, required: false }) validation?: FormFieldValidation;
+  @Prop({ required: false, trim: true, maxlength: 500 }) formula?: string;
 }
 export const FormTableColumnSchema = SchemaFactory.createForClass(FormTableColumn);
 
@@ -129,6 +132,7 @@ export class FormField {
   @Prop({ type: FormFieldValidationSchema, required: false }) validation?: FormFieldValidation;
   @Prop({ type: FormFieldVisibilityConditionSchema, required: false }) visibilityCondition?: FormFieldVisibilityCondition;
   @Prop({ type: FormFieldAutoFillSchema, required: false }) autoFill?: FormFieldAutoFill;
+  @Prop({ required: false, trim: true, maxlength: 500 }) formula?: string;
   @Prop({ type: MongooseSchema.Types.Mixed, required: false }) layout?: Record<string, unknown>;
   @Prop({ type: FormFileConfigSchema, required: false }) fileConfig?: FormFileConfig;
   @Prop({ type: FormTableConfigSchema, required: false }) tableConfig?: FormTableConfig;
@@ -136,11 +140,21 @@ export class FormField {
 export const FormFieldSchema = SchemaFactory.createForClass(FormField);
 
 @Schema({ _id: false })
+export class FormLeaveDeductionSettings {
+  @Prop({ required: true, default: false }) enabled: boolean;
+  @Prop({ required: false, trim: true, maxlength: 80 }) fieldKey?: string;
+  @Prop({ required: false, default: false }) allowNegative?: boolean;
+}
+export const FormLeaveDeductionSettingsSchema = SchemaFactory.createForClass(FormLeaveDeductionSettings);
+
+@Schema({ _id: false })
 export class FormSettings {
   @Prop({ required: true, default: true }) allowSaveDraft: boolean;
   @Prop({ required: true, default: false }) allowCancelAfterSubmit: boolean;
   @Prop({ required: false, trim: true, maxlength: 300 }) titleTemplate?: string;
   @Prop({ required: false, trim: true, maxlength: 2000 }) instructions?: string;
+  @Prop({ type: FormLeaveDeductionSettingsSchema, required: false })
+  leaveDeduction?: FormLeaveDeductionSettings;
 }
 export const FormSettingsSchema = SchemaFactory.createForClass(FormSettings);
 

@@ -1,4 +1,4 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import { dataResponse } from '../common/http/api-response.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
@@ -7,6 +7,7 @@ import { RequirePermissions } from '../common/authorization/require-permissions.
 import { DashboardService } from './dashboard.service.js';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ApiAuthenticationErrors, ApiDataResponseDto } from '../common/http/swagger-response.dto.js';
+import { DashboardQueryDto } from './dto/dashboard-query.dto.js';
 
 @Controller('dashboard')
 @UseGuards(JwtAuthGuard, PermissionGuard)
@@ -20,7 +21,16 @@ export class DashboardController {
   @RequirePermissions('DASHBOARD.VIEW')
   @ApiOperation({ summary: 'Dữ liệu dashboard', description: 'Yêu cầu quyền: DASHBOARD.VIEW.' })
   @ApiOkResponse({ description: 'Dữ liệu dashboard.', type: ApiDataResponseDto })
-  async getDashboard(@Req() request: RequestWithContext) {
-    return dataResponse(await this.service.getDashboard(request.user!));
+  async getDashboard(
+    @Req() request: RequestWithContext,
+    @Query() query: DashboardQueryDto,
+  ) {
+    return dataResponse(
+      await this.service.getDashboard(
+        request.user!,
+        request.effectivePermissionKeys ?? request.user?.permissionKeys ?? [],
+        query.view,
+      ),
+    );
   }
 }

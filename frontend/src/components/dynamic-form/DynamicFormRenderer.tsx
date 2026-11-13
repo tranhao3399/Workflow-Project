@@ -37,7 +37,9 @@ import {
   validateDynamicFormData,
 } from '../../utils/dynamic-form'
 import { autoFillFieldPlaceholder, defaultFieldPlaceholder } from '../../utils/form-builder'
+import { evaluateFormCalculations } from '../../utils/form-calculation'
 import { DatePicker } from '../ui/DatePicker'
+import { DateTimePicker } from '../ui/DateTimePicker'
 import { FilterSelect } from '../ui/FilterSelect'
 
 export type DynamicFormMode = 'edit' | 'readonly' | 'preview'
@@ -109,7 +111,7 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
       if (!source || systemAutoFillValues[source] === undefined) continue
       next[field.key] = systemAutoFillValues[source]
     }
-    return next
+    return evaluateFormCalculations(fields, next)
   }, [fields, systemAutoFillValues, values])
   const touched = touchedState.sourceKey === sourceKey ? touchedState.fields : emptyTouched
   const visibility = useMemo(() => dynamicFieldVisibility(fields, displayValues), [displayValues, fields])
@@ -124,8 +126,9 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
     const nextValues = { ...values }
     if (value === undefined || value === '') delete nextValues[fieldKey]
     else nextValues[fieldKey] = value
-    setValueState({ sourceKey, values: nextValues })
-    onChange?.(nextValues)
+    const recalculated = evaluateFormCalculations(fields, nextValues)
+    setValueState({ sourceKey, values: recalculated })
+    onChange?.(recalculated)
   }
 
   function touch(fieldKey: string) {
@@ -143,7 +146,7 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
   }, [visibility])
 
   useImperativeHandle(ref, () => ({
-    getValues: () => ({ ...values }),
+    getValues: () => evaluateFormCalculations(fields, values),
     validate: () => {
       const nextTouched = Object.fromEntries(
         validation.errors
@@ -155,7 +158,7 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
       return validation
     },
     focusFirstError: () => focusError(validation),
-  }), [focusError, sourceKey, touched, validation, values, visibility])
+  }), [fields, focusError, sourceKey, touched, validation, values, visibility])
 
   if (isLoading) return <DynamicFormLoading />
   if (loadError) return <DynamicFormError message={loadError} onRetry={onRetry} />
@@ -190,8 +193,12 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
             )
           }
           const fieldValue = displayValues[field.key]
+          const isFormulaField = Boolean(field.formula?.trim())
+          const hasAutoFillValue = typeof fieldValue === 'number'
+            ? Number.isFinite(fieldValue)
+            : stringValue(fieldValue) !== ''
           const isAutoFillLocked = Boolean(
-            field.autoFill?.readOnly && (mode === 'preview' || stringValue(fieldValue) !== ''),
+            field.autoFill?.readOnly && (mode === 'preview' || hasAutoFillValue),
           )
           return (
             <div
@@ -201,10 +208,15 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
               style={style}
             >
               <div className="dynamic-form-label-row">
-                <span className={field.required ? 'required-field-label' : undefined}>{field.label}</span>
+                <span className={field.required && !isFormulaField ? 'required-field-label' : undefined}>{field.label}</span>
                 {field.autoFill && (
                   <small className="dynamic-autofill-badge">
                     {field.autoFill.readOnly ? 'Tự động điền · Khóa sửa' : 'Tự động điền'}
+                  </small>
+                )}
+                {!field.autoFill && isFormulaField && (
+                  <small className="dynamic-autofill-badge">
+                    Tự động tính · Khóa sửa
                   </small>
                 )}
               </div>
@@ -214,7 +226,7 @@ export const DynamicFormRenderer = forwardRef<DynamicFormRendererHandle, Dynamic
                     field={field}
                     value={fieldValue}
                     mode={mode}
-                    locked={isAutoFillLocked}
+                    locked={isAutoFillLocked || isFormulaField}
                     requestId={requestId}
                     allowFileDelete={allowFileDelete}
                     errorId={error ? `${field.key}-error` : undefined}
@@ -277,7 +289,7 @@ function EditableField({ field, value, mode, locked = false, requestId, allowFil
     return <DatePicker value={stringValue(value) || undefined} ariaLabel={field.label} ariaDescribedBy={errorId} ariaInvalid={Boolean(errorId)} placeholder={effectivePlaceholder} disabled={locked} onChange={(nextValue) => { if (!locked) onChange(nextValue); onBlur() }} />
   }
   if (field.type === 'DATETIME') {
-    return <DateTimeInput value={value} placeholder={effectivePlaceholder} ariaLabel={field.label} ariaDescribedBy={errorId} ariaInvalid={Boolean(errorId)} locked={locked} onChange={onChange} onBlur={onBlur} />
+    return <DateTimePicker value={stringValue(value) || undefined} placeholder={effectivePlaceholder} ariaLabel={field.label} ariaDescribedBy={errorId} ariaInvalid={Boolean(errorId)} disabled={locked} onChange={(nextValue) => { if (!locked) onChange(nextValue) }} onBlur={onBlur} />
   }
   if (field.type === 'SELECT') {
     return <FilterSelect ariaLabel={field.label} value={stringValue(value)} options={[{ value: '', label: effectivePlaceholder || 'Chọn một giá trị' }, ...activeFieldOptions(field)]} onChange={(nextValue) => { onChange(nextValue || undefined); onBlur() }} />
@@ -319,7 +331,7 @@ function EditableTableField({ field, value, errorId, onChange, onBlur }: Pick<Ed
     onBlur()
   }
   return <div className="dynamic-table-field" aria-describedby={errorId}>
-    <div className="dynamic-table-scroll"><table><thead><tr><th className="dynamic-table-index">#</th>{columns.map((column) => <th key={column.key} className={column.required ? 'required-field-label' : undefined}>{column.label}</th>)}{config.allowRemoveRows && <th className="dynamic-table-action">Thao tác</th>}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}><td className="dynamic-table-index">{rowIndex + 1}</td>{columns.map((column) => <td key={column.key}><TableCell column={column} value={row[column.key]} onChange={(cellValue) => updateCell(rowIndex, column.key, cellValue)} onBlur={onBlur} /></td>)}{config.allowRemoveRows && <td className="dynamic-table-action"><button type="button" className="text-action-button is-danger" disabled={rows.length <= config.minRows} onClick={() => removeRow(rowIndex)}>Xóa</button></td>}</tr>)}</tbody></table></div>
+    <div className="dynamic-table-scroll"><table><thead><tr><th className="dynamic-table-index">#</th>{columns.map((column) => <th key={column.key} className={column.required && !column.formula?.trim() ? 'required-field-label' : undefined}>{column.label}{Boolean(column.formula?.trim()) && <small className="dynamic-table-formula-badge">Tự động tính</small>}</th>)}{config.allowRemoveRows && <th className="dynamic-table-action">Thao tác</th>}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}><td className="dynamic-table-index">{rowIndex + 1}</td>{columns.map((column) => <td key={column.key}><TableCell column={column} value={row[column.key]} onChange={(cellValue) => updateCell(rowIndex, column.key, cellValue)} onBlur={onBlur} /></td>)}{config.allowRemoveRows && <td className="dynamic-table-action"><button type="button" className="text-action-button is-danger" disabled={rows.length <= config.minRows} onClick={() => removeRow(rowIndex)}>Xóa</button></td>}</tr>)}</tbody></table></div>
     {rows.length === 0 && <p className="dynamic-table-empty">Chưa có dòng dữ liệu.</p>}
     {config.allowAddRows && <button type="button" className="secondary-button dynamic-table-add" disabled={rows.length >= config.maxRows} onClick={addRow}>+ Thêm dòng</button>}
     <small className="dynamic-table-limit">{rows.length}/{config.maxRows} dòng</small>
@@ -328,9 +340,10 @@ function EditableTableField({ field, value, errorId, onChange, onBlur }: Pick<Ed
 
 function TableCell({ column, value, onChange, onBlur }: { column: NonNullable<FormField['tableConfig']>['columns'][number]; value: unknown; onChange: (value: unknown) => void; onBlur: () => void }) {
   const label = column.label
-  const placeholder = defaultFieldPlaceholder(column.type)
-  if (column.type === 'CURRENCY') return <CurrencyInput ariaLabel={label} placeholder={placeholder} value={value} onChange={onChange} onBlur={onBlur} />
-  if (column.type === 'NUMBER') return <LocalizedNumberInput ariaLabel={label} placeholder={placeholder} value={value} onChange={onChange} onBlur={onBlur} />
+  const isFormulaColumn = Boolean(column.formula?.trim())
+  const placeholder = isFormulaColumn ? 'Tự động tính' : defaultFieldPlaceholder(column.type)
+  if (column.type === 'CURRENCY') return <CurrencyInput ariaLabel={label} placeholder={placeholder} value={value} locked={isFormulaColumn} onChange={onChange} onBlur={onBlur} />
+  if (column.type === 'NUMBER') return <LocalizedNumberInput ariaLabel={label} placeholder={placeholder} value={value} locked={isFormulaColumn} onChange={onChange} onBlur={onBlur} />
   if (column.type === 'DATE') return <DatePicker ariaLabel={label} placeholder={placeholder} value={stringValue(value) || undefined} onChange={(nextValue) => { onChange(nextValue); onBlur() }} />
   if (column.type === 'SELECT') return <FilterSelect ariaLabel={label} value={stringValue(value)} options={[{ value: '', label: placeholder || 'Chọn một giá trị' }, ...(column.options ?? []).filter((option) => option.isActive !== false).toSorted((left, right) => left.order - right.order).map((option) => ({ value: option.value, label: option.label }))]} onChange={(nextValue) => { onChange(nextValue || undefined); onBlur() }} />
   if (column.type === 'BOOLEAN') return <label className="dynamic-table-boolean"><input aria-label={label} type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} onBlur={onBlur} /><span>{value === true ? 'Có' : 'Không'}</span></label>
@@ -382,23 +395,65 @@ function MultiSelectControl({ field, value, errorId, onChange, onBlur }: Omit<Op
 
   return (
     <div className={isOpen ? 'dynamic-multi-select is-open' : 'dynamic-multi-select'} ref={rootRef}>
-      <button type="button" className="dynamic-multi-select-trigger" aria-label={field.label} aria-expanded={isOpen} aria-invalid={Boolean(errorId)} aria-describedby={errorId} onClick={() => setIsOpen((current) => !current)}>
+      <div
+        className="dynamic-multi-select-trigger"
+        role="combobox"
+        tabIndex={0}
+        aria-label={field.label}
+        aria-expanded={isOpen}
+        aria-invalid={Boolean(errorId)}
+        aria-describedby={errorId}
+        onClick={() => setIsOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            setIsOpen((current) => !current)
+          }
+          if (event.key === 'Escape') setIsOpen(false)
+        }}
+      >
         <span className={selected.length ? 'dynamic-multi-select-values' : 'dynamic-multi-select-placeholder'}>
           {selected.length
-            ? selected.map((item) => <em key={item}>{optionLabel(field, item)}</em>)
+            ? selected.map((item) => (
+                <span className="dynamic-multi-select-chip" key={item}>
+                  <em>{optionLabel(field, item)}</em>
+                  <button
+                    type="button"
+                    aria-label={`Bỏ lựa chọn ${optionLabel(field, item)}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onChange(selected.filter((value) => value !== item))
+                      onBlur()
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))
             : defaultFieldPlaceholder('MULTI_SELECT')}
         </span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
-      </button>
+      </div>
       {isOpen && (
-        <div className="dynamic-multi-select-menu" role="group" aria-label={field.label}>
+        <div className="dynamic-multi-select-menu" role="listbox" aria-label={field.label} aria-multiselectable="true">
           {options.map((option) => {
             const checked = selected.includes(option.value)
             return (
-              <label key={option.value}>
-                <input type="checkbox" checked={checked} onChange={() => onChange(checked ? selected.filter((item) => item !== option.value) : [...selected, option.value])} />
+              <button
+                className={checked ? 'dynamic-multi-select-option is-selected' : 'dynamic-multi-select-option'}
+                type="button"
+                role="option"
+                aria-selected={checked}
+                key={option.value}
+                onClick={() => onChange(checked ? selected.filter((item) => item !== option.value) : [...selected, option.value])}
+              >
                 <span>{option.label}</span>
-              </label>
+                {checked && (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m5 12 4 4L19 6" />
+                  </svg>
+                )}
+              </button>
             )
           })}
         </div>
@@ -489,66 +544,6 @@ function CurrencyInput({
   )
 }
 
-function DateTimeInput({
-  value,
-  placeholder,
-  ariaLabel,
-  ariaDescribedBy,
-  ariaInvalid = false,
-  locked = false,
-  onChange,
-  onBlur,
-}: {
-  value: unknown
-  placeholder?: string
-  ariaLabel: string
-  ariaDescribedBy?: string
-  ariaInvalid?: boolean
-  locked?: boolean
-  onChange: (value: unknown) => void
-  onBlur: () => void
-}) {
-  const currentValue = stringValue(value)
-  const parts = dateTimeParts(currentValue)
-
-  return (
-    <div className={locked ? 'dynamic-datetime-control is-autofill-locked' : 'dynamic-datetime-control'}>
-      <DatePicker
-        value={parts.date}
-        placeholder={placeholder}
-        ariaLabel={ariaLabel}
-        ariaDescribedBy={ariaDescribedBy}
-        ariaInvalid={ariaInvalid}
-        disabled={locked}
-        onChange={(nextDate) => {
-          if (locked) return
-          onChange(nextDate ? `${nextDate}T${parts.time || '00:00'}` : undefined)
-          onBlur()
-        }}
-      />
-      <input
-        className="dynamic-datetime-time"
-        type="time"
-        value={parts.time}
-        disabled={locked || !parts.date}
-        aria-label={`${ariaLabel} - giờ`}
-        aria-describedby={ariaDescribedBy}
-        aria-invalid={ariaInvalid}
-        onChange={(event) => {
-          if (locked || !parts.date) return
-          onChange(`${parts.date}T${event.target.value || '00:00'}`)
-        }}
-        onBlur={onBlur}
-      />
-    </div>
-  )
-}
-
-function dateTimeParts(value: string): { date?: string; time: string } {
-  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(value)
-  return match ? { date: match[1], time: `${match[2]}:${match[3]}` } : { time: '' }
-}
-
 function sanitizePhoneInput(value: string): string {
   const international = value.trimStart().startsWith('+')
   const digits = value.replace(/\D/g, '').slice(0, 15)
@@ -614,6 +609,10 @@ function LocalizedNumberInput({
         onChange(parsed)
       }}
       onBlur={() => {
+        if (locked) {
+          onBlur()
+          return
+        }
         const parsed = state.draft ? Number(state.draft.replace(',', '.')) : undefined
         const nextValue = parsed !== undefined && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
         setEditState({ sourceValue: nextValue, draft: nextValue === undefined ? '' : formatLocalizedNumber(nextValue), focused: false })
@@ -658,7 +657,7 @@ interface DynamicFileFieldProps {
 
 function DynamicFileField({ field, value, mode, requestId, allowDelete, errorId, onChange, onBlur }: DynamicFileFieldProps) {
   const fileIds = dynamicFileIds(value)
-  const config = field.fileConfig ?? { multiple: true, allowedMimeTypes: ['application/pdf', 'image/jpeg', 'image/png'], maxFileSizeBytes: 10 * 1024 * 1024, maxFiles: 5 }
+  const config = field.fileConfig ?? { multiple: true, allowedMimeTypes: ['application/pdf', 'image/jpeg', 'image/png'], maxFileSizeBytes: 5 * 1024 * 1024, maxFiles: 5 }
   const [uploadedFiles, setUploadedFiles] = useState<Record<string, FileMetadata>>({})
   const [uploadState, setUploadState] = useState<{ fileName: string; progress: number } | null>(null)
   const [uploadError, setUploadError] = useState('')

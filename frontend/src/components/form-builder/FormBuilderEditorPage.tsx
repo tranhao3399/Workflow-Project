@@ -86,6 +86,10 @@ import {
   type FieldGridRow,
   type FormBuilderIssue,
 } from '../../utils/form-builder';
+import {
+  replaceFieldKeyInFormula,
+  replaceTableColumnKeyInFormula,
+} from '../../utils/form-calculation';
 import { DefinitionStatusBadge } from '../StatusBadge';
 import { ErrorState, LoadingState } from '../DataStates';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
@@ -101,6 +105,7 @@ interface FormBuilderEditorPageProps {
   canUpdate: boolean;
   canDeleteDraft: boolean;
   onBack: () => void;
+  onNavigateCatalog: (groupId?: string) => void;
   onOpen: (id: string) => void;
   onConfigureWorkflow: (formDefinitionId: string) => void;
   onNotify: (message: string, tone?: 'success' | 'error') => void;
@@ -141,8 +146,8 @@ type DropIndicator =
   | { kind: 'SHEET_END'; label: string };
 
 const fieldLabels: Record<FormFieldType, string> = {
-  TEXT: 'Văn bản ngắn',
-  TEXTAREA: 'Văn bản dài',
+  TEXT: 'Văn bản',
+  TEXTAREA: 'Văn bản (nhiều dòng)',
   NUMBER: 'Số',
   CURRENCY: 'Tiền tệ',
   EMAIL: 'Email',
@@ -160,7 +165,7 @@ const fieldLabels: Record<FormFieldType, string> = {
 };
 
 const paletteFieldTypes = formFieldTypes.filter(
-  (type) => type !== 'MULTI_SELECT' && type !== 'CHECKBOX',
+  (type) => type !== 'MULTI_SELECT' && type !== 'CHECKBOX' && type !== 'TEXTAREA',
 );
 
 const fieldTypeIcons: Record<FormFieldType, LucideIcon> = {
@@ -203,6 +208,7 @@ export function FormBuilderEditorPage({
   canUpdate,
   canDeleteDraft,
   onBack,
+  onNavigateCatalog,
   onOpen,
   onConfigureWorkflow,
   onNotify,
@@ -286,20 +292,44 @@ export function FormBuilderEditorPage({
   const isEditable = isDraft && (isNew ? canCreate : canUpdate);
   const isSaving = savingMode !== null;
   const isDirty = fingerprint(draft) !== originalFingerprint;
-  const clientIssues = useMemo(
-    () => validateFormBuilderDefinition(draft.code, draft.name, draft.fields),
-    [draft],
-  );
-  const displayedIssues = showValidation
-    ? [...clientIssues, ...serverIssues]
-    : serverIssues;
-  const selectedField =
-    selectedIndex === null ? null : (draft.fields[selectedIndex] ?? null);
-  const multiColumnFieldCount = useMemo(
-    () =>
-      draft.fields.filter((field) => readFieldColumnSpan(field) < 12).length,
+  const emptyFormulaIssues = useMemo(
+    () => findEmptyFormulaIssues(draft.fields),
     [draft.fields],
   );
+  const clientIssues = useMemo(
+    () =>
+      validateFormBuilderDefinition(
+        draft.code,
+        draft.name,
+        draft.fields,
+        draft.settings,
+      ),
+    [draft],
+  );
+  const submitIssues = useMemo(
+    () => [...clientIssues, ...emptyFormulaIssues],
+    [clientIssues, emptyFormulaIssues],
+  );
+  const displayedIssues = useMemo(
+    () => (showValidation ? [...submitIssues, ...serverIssues] : serverIssues),
+    [showValidation, submitIssues, serverIssues],
+  );
+  const propertyIssues = useMemo(() => {
+    if (selectedIndex === null) return displayedIssues;
+    const currentFieldPrefix = `fields.${selectedIndex}`;
+    const fieldClientIssues = clientIssues.filter((issue) =>
+      issue.path.startsWith(currentFieldPrefix),
+    );
+    const combined = [...displayedIssues];
+    for (const issue of fieldClientIssues) {
+      if (!combined.some((item) => item.path === issue.path && item.message === issue.message)) {
+        combined.push(issue);
+      }
+    }
+    return combined;
+  }, [displayedIssues, selectedIndex, clientIssues]);
+  const selectedField =
+    selectedIndex === null ? null : (draft.fields[selectedIndex] ?? null);
   const fieldRows = useMemo(
     () => computeFieldRows(draft.fields),
     [draft.fields],
@@ -311,6 +341,16 @@ export function FormBuilderEditorPage({
   const nameError = displayedIssues.find(
     (issue) => issue.path === 'name',
   )?.message;
+  const leaveFieldError = displayedIssues.find(
+    (issue) => issue.path === 'settings.leaveDeduction.fieldKey',
+  )?.message;
+  const leaveNumberFields = useMemo(
+    () =>
+      draft.fields.filter(
+        (field) => field.type === 'NUMBER' && !field.autoFill,
+      ),
+    [draft.fields],
+  );
 
   const previewDefinition = useMemo<FormDefinition>(
     () => ({
@@ -357,10 +397,48 @@ export function FormBuilderEditorPage({
   }
 
   function updateField(index: number, field: FormField) {
+    const previousField = draft.fields[index];
+    const previousKey = previousField?.key;
+    const isGeneratedFieldKey = Boolean(
+      previousKey && /^field_\d+$/.test(previousKey) && previousKey !== field.key,
+    );
+    const colKeyChanges: Array<{ oldKey: string; newKey: string }> = [];
+    if (
+      previousField?.type === 'TABLE' &&
+      field.type === 'TABLE' &&
+      previousField.tableConfig?.columns &&
+      field.tableConfig?.columns &&
+      previousField.tableConfig.columns.length === field.tableConfig.columns.length
+    ) {
+      field.tableConfig.columns.forEach((col, colIdx) => {
+        const oldCol = previousField.tableConfig?.columns[colIdx];
+        if (oldCol && /^column_\d+$/.test(oldCol.key) && oldCol.key !== col.key) {
+          colKeyChanges.push({ oldKey: oldCol.key, newKey: col.key });
+        }
+      });
+    }
     changeDraft({
-      fields: draft.fields.map((item, itemIndex) =>
-        itemIndex === index ? field : item,
-      ),
+      fields: draft.fields.map((item, itemIndex) => {
+        if (itemIndex === index) return field;
+        if (!isGeneratedFieldKey && colKeyChanges.length === 0) return item;
+        let nextFormula = item.formula;
+        if (nextFormula && isGeneratedFieldKey && previousKey) {
+          nextFormula = replaceFieldKeyInFormula(nextFormula, previousKey, field.key);
+        }
+        if (nextFormula && colKeyChanges.length > 0) {
+          for (const change of colKeyChanges) {
+            nextFormula = replaceTableColumnKeyInFormula(
+              nextFormula,
+              field.key,
+              change.oldKey,
+              change.newKey,
+            );
+          }
+        }
+        return nextFormula !== item.formula
+          ? { ...item, formula: nextFormula }
+          : item;
+      }),
     });
   }
 
@@ -494,10 +572,10 @@ export function FormBuilderEditorPage({
 
   async function persistDraft(mode: SaveMode) {
     if (!isEditable || isSaving) return;
-    if (clientIssues.length) {
+    if (submitIssues.length) {
       setShowValidation(true);
       setTab('DESIGN');
-      focusIssue(clientIssues[0], setSelectedIndex);
+      focusIssue(submitIssues[0], setSelectedIndex);
       return;
     }
     if (!isDirty && definition) {
@@ -514,6 +592,7 @@ export function FormBuilderEditorPage({
       const isCreating = !definition;
       const saved = definition
         ? await updateFormDefinition(definition.id, {
+            code: draft.code.trim().toUpperCase(),
             name: draft.name.trim(),
             groupId: draft.groupId || null,
             category: draft.category || null,
@@ -667,16 +746,20 @@ export function FormBuilderEditorPage({
     }
   }
 
-  function back() {
+  function navigate(target: () => void) {
     if (!isDirty) {
-      onBack();
+      target();
       return;
     }
     window.dispatchEvent(
       new CustomEvent('workflow:navigate-request', {
-        detail: { onConfirm: onBack },
+        detail: { onConfirm: target },
       }),
     );
+  }
+
+  function back() {
+    navigate(onBack);
   }
 
   if (isLoading) return <LoadingState />;
@@ -695,14 +778,40 @@ export function FormBuilderEditorPage({
   const pageTitle = isNew
     ? 'Tạo biểu mẫu'
     : (definition?.name ?? 'Chi tiết biểu mẫu');
+  const definitionGroup = definition?.group;
+  const catalogGroupId = initialGroupId ?? definitionGroup?.id;
+  const catalogGroupName = catalogGroupId === 'UNGROUPED'
+    ? 'Chưa phân nhóm'
+    : (
+        formGroups.find((group) => group.id === catalogGroupId)?.name
+        ?? (definitionGroup && definitionGroup.id === catalogGroupId
+          ? definitionGroup.name
+          : undefined)
+      );
 
   return (
     <>
       <nav className="detail-breadcrumb" aria-label="Điều hướng biểu mẫu">
-        <button className="breadcrumb-link" type="button" onClick={back}>
+        <button
+          className="breadcrumb-link"
+          type="button"
+          onClick={() => navigate(() => onNavigateCatalog())}
+        >
           Quản lý biểu mẫu
         </button>
         <span aria-hidden="true">/</span>
+        {catalogGroupId && catalogGroupName && (
+          <>
+            <button
+              className="breadcrumb-link"
+              type="button"
+              onClick={() => navigate(() => onNavigateCatalog(catalogGroupId))}
+            >
+              Nhóm: {catalogGroupName}
+            </button>
+            <span aria-hidden="true">/</span>
+          </>
+        )}
         <strong>{pageTitle}</strong>
       </nav>
 
@@ -860,7 +969,7 @@ export function FormBuilderEditorPage({
                 data-form-property="code"
                 placeholder="VD: DON_NGHI_PHEP"
                 value={draft.code}
-                disabled={!isEditable || !isNew}
+                disabled={!isEditable}
                 maxLength={80}
                 aria-invalid={Boolean(codeError)}
                 onChange={(event) =>
@@ -922,6 +1031,95 @@ export function FormBuilderEditorPage({
                 }
               />
             </label>
+
+            <div className="form-builder-leave-settings">
+              <div className="form-builder-leave-toggles">
+                <label className="form-builder-inline-checkbox">
+                  <input
+                    type="checkbox"
+                    disabled={!isEditable}
+                    checked={Boolean(draft.settings.leaveDeduction?.enabled)}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      changeDraft({
+                        settings: {
+                          ...draft.settings,
+                          leaveDeduction: {
+                            enabled,
+                            fieldKey: enabled
+                              ? (draft.settings.leaveDeduction?.fieldKey ?? leaveNumberFields[0]?.key ?? undefined)
+                              : undefined,
+                            allowNegative: enabled
+                              ? Boolean(draft.settings.leaveDeduction?.allowNegative)
+                              : false,
+                          },
+                        },
+                      });
+                    }}
+                  />
+                  <span>Tự động trừ quỹ ngày phép năm khi phê duyệt</span>
+                </label>
+                {draft.settings.leaveDeduction?.enabled && (
+                  <label className="form-builder-inline-checkbox">
+                    <input
+                      type="checkbox"
+                      disabled={!isEditable}
+                      checked={Boolean(draft.settings.leaveDeduction?.allowNegative)}
+                      onChange={(event) =>
+                        changeDraft({
+                          settings: {
+                            ...draft.settings,
+                            leaveDeduction: {
+                              enabled: true,
+                              fieldKey: draft.settings.leaveDeduction?.fieldKey,
+                              allowNegative: event.target.checked,
+                            },
+                          },
+                        })
+                      }
+                    />
+                    <span>Cho phép trừ âm quỹ phép</span>
+                  </label>
+                )}
+              </div>
+              {draft.settings.leaveDeduction?.enabled && (
+                <div className="form-builder-leave-field-select">
+                  <span className="required-field-label">Trường số ngày nghỉ cần trừ</span>
+                  <div data-form-property="settings.leaveDeduction.fieldKey">
+                    <FilterSelect
+                      ariaLabel="Trường số ngày nghỉ cần trừ"
+                      disabled={!isEditable}
+                      value={draft.settings.leaveDeduction?.fieldKey ?? ''}
+                      options={[
+                        {
+                          value: '',
+                          label: leaveNumberFields.length
+                            ? 'Chọn trường kiểu Số trên biểu mẫu'
+                            : 'Chưa có trường kiểu Số phù hợp',
+                        },
+                        ...leaveNumberFields.map((field) => ({
+                          value: field.key,
+                          label: `${field.label} (${field.key})`,
+                        })),
+                      ]}
+                      onChange={(value) =>
+                        changeDraft({
+                          settings: {
+                            ...draft.settings,
+                            leaveDeduction: {
+                              enabled: true,
+                              fieldKey: value || undefined,
+                              allowNegative: Boolean(draft.settings.leaveDeduction?.allowNegative),
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                  {leaveFieldError && <small className="field-error">{leaveFieldError}</small>}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </SurfaceCard>
@@ -953,14 +1151,6 @@ export function FormBuilderEditorPage({
               <Eye size={13} strokeWidth={2} aria-hidden="true" />
               <span>Xem trước phiếu</span>
             </button>
-          </div>
-          <div className="form-builder-toolbar-meta">
-            <span>{draft.fields.length} trường dữ liệu</span>
-            {multiColumnFieldCount > 0 && (
-              <span className="form-builder-toolbar-pill">
-                {multiColumnFieldCount} trường chia cột
-              </span>
-            )}
           </div>
         </div>
 
@@ -1481,7 +1671,7 @@ export function FormBuilderEditorPage({
                                   ) : (
                                     <>
                                       {field.label || 'Chưa đặt nhãn'}
-                                      {field.required && !field.autoFill?.readOnly && (
+                                      {field.required && !field.autoFill?.readOnly && !field.formula?.trim() && (
                                         <b aria-label="Bắt buộc"> *</b>
                                       )}
                                     </>
@@ -1536,7 +1726,7 @@ export function FormBuilderEditorPage({
                     field={selectedField}
                     fieldIndex={selectedIndex}
                     allFields={draft.fields}
-                    issues={displayedIssues}
+                    issues={propertyIssues}
                     disabled={!isEditable}
                     systemField={isSystemRequestField(selectedField)}
                     onChange={(field) => updateField(selectedIndex, field)}
@@ -1631,9 +1821,13 @@ function suggestDuplicateCode(code: string): string {
 }
 
 function CanvasFieldPreview({ field }: { field: FormField }) {
-  const placeholder = defaultFieldPlaceholder(field.type);
+  const isFormulaLocked = Boolean(field.formula?.trim());
+  const isReadonlyLocked = Boolean(field.autoFill?.readOnly || isFormulaLocked);
+  const placeholder = isFormulaLocked
+    ? 'Tự động tính theo công thức'
+    : defaultFieldPlaceholder(field.type);
   const mockInputClass = `form-builder-mock-input${
-    field.autoFill?.readOnly ? ' is-readonly' : ''
+    isReadonlyLocked ? ' is-readonly' : ''
   }`;
   const mockTextareaClass = `form-builder-mock-textarea${
     field.autoFill?.readOnly ? ' is-readonly' : ''
@@ -1673,15 +1867,18 @@ function CanvasFieldPreview({ field }: { field: FormField }) {
       );
     case 'NUMBER':
       return (
-        <span className="form-builder-mock-input" aria-hidden="true">
+        <span className={mockInputClass} aria-hidden="true">
           <span>{placeholder}</span>
+          {isReadonlyLocked && <Lock size={13} strokeWidth={1.8} />}
         </span>
       );
     case 'CURRENCY':
       return (
-        <span className="form-builder-mock-input" aria-hidden="true">
+        <span className={mockInputClass} aria-hidden="true">
           <span>{placeholder}</span>
-          <em className="form-builder-mock-suffix">VNĐ</em>
+          <em className="form-builder-mock-suffix">
+            {isReadonlyLocked ? 'VNĐ · Khóa' : 'VNĐ'}
+          </em>
         </span>
       );
     case 'TEXTAREA':
@@ -1983,7 +2180,10 @@ function emptyDraft(initialGroupId = ''): FormDraft {
   const fields = ['EMPLOYEE_CODE', 'REQUEST_DATE', 'FULL_NAME', 'DEPARTMENT_NAME'].reduce<FormField[]>(
     (currentFields, presetKey) => [
       ...currentFields,
-      createPresetField(presetKey, currentFields),
+      {
+        ...createPresetField(presetKey, currentFields),
+        layout: { columnSpan: 6 },
+      },
     ],
     ensureSystemRequestFields([]),
   );
@@ -2040,4 +2240,27 @@ function focusIssue(
     target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     target?.focus();
   });
+}
+
+function findEmptyFormulaIssues(fields: readonly FormField[]): FormBuilderIssue[] {
+  const issues: FormBuilderIssue[] = [];
+  fields.forEach((field, fieldIndex) => {
+    if (field.formula !== undefined && field.formula.trim() === '') {
+      issues.push({
+        path: `fields.${fieldIndex}.formula`,
+        message: 'Vui lòng nhập biểu thức công thức hoặc tắt chế độ tự động tính.',
+      });
+    }
+    if (field.type === 'TABLE' && field.tableConfig?.columns) {
+      field.tableConfig.columns.forEach((column, colIndex) => {
+        if (column.formula !== undefined && column.formula.trim() === '') {
+          issues.push({
+            path: `fields.${fieldIndex}.tableConfig.columns.${colIndex}.formula`,
+            message: 'Vui lòng nhập biểu thức công thức cột hoặc tắt chế độ tự động tính.',
+          });
+        }
+      });
+    }
+  });
+  return issues;
 }

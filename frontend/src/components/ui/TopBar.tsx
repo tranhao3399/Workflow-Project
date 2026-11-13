@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useMotionTokens, useShouldReduceMotion } from '@animate-ui/react/utils/motion'
+import { AnimatePresence, motion } from 'motion/react'
 import { useVisiblePolling } from '../../hooks/useVisiblePolling'
 import { resolveApiAssetUrl } from '../../services/api-client'
 import { getNotificationSummary, markAllNotificationsRead, updateNotificationRead } from '../../services/notifications.service'
@@ -61,6 +63,8 @@ export function TopBar({
   const accountMenuRef = useRef<HTMLDivElement>(null)
   const notificationMenuRef = useRef<HTMLDivElement>(null)
   const showSearchResults = isSearchFocused && Boolean(searchQuery.trim())
+  const shouldReduceMotion = useShouldReduceMotion()
+  const { transition } = useMotionTokens()
 
   const loadNotifications = useCallback(async () => {
     if (!canViewNotifications) return
@@ -204,15 +208,15 @@ export function TopBar({
       <div className="topbar-actions">
         {canViewNotifications && <div className="notification-menu" ref={notificationMenuRef}>
           <button className="notification-trigger" type="button" aria-label="Thông báo" aria-haspopup="menu" aria-expanded={isNotificationsOpen} aria-controls="notification-popover" onClick={() => setIsNotificationsOpen((current) => !current)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21h4" /></svg>{unreadNotificationCount > 0 && <span className="notification-badge" aria-label={`${unreadNotificationCount} thông báo chưa đọc`}>{unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}</span>}</button>
-          {isNotificationsOpen && <section className="notification-popover" id="notification-popover" role="menu" aria-label="Thông báo">
+          <AnimatePresence initial={false}>{isNotificationsOpen && <motion.section className="notification-popover" id="notification-popover" role="menu" aria-label="Thông báo" initial={shouldReduceMotion ? false : { opacity: 0, scale: 0.98, y: -6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: shouldReduceMotion ? 1 : 0.98, y: shouldReduceMotion ? 0 : -4 }} transition={shouldReduceMotion ? { duration: 0 } : transition.menu} style={{ transformOrigin: 'top right' }}>
             <header className="notification-popover-header"><div><h2>Thông báo</h2><span>{unreadNotificationCount} chưa đọc</span></div>{unreadNotificationCount > 0 && <button className="text-action-button" type="button" disabled={isMarkingAll} onClick={() => void markAllRead()}>{isMarkingAll ? 'Đang cập nhật...' : 'Đọc tất cả'}</button>}</header>
             <div className="notification-list">{isNotificationsLoading ? <p className="search-no-results">Đang tải thông báo...</p> : hasNotificationError ? <button className="notification-retry" type="button" onClick={() => { setIsNotificationsLoading(true); void loadNotifications() }}>Không thể tải thông báo. Thử lại</button> : notifications.length === 0 ? <p className="search-no-results">Chưa có thông báo.</p> : notifications.map((notification) => <button className={notification.isRead ? `notification-item notification-${notification.type.toLowerCase()}` : `notification-item notification-${notification.type.toLowerCase()} is-unread`} type="button" role="menuitem" disabled={busyNotificationId === notification.id} key={notification.id} onClick={() => void openNotification(notification)}><span className="notification-dot" aria-hidden="true" /><span className="notification-content"><strong>{notification.title}</strong><span>{notification.description}</span><time dateTime={notification.createdAt}>{notification.relativeTime}</time></span></button>)}</div>
             <footer className="notification-popover-footer"><button type="button" onClick={() => { setIsNotificationsOpen(false); onOpenNotifications() }}>Xem tất cả thông báo</button></footer>
-          </section>}
+          </motion.section>}</AnimatePresence>
         </div>}
         <div className="account-menu" ref={accountMenuRef}>
           <button className="account-trigger" type="button" aria-haspopup="menu" aria-expanded={isAccountOpen} aria-controls="account-popover" onClick={() => setIsAccountOpen((current) => !current)}><span className="header-avatar" aria-hidden="true">{user.avatarUrl ? <img src={resolveApiAssetUrl(user.avatarUrl)} alt="" /> : firstInitial(user.fullName)}</span><span className="account-summary"><strong>{user.fullName}</strong></span><span className="account-chevron" aria-hidden="true" /></button>
-          {isAccountOpen && <section className="account-popover" id="account-popover" role="menu" aria-label="Tài khoản đang đăng nhập"><div className="account-popover-info"><strong>{user.fullName}</strong><span>{user.email}</span></div><div className="account-divider" /><button className="account-menu-action" type="button" role="menuitem" onClick={() => { setIsAccountOpen(false); onOpenMyAccount() }}>Tài khoản của tôi</button><button className="account-logout" type="button" role="menuitem" disabled={isLoggingOut} onClick={() => void onLogout()}>{isLoggingOut ? 'Đang đăng xuất...' : 'Đăng xuất'}</button></section>}
+          <AnimatePresence initial={false}>{isAccountOpen && <motion.section className="account-popover" id="account-popover" role="menu" aria-label="Tài khoản đang đăng nhập" initial={shouldReduceMotion ? false : { opacity: 0, scale: 0.98, y: -6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: shouldReduceMotion ? 1 : 0.98, y: shouldReduceMotion ? 0 : -4 }} transition={shouldReduceMotion ? { duration: 0 } : transition.menu} style={{ transformOrigin: 'top right' }}><div className="account-popover-info"><strong>{user.fullName}</strong><span>{user.email}</span></div><div className="account-divider" /><button className="account-menu-action" type="button" role="menuitem" onClick={() => { setIsAccountOpen(false); onOpenMyAccount() }}>Tài khoản của tôi</button><button className="account-logout" type="button" role="menuitem" disabled={isLoggingOut} onClick={() => void onLogout()}>{isLoggingOut ? 'Đang đăng xuất...' : 'Đăng xuất'}</button></motion.section>}</AnimatePresence>
         </div>
       </div>
     </header>

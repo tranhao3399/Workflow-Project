@@ -21,7 +21,25 @@ interface PasswordForm {
   confirmPassword: string
 }
 
+interface PasswordFormErrors {
+  currentPassword?: string
+  newPassword?: string
+  confirmPassword?: string
+}
+
 const emptyPasswordForm: PasswordForm = { currentPassword: '', newPassword: '', confirmPassword: '' }
+
+function currentPasswordError(password: string): string | undefined {
+  if (!password) return 'Mật khẩu hiện tại không được để trống.'
+  if (password.length < 8 || password.length > 128) return 'Mật khẩu hiện tại phải có từ 8 đến 128 ký tự.'
+  return undefined
+}
+
+function confirmPasswordError(confirmPassword: string, newPassword: string): string | undefined {
+  if (!confirmPassword) return 'Xác nhận mật khẩu mới không được để trống.'
+  if (confirmPassword !== newPassword) return 'Xác nhận mật khẩu mới không khớp.'
+  return undefined
+}
 
 function firstInitial(fullName: string): string {
   return fullName.trim().charAt(0).toUpperCase() || 'U'
@@ -57,8 +75,11 @@ export function MyAccountPage({ user, onBack, onPasswordChanged }: Props) {
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [error, setError] = useState('')
+  const [errors, setErrors] = useState<PasswordFormErrors>({})
+  const [requestError, setRequestError] = useState('')
   const currentPasswordRef = useRef<HTMLInputElement>(null)
+  const newPasswordRef = useRef<HTMLInputElement>(null)
+  const confirmPasswordRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!isPasswordDialogOpen) return
@@ -67,7 +88,8 @@ export function MyAccountPage({ user, onBack, onPasswordChanged }: Props) {
       if (event.key === 'Escape' && !isSaving) {
         setIsPasswordDialogOpen(false)
         setForm(emptyPasswordForm)
-        setError('')
+        setErrors({})
+        setRequestError('')
         setShowCurrentPassword(false)
         setShowNewPassword(false)
         setShowConfirmPassword(false)
@@ -81,7 +103,8 @@ export function MyAccountPage({ user, onBack, onPasswordChanged }: Props) {
     if (isSaving) return
     setIsPasswordDialogOpen(false)
     setForm(emptyPasswordForm)
-    setError('')
+    setErrors({})
+    setRequestError('')
     setShowCurrentPassword(false)
     setShowNewPassword(false)
     setShowConfirmPassword(false)
@@ -89,27 +112,52 @@ export function MyAccountPage({ user, onBack, onPasswordChanged }: Props) {
 
   function updateField(key: keyof PasswordForm, value: string) {
     setForm((current) => ({ ...current, [key]: value }))
-    setError('')
+    setErrors((current) => ({
+      ...current,
+      [key]: undefined,
+      ...(key === 'newPassword' && form.confirmPassword ? { confirmPassword: undefined } : {}),
+    }))
+    setRequestError('')
+  }
+
+  function validatePasswordForm(): PasswordFormErrors {
+    return {
+      currentPassword: currentPasswordError(form.currentPassword),
+      newPassword: form.newPassword ? passwordPolicyError(form.newPassword) : 'Mật khẩu mới không được để trống.',
+      confirmPassword: confirmPasswordError(form.confirmPassword, form.newPassword),
+    }
   }
 
   async function submitPasswordChange(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (form.newPassword !== form.confirmPassword) {
-      setError('Xác nhận mật khẩu mới không khớp.')
-      return
-    }
-    const passwordError = passwordPolicyError(form.newPassword)
-    if (passwordError) {
-      setError(passwordError)
+    if (isSaving) return
+    const nextErrors = validatePasswordForm()
+    if (nextErrors.currentPassword || nextErrors.newPassword || nextErrors.confirmPassword) {
+      setErrors(nextErrors)
+      window.requestAnimationFrame(() => {
+        if (nextErrors.currentPassword) currentPasswordRef.current?.focus()
+        else if (nextErrors.newPassword) newPasswordRef.current?.focus()
+        else confirmPasswordRef.current?.focus()
+      })
       return
     }
 
     setIsSaving(true)
+    setRequestError('')
     try {
       const result = await changeOwnPassword(form.currentPassword, form.newPassword, form.confirmPassword)
       onPasswordChanged(result.message)
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Không thể đổi mật khẩu. Vui lòng thử lại.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể đổi mật khẩu. Vui lòng thử lại.'
+      if (message.toLocaleLowerCase('vi').includes('mật khẩu hiện tại')) {
+        setErrors((current) => ({ ...current, currentPassword: message }))
+        window.requestAnimationFrame(() => currentPasswordRef.current?.focus())
+      } else if (message.toLocaleLowerCase('vi').includes('mật khẩu mới')) {
+        setErrors((current) => ({ ...current, newPassword: message }))
+        window.requestAnimationFrame(() => newPasswordRef.current?.focus())
+      } else {
+        setRequestError(message)
+      }
     } finally {
       setIsSaving(false)
     }
@@ -141,6 +189,11 @@ export function MyAccountPage({ user, onBack, onPasswordChanged }: Props) {
     <SurfaceCard className="my-account-security-card">
       <div className="my-account-security-heading"><div><h2>Bảo mật</h2><p>Mật khẩu được bảo vệ và không hiển thị trong hệ thống.</p></div><button className="secondary-button" type="button" onClick={() => setIsPasswordDialogOpen(true)}>Đổi mật khẩu</button></div>
     </SurfaceCard>
-    {isPasswordDialogOpen && <div className="modal-backdrop" role="presentation"><section className="modal-panel my-account-password-modal" role="dialog" aria-modal="true" aria-labelledby="change-password-title"><header className="modal-header"><div><h2 id="change-password-title">Đổi mật khẩu</h2></div><button className="icon-close" type="button" aria-label="Đóng" onClick={closePasswordDialog} disabled={isSaving}>×</button></header><form className="editor-form" onSubmit={(event) => void submitPasswordChange(event)}><label>Mật khẩu hiện tại<div className="password-input-control"><input ref={currentPasswordRef} type={showCurrentPassword ? 'text' : 'password'} autoComplete="current-password" value={form.currentPassword} onChange={(event) => updateField('currentPassword', event.target.value)} disabled={isSaving} required /><PasswordVisibilityButton passwordLabel="mật khẩu hiện tại" isVisible={showCurrentPassword} onToggle={() => setShowCurrentPassword((current) => !current)} disabled={isSaving} /></div></label><label>Mật khẩu mới<div className="password-input-control"><input type={showNewPassword ? 'text' : 'password'} autoComplete="new-password" value={form.newPassword} onChange={(event) => updateField('newPassword', event.target.value)} disabled={isSaving} minLength={8} required /><PasswordVisibilityButton passwordLabel="mật khẩu mới" isVisible={showNewPassword} onToggle={() => setShowNewPassword((current) => !current)} disabled={isSaving} /></div></label><label>Xác nhận mật khẩu mới<div className="password-input-control"><input type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" value={form.confirmPassword} onChange={(event) => updateField('confirmPassword', event.target.value)} disabled={isSaving} minLength={8} required /><PasswordVisibilityButton passwordLabel="xác nhận mật khẩu mới" isVisible={showConfirmPassword} onToggle={() => setShowConfirmPassword((current) => !current)} disabled={isSaving} /></div></label>{error && <p className="my-account-form-error" role="alert">{error}</p>}<div className="modal-actions"><button className="secondary-button" type="button" onClick={closePasswordDialog} disabled={isSaving}>Hủy</button><button className="primary-button" type="submit" disabled={isSaving}>{isSaving ? 'Đang đổi mật khẩu...' : 'Đổi mật khẩu'}</button></div></form></section></div>}
+    {isPasswordDialogOpen && <div className="modal-backdrop" role="presentation"><section className="modal-panel my-account-password-modal" role="dialog" aria-modal="true" aria-labelledby="change-password-title"><header className="modal-header"><div><h2 id="change-password-title">Đổi mật khẩu</h2></div><button className="icon-close" type="button" aria-label="Đóng" onClick={closePasswordDialog} disabled={isSaving}>×</button></header><form className="editor-form" onSubmit={(event) => void submitPasswordChange(event)} noValidate>
+      <label>Mật khẩu hiện tại<div className="password-input-control"><input ref={currentPasswordRef} type={showCurrentPassword ? 'text' : 'password'} autoComplete="current-password" value={form.currentPassword} onChange={(event) => updateField('currentPassword', event.target.value)} onBlur={() => setErrors((current) => ({ ...current, currentPassword: currentPasswordError(form.currentPassword) }))} aria-invalid={Boolean(errors.currentPassword)} aria-describedby={errors.currentPassword ? 'change-current-password-error' : undefined} disabled={isSaving} minLength={8} maxLength={128} required /><PasswordVisibilityButton passwordLabel="mật khẩu hiện tại" isVisible={showCurrentPassword} onToggle={() => setShowCurrentPassword((current) => !current)} disabled={isSaving} /></div>{errors.currentPassword && <small className="field-error" id="change-current-password-error" role="alert">{errors.currentPassword}</small>}</label>
+      <label>Mật khẩu mới<div className="password-input-control"><input ref={newPasswordRef} type={showNewPassword ? 'text' : 'password'} autoComplete="new-password" value={form.newPassword} onChange={(event) => updateField('newPassword', event.target.value)} onBlur={() => setErrors((current) => ({ ...current, newPassword: form.newPassword ? passwordPolicyError(form.newPassword) : 'Mật khẩu mới không được để trống.' }))} aria-invalid={Boolean(errors.newPassword)} aria-describedby={errors.newPassword ? 'change-new-password-error' : undefined} disabled={isSaving} minLength={8} maxLength={128} required /><PasswordVisibilityButton passwordLabel="mật khẩu mới" isVisible={showNewPassword} onToggle={() => setShowNewPassword((current) => !current)} disabled={isSaving} /></div>{errors.newPassword && <small className="field-error" id="change-new-password-error" role="alert">{errors.newPassword}</small>}</label>
+      <label>Xác nhận mật khẩu mới<div className="password-input-control"><input ref={confirmPasswordRef} type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" value={form.confirmPassword} onChange={(event) => updateField('confirmPassword', event.target.value)} onBlur={() => setErrors((current) => ({ ...current, confirmPassword: confirmPasswordError(form.confirmPassword, form.newPassword) }))} aria-invalid={Boolean(errors.confirmPassword)} aria-describedby={errors.confirmPassword ? 'change-confirm-password-error' : undefined} disabled={isSaving} minLength={8} maxLength={128} required /><PasswordVisibilityButton passwordLabel="xác nhận mật khẩu mới" isVisible={showConfirmPassword} onToggle={() => setShowConfirmPassword((current) => !current)} disabled={isSaving} /></div>{errors.confirmPassword && <small className="field-error" id="change-confirm-password-error" role="alert">{errors.confirmPassword}</small>}</label>
+      {requestError && <p className="my-account-form-error" role="alert">{requestError}</p>}<div className="modal-actions"><button className="secondary-button" type="button" onClick={closePasswordDialog} disabled={isSaving}>Hủy</button><button className="primary-button" type="submit" disabled={isSaving}>{isSaving ? 'Đang đổi mật khẩu...' : 'Đổi mật khẩu'}</button></div>
+    </form></section></div>}
   </>
 }

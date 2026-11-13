@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { EmploymentType } from '../enums/employment-type.enum.js';
+import { Gender } from '../enums/gender.enum.js';
 
 export type EmployeeDocument = HydratedDocument<Employee>;
 
@@ -70,6 +71,22 @@ export class Employee {
 
   @Prop({ required: false })
   dateOfBirth?: Date;
+
+  @Prop({ required: false, type: String, enum: Object.values(Gender) })
+  gender?: Gender;
+
+  @Prop({
+    required: false,
+    unique: true,
+    sparse: true,
+    index: true,
+    trim: true,
+    match: /^\d{12}$/,
+  })
+  citizenId?: string;
+
+  @Prop({ required: false, type: Number, min: 0, max: 365 })
+  annualLeaveDays?: number;
 
   @Prop({
     required: true,

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
-import { Eye, EyeOff } from 'lucide-react'
+import { useMotionTokens, useShouldReduceMotion } from '@animate-ui/react/utils/motion'
+import { CircleAlert, Eye, EyeOff } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { ApiError } from '../services/api-client'
 import { login, requestPasswordReset, resetForgottenPassword, verifyPasswordResetOtp } from '../services/auth.service'
 import type { AuthUser } from '../types/auth'
+import { passwordPolicyError } from '../utils/password-policy'
 import { AuthLayout } from './ui/AuthLayout'
 
 type AuthView = 'login' | 'request-reset' | 'verify-reset' | 'reset-password'
@@ -11,6 +14,11 @@ type AuthView = 'login' | 'request-reset' | 'verify-reset' | 'reset-password'
 interface AuthScreenProps {
   onAuthenticated: (user: AuthUser) => void
   onPasswordReset: () => void
+}
+
+interface ResetPasswordErrors {
+  newPassword?: string
+  confirmPassword?: string
 }
 
 function messageFrom(error: unknown, fallback: string): string {
@@ -40,6 +48,8 @@ function nextResendDeadline(retryAfterSeconds: number): number {
 }
 
 export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps) {
+  const shouldReduceMotion = useShouldReduceMotion()
+  const { transition } = useMotionTokens()
   const [view, setView] = useState<AuthView>('login')
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [showPassword, setShowPassword] = useState(false)
@@ -48,6 +58,7 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
   const [resetToken, setResetToken] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [resetPasswordErrors, setResetPasswordErrors] = useState<ResetPasswordErrors>({})
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [notice, setNotice] = useState('')
@@ -58,6 +69,8 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
   const [isSubmitting, setIsSubmitting] = useState(false)
   const submittingRef = useRef(false)
   const otpInputs = useRef<Array<HTMLInputElement | null>>([])
+  const newPasswordRef = useRef<HTMLInputElement>(null)
+  const confirmPasswordRef = useRef<HTMLInputElement>(null)
   const otpReady = otpDigits.every((digit) => /^[0-9]$/.test(digit))
   const cooldown = Math.max(0, Math.ceil((cooldownUntil - cooldownNow) / 1000))
 
@@ -81,6 +94,7 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
 
   useEffect(() => {
     if (view === 'verify-reset') otpInputs.current[0]?.focus()
+    if (view === 'reset-password') newPasswordRef.current?.focus()
   }, [view])
 
   useEffect(() => {
@@ -114,6 +128,7 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
     setResetToken('')
     setNewPassword('')
     setConfirmPassword('')
+    setResetPasswordErrors({})
     setShowNewPassword(false)
     setShowConfirmPassword(false)
     setNotice('')
@@ -181,13 +196,18 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
     setError('')
     try {
       const result = await requestPasswordReset(resetEmail.trim())
-      setNotice(result.message)
       setOtpDigits([...EMPTY_OTP])
       const deadline = nextResendDeadline(result.retryAfterSeconds)
       setCooldownNow(deadline - Math.max(0, result.retryAfterSeconds) * 1000)
       setCooldownUntil(deadline)
       setResendLocked(result.resendLocked)
-      setView('verify-reset')
+      if (result.canVerifyOtp) {
+        setNotice(result.message)
+        setView('verify-reset')
+      } else {
+        setNotice('')
+        setError(result.message)
+      }
     } catch (requestError) {
       setError(messageFrom(requestError, 'Không thể gửi mã xác minh. Vui lòng thử lại.'))
     } finally {
@@ -224,6 +244,12 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
       setCooldownNow(deadline - Math.max(0, result.retryAfterSeconds) * 1000)
       setCooldownUntil(deadline)
       setResendLocked(result.resendLocked)
+      if (!result.canVerifyOtp) {
+        setNotice('')
+        setError(result.message)
+        setView('request-reset')
+        return
+      }
       focusOtp(0)
     } catch (requestError) {
       setError(messageFrom(requestError, 'Không thể gửi lại mã xác minh. Vui lòng thử lại.'))
@@ -234,6 +260,22 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
 
   async function submitNewPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const nextErrors: ResetPasswordErrors = {
+      newPassword: newPassword ? passwordPolicyError(newPassword) : 'Mật khẩu mới không được để trống.',
+      confirmPassword: !confirmPassword
+        ? 'Xác nhận mật khẩu mới không được để trống.'
+        : confirmPassword !== newPassword
+          ? 'Xác nhận mật khẩu mới không khớp.'
+          : undefined,
+    }
+    if (nextErrors.newPassword || nextErrors.confirmPassword) {
+      setResetPasswordErrors(nextErrors)
+      window.requestAnimationFrame(() => {
+        if (nextErrors.newPassword) newPasswordRef.current?.focus()
+        else confirmPasswordRef.current?.focus()
+      })
+      return
+    }
     if (!resetToken) {
       setView('verify-reset')
       setError('Vui lòng xác minh mã trước khi đặt lại mật khẩu.')
@@ -264,9 +306,18 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
         : { title: 'Đặt lại mật khẩu', description: 'Tạo mật khẩu mới để đăng nhập lại vào hệ thống.' }
 
   return <AuthLayout title={heading.title} description={heading.description}>
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        className="auth-view-transition"
+        key={view}
+        initial={shouldReduceMotion ? false : { opacity: 0, x: 8 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={shouldReduceMotion ? undefined : { opacity: 0, x: -6 }}
+        transition={shouldReduceMotion ? { duration: 0 } : transition.fade}
+      >
     {notice && view !== 'verify-reset' && <p className="feedback feedback-info" role="status">{notice}</p>}
     {error && view === 'reset-password' && <p className="feedback feedback-error" role="alert">{error}</p>}
-    {error && view === 'request-reset' && <div className="toast-message toast-error" role="alert">{error}</div>}
+    {error && view === 'request-reset' && <div className="auth-reset-alert" role="alert"><CircleAlert size={18} aria-hidden="true" /><span>{error}</span></div>}
 
     {view === 'login' && <form className="auth-form" onSubmit={submitLogin}>
       <label htmlFor="auth-email">Email</label>
@@ -283,7 +334,7 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
 
     {view === 'request-reset' && <form className="auth-form" onSubmit={sendOtp}>
       <label htmlFor="reset-email">Email</label>
-      <input id="reset-email" type="email" autoComplete="email" value={resetEmail} onChange={(event) => { setResetEmail(event.target.value); setError('') }} placeholder="name@company.com" required />
+      <input id="reset-email" type="email" autoComplete="email" value={resetEmail} onChange={(event) => { setResetEmail(event.target.value); setOtpDigits([...EMPTY_OTP]); setNotice(''); setError('') }} placeholder="name@company.com" required />
       <button className="primary-button auth-submit" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Đang gửi...' : 'Gửi mã xác minh'}</button>
       <button className="auth-link-button auth-back-button" type="button" onClick={returnToLogin} disabled={isSubmitting}>Quay lại đăng nhập</button>
     </form>}
@@ -316,19 +367,23 @@ export function AuthScreen({ onAuthenticated, onPasswordReset }: AuthScreenProps
       <button className="auth-link-button auth-back-button" type="button" onClick={returnToLogin} disabled={isSubmitting}>Quay lại đăng nhập</button>
     </form>}
 
-    {view === 'reset-password' && <form className="auth-form" onSubmit={submitNewPassword}>
+    {view === 'reset-password' && <form className="auth-form" onSubmit={submitNewPassword} noValidate>
       <label htmlFor="new-password">Mật khẩu mới</label>
       <div className="auth-password-field">
-        <input id="new-password" type={showNewPassword ? 'text' : 'password'} autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="Tối thiểu 8 ký tự" minLength={8} maxLength={128} required />
+        <input ref={newPasswordRef} id="new-password" type={showNewPassword ? 'text' : 'password'} autoComplete="new-password" value={newPassword} onChange={(event) => { setNewPassword(event.target.value); setResetPasswordErrors((current) => ({ ...current, newPassword: undefined, ...(confirmPassword ? { confirmPassword: undefined } : {}) })); setError('') }} onBlur={() => setResetPasswordErrors((current) => ({ ...current, newPassword: newPassword ? passwordPolicyError(newPassword) : 'Mật khẩu mới không được để trống.' }))} placeholder="Tối thiểu 8 ký tự" minLength={8} maxLength={128} aria-invalid={Boolean(resetPasswordErrors.newPassword)} aria-describedby={resetPasswordErrors.newPassword ? 'forgot-new-password-error' : undefined} required />
         <button type="button" className="auth-password-toggle" aria-label={showNewPassword ? 'Ẩn mật khẩu mới' : 'Hiện mật khẩu mới'} title={showNewPassword ? 'Ẩn mật khẩu mới' : 'Hiện mật khẩu mới'} aria-pressed={showNewPassword} onClick={() => setShowNewPassword((shown) => !shown)}>{showNewPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}</button>
       </div>
+      {resetPasswordErrors.newPassword && <small className="field-error auth-password-error" id="forgot-new-password-error" role="alert">{resetPasswordErrors.newPassword}</small>}
       <label htmlFor="confirm-password">Xác nhận mật khẩu mới</label>
       <div className="auth-password-field">
-        <input id="confirm-password" type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Nhập lại mật khẩu mới" minLength={8} maxLength={128} required />
+        <input ref={confirmPasswordRef} id="confirm-password" type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" value={confirmPassword} onChange={(event) => { setConfirmPassword(event.target.value); setResetPasswordErrors((current) => ({ ...current, confirmPassword: undefined })); setError('') }} onBlur={() => setResetPasswordErrors((current) => ({ ...current, confirmPassword: !confirmPassword ? 'Xác nhận mật khẩu mới không được để trống.' : confirmPassword !== newPassword ? 'Xác nhận mật khẩu mới không khớp.' : undefined }))} placeholder="Nhập lại mật khẩu mới" minLength={8} maxLength={128} aria-invalid={Boolean(resetPasswordErrors.confirmPassword)} aria-describedby={resetPasswordErrors.confirmPassword ? 'forgot-confirm-password-error' : undefined} required />
         <button type="button" className="auth-password-toggle" aria-label={showConfirmPassword ? 'Ẩn mật khẩu xác nhận' : 'Hiện mật khẩu xác nhận'} title={showConfirmPassword ? 'Ẩn mật khẩu xác nhận' : 'Hiện mật khẩu xác nhận'} aria-pressed={showConfirmPassword} onClick={() => setShowConfirmPassword((shown) => !shown)}>{showConfirmPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}</button>
       </div>
+      {resetPasswordErrors.confirmPassword && <small className="field-error auth-password-error" id="forgot-confirm-password-error" role="alert">{resetPasswordErrors.confirmPassword}</small>}
       <button className="primary-button auth-submit" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Đang lưu...' : 'Đặt lại mật khẩu'}</button>
       <button className="auth-link-button auth-back-button" type="button" onClick={returnToLogin} disabled={isSubmitting}>Hủy</button>
     </form>}
+      </motion.div>
+    </AnimatePresence>
   </AuthLayout>
 }

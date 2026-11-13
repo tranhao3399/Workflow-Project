@@ -80,6 +80,33 @@ export async function getEmployeePage(query: EmployeeListQuery = {}): Promise<{
   return { data: result.data.map(fromApi), pagination: result.pagination };
 }
 
+export async function getEmployeeHierarchy(
+  query: Omit<EmployeeListQuery, "search" | "sortBy" | "sortOrder" | "page" | "limit"> = {},
+): Promise<Employee[]> {
+  const firstPage = await getEmployeePage({
+    ...query,
+    sortBy: "fullName",
+    sortOrder: "asc",
+    page: 1,
+    limit: 100,
+  });
+  if (firstPage.pagination.totalPages <= 1) return firstPage.data;
+
+  const remainingPages = await Promise.all(
+    Array.from(
+      { length: firstPage.pagination.totalPages - 1 },
+      (_, index) => getEmployeePage({
+        ...query,
+        sortBy: "fullName",
+        sortOrder: "asc",
+        page: index + 2,
+        limit: 100,
+      }),
+    ),
+  );
+  return [firstPage, ...remainingPages].flatMap((result) => result.data);
+}
+
 export async function getEmployeeFilterOptions(): Promise<EmployeeFilterOptions> {
   return (
     await apiClient<ApiDataResponse<EmployeeFilterOptions>>(
@@ -172,7 +199,14 @@ export async function removeEmployeeAvatar(
 
 export async function updateEmployee(
   employeeId: string,
-  values: Partial<EmployeeFormValues>,
+  values: Omit<
+    Partial<EmployeeFormValues>,
+    "annualLeaveDays" | "gender" | "citizenId"
+  > & {
+    annualLeaveDays?: number | null;
+    gender?: EmployeeFormValues["gender"] | null;
+    citizenId?: string | null;
+  },
 ): Promise<Employee> {
   const {
     employeeCode: _employeeCode,

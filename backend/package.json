@@ -25,6 +25,10 @@
     "db:migrate:core-collections": "node --env-file=.env ./scripts/migrate-core-collections.mjs",
     "db:migrate:notification-audit-indexes": "node --env-file=.env ./scripts/migrate-notification-audit-indexes.mjs",
     "db:report:unclassified-departments": "node --env-file=.env ./scripts/report-unclassified-departments.mjs",
+    "db:seed:employee-hierarchy:dry": "node --env-file=.env ./scripts/seed-employee-hierarchy.mjs --dry-run",
+    "db:seed:employee-hierarchy": "node --env-file=.env ./scripts/seed-employee-hierarchy.mjs",
+    "db:seed:realistic-employees:dry": "node --env-file=.env ./scripts/seed-realistic-employees.mjs --dry-run",
+    "db:seed:realistic-employees": "node --env-file=.env ./scripts/seed-realistic-employees.mjs",
     "db:import:nexasport-org:dry": "node --env-file=.env ./scripts/import-nexasport-org.mjs --dry-run",
     "db:import:nexasport-org": "node --env-file=.env ./scripts/import-nexasport-org.mjs"
   },

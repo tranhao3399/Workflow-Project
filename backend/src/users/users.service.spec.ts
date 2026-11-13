@@ -35,3 +35,34 @@ describe('UsersService login failure tracking', () => {
     expect(exec).toHaveBeenCalledOnce();
   });
 });
+
+describe('UsersService server-side pagination', () => {
+  it('áp dụng sắp xếp theo mã nhân viên trước khi phân trang tại MongoDB', async () => {
+    const aggregateExec = vi.fn().mockResolvedValue([]);
+    const aggregate = vi.fn().mockReturnValue({ exec: aggregateExec });
+    const countExec = vi.fn().mockResolvedValue(125);
+    const countDocuments = vi.fn().mockReturnValue({ exec: countExec });
+    const service = new UsersService(
+      { aggregate, countDocuments } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const result = await service.findAllSafe({
+      page: 3,
+      limit: 20,
+      sortBy: 'employeeCode',
+      sortOrder: 'asc',
+    });
+
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(pipeline).toContainEqual({ $sort: { 'employeeProfile.employeeCode': 1, _id: 1 } });
+    expect(pipeline).toContainEqual({ $skip: 40 });
+    expect(pipeline).toContainEqual({ $limit: 20 });
+    expect(result.pagination).toEqual({ page: 3, limit: 20, total: 125, totalPages: 7 });
+  });
+});

@@ -10,6 +10,10 @@ export const approvalModes = ['ANY', 'ALL', 'MAJORITY'] as const;
 export type ApprovalMode = (typeof approvalModes)[number];
 export const assigneeRuleTypes = [
   'REQUESTER_DIRECT_MANAGER',
+  'REQUESTER_WORK_UNIT_MANAGER',
+  'REQUESTER_FUNCTIONAL_DEPARTMENT_MANAGER',
+  'REQUESTER_PARENT_WORK_UNIT_MANAGER',
+  // Kept for workflow snapshots created before work-unit and functional-department routing were split.
   'REQUESTER_DEPARTMENT_MANAGER',
   'REQUESTER_PARENT_DEPARTMENT_MANAGER',
   'COMPANY_MANAGER',

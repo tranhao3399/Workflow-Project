@@ -361,10 +361,6 @@ export function DepartmentCreatePage({
       <SurfaceCard className="department-create-card">
         <div className="department-create-heading">
           <h2>Thông tin phòng ban</h2>
-          <p className="department-section-subtitle">
-            Thiết lập thông tin, cấp bậc và vị trí của phòng ban trong cơ cấu
-            tổ chức.
-          </p>
         </div>
         <form
           className="department-create-form"
@@ -741,9 +737,9 @@ export function DepartmentCreatePage({
       {showLeaveConfirm && (
         <ConfirmDialog
           title="Chưa lưu thay đổi"
-          description="Thông tin phòng ban đang nhập sẽ bị hủy nếu bạn rời khỏi trang."
+          description="Thông tin phòng ban đang nhập chưa được lưu. Bạn có chắc chắn muốn rời khỏi trang?"
           confirmLabel="Rời khỏi trang"
-          tone="danger"
+          variant="discard-changes"
           onCancel={() => setShowLeaveConfirm(false)}
           onConfirm={onBack}
         />

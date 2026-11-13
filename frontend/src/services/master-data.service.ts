@@ -17,6 +17,7 @@ interface DepartmentApiRecord {
   unitType?: DepartmentPreview["unitType"];
   parentId?: string;
   managerEmployeeId?: string;
+  managerEmployeeCode?: string;
   managerName?: string;
   parentName?: string;
   employeeCount?: number;
@@ -68,6 +69,7 @@ export async function getDepartmentsFromApi(): Promise<DepartmentPreview[]> {
     name: department.name,
     code: department.code,
     managerName: department.managerName,
+    managerEmployeeCode: department.managerEmployeeCode,
     managerEmployeeId: department.managerEmployeeId,
     unitType: department.unitType ?? "UNCLASSIFIED",
     parentId: department.parentId,
@@ -114,6 +116,7 @@ export async function getDepartmentByIdFromApi(
     name: department.name,
     code: department.code,
     managerName: department.managerName,
+    managerEmployeeCode: department.managerEmployeeCode,
     managerEmployeeId: department.managerEmployeeId,
     unitType: department.unitType ?? "UNCLASSIFIED",
     parentId: department.parentId,
@@ -141,6 +144,7 @@ export async function getDepartmentBasicByIdFromApi(
     parentId: department.parentId,
     parentName: department.parentName,
     managerEmployeeId: department.managerEmployeeId,
+    managerEmployeeCode: department.managerEmployeeCode,
     managerName: department.managerName,
   };
 }

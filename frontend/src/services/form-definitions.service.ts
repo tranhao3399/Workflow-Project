@@ -23,6 +23,7 @@ export interface CreateFormDefinitionInput {
 }
 
 export interface UpdateFormDefinitionInput {
+  code?: string
   name?: string
   groupId?: string | null
   category?: FormCategory | null
@@ -53,6 +54,18 @@ export type UpdateFormGroupInput = Partial<Omit<CreateFormGroupInput, 'code'>>
 
 export function listFormDefinitions(filter: FormDefinitionFilter = {}): Promise<PaginatedResponse<FormDefinition>> {
   return apiClient(withQuery('/form-definitions', filter))
+}
+
+export async function listAllFormDefinitions(
+  filter: Omit<FormDefinitionFilter, 'page' | 'limit'> = {},
+): Promise<FormDefinition[]> {
+  const firstPage = await listFormDefinitions({ ...filter, page: 1, limit: 100 })
+  const definitions = [...firstPage.data]
+  for (let page = 2; page <= firstPage.pagination.totalPages; page += 1) {
+    const result = await listFormDefinitions({ ...filter, page, limit: 100 })
+    definitions.push(...result.data)
+  }
+  return definitions
 }
 
 export async function getFormDefinition(id: string): Promise<FormDefinition> {

@@ -11,11 +11,27 @@ import { ALL_PERMISSION_KEYS, PERMISSION_KEYS, PERMISSION_REGISTRY } from './per
 import { Role, RoleDocument } from './schemas/role.schema.js';
 import { normalizeSearchText } from '../common/text/normalize-search-text.js';
 
+const BASE_REQUEST_PERMISSION_KEYS = [
+  'REQUESTS.VIEW_OWN',
+  'REQUESTS.CREATE',
+  'REQUESTS.UPDATE_OWN_DRAFT',
+  'REQUESTS.DELETE_OWN_DRAFT',
+  'REQUESTS.SUBMIT',
+  'REQUESTS.CANCEL_OWN',
+] as const;
+
+const STANDARD_SYSTEM_ROLE_KEYS = [
+  UserRole.EMPLOYEE,
+  UserRole.MANAGER,
+  UserRole.ACCOUNTANT,
+  UserRole.DIRECTOR,
+] as const;
+
 const ROLE_SEEDS: Array<Pick<Role, 'key' | 'name' | 'permissionKeys' | 'isSystem' | 'isActive'>> = [
-  { key: UserRole.EMPLOYEE, name: 'Nhân viên', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'REQUESTS.CREATE'], isSystem: true, isActive: true },
-  { key: UserRole.MANAGER, name: 'Quản lý', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
-  { key: UserRole.ACCOUNTANT, name: 'Kế toán', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
-  { key: UserRole.DIRECTOR, name: 'Giám đốc', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', 'REQUESTS.VIEW_OWN', 'REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.EMPLOYEE, name: 'Nhân viên', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', ...BASE_REQUEST_PERMISSION_KEYS], isSystem: true, isActive: true },
+  { key: UserRole.MANAGER, name: 'Quản lý', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', ...BASE_REQUEST_PERMISSION_KEYS, 'REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.ACCOUNTANT, name: 'Kế toán', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', ...BASE_REQUEST_PERMISSION_KEYS, 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
+  { key: UserRole.DIRECTOR, name: 'Giám đốc', permissionKeys: ['DASHBOARD.VIEW', 'NOTIFICATION.VIEW', ...BASE_REQUEST_PERMISSION_KEYS, 'REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW', 'APPROVALS.VIEW_ASSIGNED', 'APPROVALS.APPROVE_ASSIGNED'], isSystem: true, isActive: true },
   { key: UserRole.ADMIN, name: 'Quản trị viên', permissionKeys: ALL_PERMISSION_KEYS, isSystem: true, isActive: true },
 ];
 
@@ -70,6 +86,20 @@ export class RolesService implements OnModuleInit {
       { $addToSet: { permissionKeys: 'APPROVALS.VIEW_ASSIGNED' } },
     ).exec();
     await Promise.all([
+      this.model.updateMany(
+        { key: { $in: STANDARD_SYSTEM_ROLE_KEYS }, isSystem: true },
+        {
+          $addToSet: {
+            permissionKeys: {
+              $each: [
+                'DASHBOARD.VIEW',
+                'NOTIFICATION.VIEW',
+                ...BASE_REQUEST_PERMISSION_KEYS,
+              ],
+            },
+          },
+        },
+      ).exec(),
       this.model.updateOne(
         { key: UserRole.MANAGER, isSystem: true },
         { $addToSet: { permissionKeys: { $each: ['REQUESTS.VIEW_SCOPE', 'EMPLOYEE.VIEW'] } } },

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { UserRoundPlus } from "lucide-react";
 import { getUserById } from "../services/administration.service";
 import {
   getEmployeeAuditLogs,
@@ -7,7 +8,9 @@ import {
 import {
   getActiveEmployeeOptions,
   getEmployeeById,
+  removeEmployeeAvatar,
   updateEmployee,
+  uploadEmployeeAvatar,
 } from "../services/employees.service";
 import { getReferenceData } from "../services/reference-data.service";
 import { getDepartmentPositionsFromApi } from "../services/master-data.service";
@@ -17,6 +20,7 @@ import type {
   Employee,
   EmployeeFormValues,
   EmploymentType,
+  Gender,
 } from "../types/employees";
 import type { ReferenceData } from "../types/reference-data";
 import type { JobTitlePreview } from "../types/master-data";
@@ -27,9 +31,9 @@ import {
   workUnitOptions,
 } from "../utils/employee-organization";
 import {
-  auditActorLabel,
   auditChangeDetails,
   auditValue,
+  formatAuditSentence,
 } from "../utils/audit-display";
 import {
   formatDate,
@@ -46,11 +50,13 @@ import { SurfaceCard } from "./ui/SurfaceCard";
 interface Props {
   employeeId: string;
   currentUserId: string;
+  initialTab?: Tab;
   onBack: () => void;
   onCreateAccount: (employeeId: string) => void;
   onOpenUser: (userId: string) => void;
   onCurrentUserUpdated: () => void;
   canUpdateEmployee: boolean;
+  canUploadEmployeeAvatar: boolean;
   canChangeEmployeeStatus: boolean;
 }
 type Tab = "OVERVIEW" | "ORGANIZATION" | "ACCOUNT";
@@ -61,6 +67,8 @@ interface EmployeeFieldErrors {
   workUnitId?: string;
   departmentId?: string;
   positionId?: string;
+  annualLeaveDays?: string;
+  citizenId?: string;
 }
 type EmployeeRequiredField = keyof EmployeeFieldErrors;
 
@@ -82,6 +90,17 @@ function validateEmployee(form: EmployeeFormValues): EmployeeFieldErrors {
       ? undefined
       : "Phòng ban không được để trống.",
     positionId: form.positionId ? undefined : "Chức danh không được để trống.",
+    annualLeaveDays:
+      form.annualLeaveDays === undefined ||
+      (Number.isFinite(form.annualLeaveDays) &&
+        form.annualLeaveDays >= 0 &&
+        form.annualLeaveDays <= 365)
+        ? undefined
+        : "Số ngày nghỉ phép năm phải từ 0 đến 365.",
+    citizenId:
+      !form.citizenId || /^\d{12}$/.test(form.citizenId)
+        ? undefined
+        : "Số CCCD phải gồm đúng 12 chữ số.",
   };
 }
 
@@ -99,34 +118,26 @@ function toForm(employee: Employee): EmployeeFormValues {
     phone: employee.phone,
     address: employee.address,
     dateOfBirth: employee.dateOfBirth,
+    gender: employee.gender,
+    citizenId: employee.citizenId,
     hiredAt: employee.hiredAt,
+    annualLeaveDays: employee.annualLeaveDays,
     employmentType: employee.employmentType ?? "FULL_TIME",
     managerId: employee.managerId,
     isActive: employee.isActive,
   };
 }
-function actor(log: EmployeeAuditLog, currentUserId: string) {
-  return auditActorLabel(log.actor, currentUserId);
-}
-function description(log: EmployeeAuditLog, currentUserId: string) {
-  const name = actor(log, currentUserId);
-  const descriptions: Record<string, string> = {
-    "EMPLOYEE.CREATED": `${name} đã tạo mới hồ sơ nhân viên`,
-    "EMPLOYEE.UPDATED": `${name} đã chỉnh sửa thông tin nhân viên`,
-    "EMPLOYEE.ACTIVATED": `${name} đã chuyển nhân viên sang hoạt động`,
-    "EMPLOYEE.DEACTIVATED": `${name} đã chuyển nhân viên sang ngưng hoạt động`,
-    "EMPLOYEE.AVATAR_UPDATED": `${name} đã cập nhật ảnh đại diện nhân viên`,
-    "USER.EMPLOYEE_LINKED": `${name} đã liên kết tài khoản với nhân viên`,
-    "USER.EMPLOYEE_UNLINKED": `${name} đã hủy liên kết tài khoản`,
-    "USER.DEACTIVATED": `${name} đã ngưng hoạt động tài khoản`,
-  };
-  return (
-    descriptions[log.action] ?? `${name} đã chỉnh sửa tài khoản người dùng`
-  );
-}
 function displayDate(value: unknown) {
   return typeof value === "string" || value instanceof Date
     ? formatDate(String(value))
+    : auditValue(value);
+}
+function displayCitizenId(value: unknown) {
+  if (value === undefined || value === null || value === "")
+    return "Chưa cập nhật";
+  const citizenId = String(value);
+  return /^\d{12}$/.test(citizenId)
+    ? `••••••••${citizenId.slice(-4)}`
     : auditValue(value);
 }
 function employeeChangeDetails(
@@ -182,7 +193,21 @@ function employeeChangeDetails(
     { key: "workEmail", label: "Email công việc" },
     { key: "phone", label: "Điện thoại" },
     { key: "dateOfBirth", label: "Ngày sinh", format: displayDate },
+    {
+      key: "gender",
+      label: "Giới tính",
+      format: (value) =>
+        value === "MALE"
+          ? "Nam"
+          : value === "FEMALE"
+            ? "Nữ"
+            : value === "OTHER"
+              ? "Khác"
+              : auditValue(value),
+    },
+    { key: "citizenId", label: "Số CCCD", format: displayCitizenId },
     { key: "hiredAt", label: "Ngày vào làm", format: displayDate },
+    { key: "annualLeaveDays", label: "Số ngày nghỉ phép năm" },
     {
       key: "workUnitId",
       label: "Đơn vị làm việc",
@@ -208,15 +233,19 @@ function employeeChangeDetails(
     },
     {
       key: "employmentType",
-      label: "Loại nhân sự",
+      label: "Loại hợp đồng",
       format: (value) =>
-        value === "CONTRACT"
-          ? "Hợp đồng"
-          : value === "INTERN"
-            ? "Thực tập"
-            : value === "FULL_TIME"
-              ? "Chính thức"
-              : auditValue(value),
+        value === "OFFICIAL"
+          ? "Chính thức"
+          : value === "PART_TIME"
+            ? "Part-time"
+            : value === "CONTRACT"
+              ? "Thử việc"
+              : value === "INTERN"
+                ? "Thực tập"
+                : value === "FULL_TIME"
+                  ? "Full-time"
+                  : auditValue(value),
     },
     { key: "address", label: "Địa chỉ" },
     {
@@ -234,11 +263,13 @@ function employeeChangeDetails(
 export function EmployeeDetailPage({
   employeeId,
   currentUserId,
+  initialTab = "OVERVIEW",
   onBack,
   onCreateAccount,
   onOpenUser,
   onCurrentUserUpdated,
   canUpdateEmployee,
+  canUploadEmployeeAvatar,
   canChangeEmployeeStatus,
 }: Props) {
   const [employee, setEmployee] = useState<Employee | null>(null);
@@ -248,7 +279,7 @@ export function EmployeeDetailPage({
   const [account, setAccount] =
     useState<Awaited<ReturnType<typeof getUserById>>>(null);
   const [logs, setLogs] = useState<EmployeeAuditLog[]>([]);
-  const [tab, setTab] = useState<Tab>("OVERVIEW");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -257,11 +288,15 @@ export function EmployeeDetailPage({
   const [pendingNavigation, setPendingNavigation] = useState(false);
   const [visibleLogs, setVisibleLogs] = useState(5);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [avatarRemovalRequested, setAvatarRemovalRequested] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [touched, setTouched] = useState<
     Partial<Record<EmployeeRequiredField, boolean>>
   >({});
   const [emailConflict, setEmailConflict] = useState("");
+  const [citizenIdConflict, setCitizenIdConflict] = useState("");
   const [managerOverridden, setManagerOverridden] = useState(false);
   const [departmentPositions, setDepartmentPositions] = useState<
     JobTitlePreview[]
@@ -282,6 +317,7 @@ export function EmployeeDetailPage({
       setForm(current ? toForm(current) : null);
       setTouched({});
       setEmailConflict("");
+      setCitizenIdConflict("");
       setManagerOverridden(false);
       setPeople(activePeople);
       setReferences(referenceResult.data);
@@ -307,6 +343,12 @@ export function EmployeeDetailPage({
     const id = window.setTimeout(() => setToast(null), 4000);
     return () => window.clearTimeout(id);
   }, [toast]);
+  useEffect(
+    () => () => {
+      if (avatarPreview) URL.revokeObjectURL(avatarPreview);
+    },
+    [avatarPreview],
+  );
   useEffect(() => {
     if (!menuOpen) return;
     const close = (event: MouseEvent) => {
@@ -325,7 +367,7 @@ export function EmployeeDetailPage({
   // Permission changes can invalidate an already open edit session.
   // oxlint-disable-next-line react/set-state-in-effect
   useEffect(() => {
-    if (editing && !canUpdateEmployee) {
+    if (editing && !canUpdateEmployee && !canUploadEmployeeAvatar) {
       // oxlint-disable-next-line react/set-state-in-effect
       setEditing(false);
       setToast({
@@ -333,7 +375,7 @@ export function EmployeeDetailPage({
         tone: "error",
       });
     }
-  }, [editing, canUpdateEmployee]);
+  }, [editing, canUpdateEmployee, canUploadEmployeeAvatar]);
   useEffect(() => {
     if (employee?.updatedAt) onCurrentUserUpdated();
   }, [employee?.updatedAt, onCurrentUserUpdated]);
@@ -384,20 +426,13 @@ export function EmployeeDetailPage({
     () => workUnitOptions(references?.departments ?? []),
     [references],
   );
-  const suggestedManager = useMemo(() => {
-    const managerId = suggestedManagerId(
-      references?.departments ?? [],
-      form?.workUnitId,
-      people,
-      employee?.id,
-    );
-    return people.find((person) => person.id === managerId);
-  }, [employee?.id, form?.workUnitId, people, references]);
-  const dirty = Boolean(
+  const profileDirty = Boolean(
     employee &&
     form &&
     JSON.stringify(toForm(employee)) !== JSON.stringify(form),
   );
+  const avatarDirty = Boolean(avatarFile || avatarRemovalRequested);
+  const dirty = profileDirty || avatarDirty;
   const validation = useMemo(
     () => (form ? validateEmployee(form) : {}),
     [form],
@@ -406,6 +441,9 @@ export function EmployeeDetailPage({
   const discardAndBack = useCallback(() => {
     if (employee) setForm(toForm(employee));
     setAvatarFailed(false);
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    setAvatarRemovalRequested(false);
     setEditing(false);
     setPendingNavigation(false);
     onBack();
@@ -450,6 +488,7 @@ export function EmployeeDetailPage({
       return;
     }
     if (key === "workEmail") setEmailConflict("");
+    if (key === "citizenId") setCitizenIdConflict("");
     if (form) setForm({ ...form, [key]: value });
   };
   const touchField = (field: EmployeeRequiredField) => {
@@ -459,28 +498,64 @@ export function EmployeeDetailPage({
     if (!employee) return;
     setForm(toForm(employee));
     setAvatarFailed(false);
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    setAvatarRemovalRequested(false);
     setTouched({});
     setEmailConflict("");
+    setCitizenIdConflict("");
     setManagerOverridden(false);
     setEditing(false);
   };
+  function selectAvatar(file: File | undefined) {
+    if (!file) return;
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      setToast({
+        message: "Ảnh đại diện chỉ hỗ trợ định dạng JPG hoặc PNG.",
+        tone: "error",
+      });
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setToast({
+        message: "Ảnh đại diện không được vượt quá 2 MB.",
+        tone: "error",
+      });
+      return;
+    }
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+    setAvatarRemovalRequested(false);
+    setAvatarFailed(false);
+  }
+  function removeAvatar() {
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    setAvatarRemovalRequested(Boolean(employee?.avatarUrl));
+    setAvatarFailed(false);
+  }
   async function save() {
     if (!employee || !form || !dirty) return;
-    if (!valid) {
+    if (profileDirty && !valid) {
       setTouched({
         fullName: true,
         workEmail: true,
         workUnitId: true,
         departmentId: true,
         positionId: true,
+        annualLeaveDays: true,
+        citizenId: true,
       });
       setTab(
-        validation.fullName || validation.workEmail
+        validation.fullName ||
+        validation.workEmail ||
+        validation.annualLeaveDays ||
+        validation.citizenId
           ? "OVERVIEW"
           : "ORGANIZATION",
       );
       setToast({
-        message: "Vui lòng nhập đầy đủ các thông tin bắt buộc.",
+        message: "Vui lòng kiểm tra lại các trường thông tin chưa hợp lệ.",
         tone: "error",
       });
       return;
@@ -495,11 +570,37 @@ export function EmployeeDetailPage({
       changes.fullName = changes.fullName.trim();
     if (changes.workEmail !== undefined)
       changes.workEmail = changes.workEmail.trim().toLowerCase();
+    if (changes.citizenId !== undefined)
+      changes.citizenId = changes.citizenId.trim();
     setSaving(true);
+    let updatedEmployee = employee;
     try {
-      const updated = await updateEmployee(employee.id, changes);
-      setEmployee(updated);
-      setForm(toForm(updated));
+      if (profileDirty) {
+        updatedEmployee = await updateEmployee(employee.id, {
+          ...changes,
+          ...(employee.annualLeaveDays !== undefined &&
+          form.annualLeaveDays === undefined
+            ? { annualLeaveDays: null }
+            : {}),
+          ...(employee.gender !== undefined && form.gender === undefined
+            ? { gender: null }
+            : {}),
+          ...(employee.citizenId !== undefined && form.citizenId === undefined
+            ? { citizenId: null }
+            : {}),
+        });
+      }
+      if (avatarFile) {
+        updatedEmployee = await uploadEmployeeAvatar(employee.id, avatarFile);
+      } else if (avatarRemovalRequested) {
+        updatedEmployee = await removeEmployeeAvatar(employee.id);
+      }
+      setEmployee(updatedEmployee);
+      setForm(toForm(updatedEmployee));
+      setAvatarFile(null);
+      setAvatarPreview(null);
+      setAvatarRemovalRequested(false);
+      setAvatarFailed(false);
       setEditing(false);
       setToast({
         message: "Đã lưu cập nhật hồ sơ nhân viên.",
@@ -508,6 +609,10 @@ export function EmployeeDetailPage({
       if (!employee.id.startsWith("emp-"))
         setLogs(await getEmployeeAuditLogs(employee.id, employee.userId));
     } catch (error) {
+      if (updatedEmployee !== employee) {
+        setEmployee(updatedEmployee);
+        setForm(toForm(updatedEmployee));
+      }
       if (
         error instanceof ApiError &&
         (error.field === "workEmail" || error.code === "EMAIL_ALREADY_EXISTS")
@@ -517,6 +622,19 @@ export function EmployeeDetailPage({
           workEmail: true,
         }));
         setEmailConflict(error.message);
+        setTab("OVERVIEW");
+        return;
+      }
+      if (
+        error instanceof ApiError &&
+        (error.field === "citizenId" ||
+          error.code === "CITIZEN_ID_ALREADY_EXISTS")
+      ) {
+        setTouched((currentTouched) => ({
+          ...currentTouched,
+          citizenId: true,
+        }));
+        setCitizenIdConflict(error.message);
         setTab("OVERVIEW");
         return;
       }
@@ -538,8 +656,9 @@ export function EmployeeDetailPage({
         description="Hồ sơ này không còn trong dữ liệu hiện có."
       />
     );
-  const source =
-    !avatarFailed && employee.avatarUrl
+  const source = !avatarFailed && avatarPreview
+    ? avatarPreview
+    : !avatarRemovalRequested && !avatarFailed && employee.avatarUrl
       ? resolveApiAssetUrl(employee.avatarUrl)
       : null;
   const avatar = source ? (
@@ -554,7 +673,8 @@ export function EmployeeDetailPage({
       {employee.fullName.trim().charAt(0).toUpperCase() || "N"}
     </span>
   );
-  const editable = editing && !saving;
+  const editable = editing && !saving && canUpdateEmployee;
+  const avatarEditable = editing && !saving && canUploadEmployeeAvatar;
   return (
     <>
       <nav className="detail-breadcrumb" aria-label="Điều hướng nhân viên">
@@ -566,7 +686,38 @@ export function EmployeeDetailPage({
       </nav>
       <section className="employee-summary-card">
         <div className="employee-summary-main">
-          <div className="employee-avatar-wrap">{avatar}</div>
+          <div className="employee-avatar-editor">
+            {avatarEditable ? (
+              <label
+                className="employee-avatar-button"
+                title="Chọn ảnh đại diện"
+              >
+                {avatar}
+                <span className="employee-avatar-change">Thay ảnh</span>
+                <input
+                  className="avatar-file-input"
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  disabled={saving}
+                  onChange={(event) => {
+                    selectAvatar(event.target.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            ) : (
+              <div className="employee-avatar-wrap">{avatar}</div>
+            )}
+            {avatarEditable && (employee.avatarUrl || avatarPreview) && (
+              <button
+                className="employee-avatar-remove"
+                type="button"
+                onClick={removeAvatar}
+              >
+                Xóa ảnh
+              </button>
+            )}
+          </div>
           <div>
             <h2>{employee.fullName}</h2>
             <p className="employee-summary-code">{employee.employeeCode}</p>
@@ -607,7 +758,12 @@ export function EmployeeDetailPage({
                 onClick={() => {
                   setTouched({});
                   setEmailConflict("");
+                  setCitizenIdConflict("");
                   setManagerOverridden(false);
+                  setAvatarFile(null);
+                  setAvatarPreview(null);
+                  setAvatarRemovalRequested(false);
+                  setAvatarFailed(false);
                   setEditing(true);
                 }}
               >
@@ -766,6 +922,59 @@ export function EmployeeDetailPage({
               }
             />
             <ProfileField
+              label="Giới tính"
+              value={
+                employee.gender === "MALE"
+                  ? "Nam"
+                  : employee.gender === "FEMALE"
+                    ? "Nữ"
+                    : employee.gender === "OTHER"
+                      ? "Khác"
+                      : undefined
+              }
+              isEditing={editable}
+              editControl={
+                <FilterSelect
+                  ariaLabel="Chọn giới tính"
+                  value={form.gender ?? ""}
+                  options={[
+                    { value: "", label: "Chọn giới tính" },
+                    { value: "MALE", label: "Nam" },
+                    { value: "FEMALE", label: "Nữ" },
+                    { value: "OTHER", label: "Khác" },
+                  ]}
+                  onChange={(value) =>
+                    update("gender", (value || undefined) as Gender | undefined)
+                  }
+                />
+              }
+            />
+            <ProfileField
+              label="Số CCCD"
+              value={employee.citizenId}
+              isEditing={editable}
+              error={
+                citizenIdConflict ||
+                (touched.citizenId ? validation.citizenId : undefined)
+              }
+              editControl={
+                <input
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={12}
+                  value={form.citizenId ?? ""}
+                  onChange={(event) =>
+                    update(
+                      "citizenId",
+                      event.target.value.replace(/\D/g, "").slice(0, 12) ||
+                        undefined,
+                    )
+                  }
+                  onBlur={() => touchField("citizenId")}
+                />
+              }
+            />
+            <ProfileField
               label="Ngày vào làm"
               value={
                 employee.hiredAt ? formatDate(employee.hiredAt) : undefined
@@ -780,27 +989,66 @@ export function EmployeeDetailPage({
               }
             />
             <ProfileField
-              label="Loại nhân sự"
+              label="Loại hợp đồng"
               value={
-                form.employmentType === "CONTRACT"
-                  ? "Hợp đồng"
-                  : form.employmentType === "INTERN"
-                    ? "Thực tập"
-                    : "Chính thức"
+                form.employmentType === "OFFICIAL"
+                  ? "Chính thức"
+                  : form.employmentType === "PART_TIME"
+                    ? "Part-time"
+                    : form.employmentType === "CONTRACT"
+                      ? "Thử việc"
+                      : form.employmentType === "INTERN"
+                        ? "Thực tập"
+                        : "Full-time"
               }
               isEditing={editable}
               editControl={
                 <FilterSelect
-                  ariaLabel="Chọn loại nhân sự"
+                  ariaLabel="Chọn loại hợp đồng"
                   value={form.employmentType}
                   options={[
-                    { value: "FULL_TIME", label: "Chính thức" },
-                    { value: "CONTRACT", label: "Hợp đồng" },
+                    { value: "OFFICIAL", label: "Chính thức" },
+                    { value: "FULL_TIME", label: "Full-time" },
+                    { value: "PART_TIME", label: "Part-time" },
+                    { value: "CONTRACT", label: "Thử việc" },
                     { value: "INTERN", label: "Thực tập" },
                   ]}
                   onChange={(value) =>
                     update("employmentType", value as EmploymentType)
                   }
+                />
+              }
+            />
+            <ProfileField
+              label="Số ngày nghỉ phép năm"
+              value={
+                employee.annualLeaveDays !== undefined
+                  ? `${employee.annualLeaveDays} ngày`
+                  : undefined
+              }
+              isEditing={editable}
+              error={
+                touched.annualLeaveDays
+                  ? validation.annualLeaveDays
+                  : undefined
+              }
+              editControl={
+                <input
+                  type="number"
+                  min="0"
+                  max="365"
+                  step="0.5"
+                  inputMode="decimal"
+                  value={form.annualLeaveDays ?? ""}
+                  onChange={(event) =>
+                    update(
+                      "annualLeaveDays",
+                      event.target.value === ""
+                        ? undefined
+                        : Number(event.target.value),
+                    )
+                  }
+                  onBlur={() => touchField("annualLeaveDays")}
                 />
               }
             />
@@ -981,47 +1229,48 @@ export function EmployeeDetailPage({
                 />
               }
             />
-            <p className="employee-display-note">
-              {suggestedManager
-                ? `Gợi ý theo cây tổ chức: ${suggestedManager.fullName} · ${suggestedManager.employeeCode}.`
-                : "Đơn vị đã chọn chưa có người quản lý phù hợp trong cây tổ chức."}{" "}
-              Admin có thể chọn người khác khi cần; lựa chọn thủ công sẽ không
-              bị tự động ghi đè.
-            </p>
           </div>
         )}
         {tab === "ACCOUNT" && (
           <div className="employee-account-panel">
-            <p className="state-kicker">TÀI KHOẢN VÀ PHÂN QUYỀN</p>
             {account ? (
-              <div className="employee-account-content">
-                <div>
-                  <h3>{account.email}</h3>
-                  <p className="role-chip-list">
+              <div className="employee-account-linked">
+                <div className="employee-account-actions">
+                  <button
+                    className="secondary-button compact-button"
+                    type="button"
+                    onClick={() => onOpenUser(account.id)}
+                  >
+                    Xem tài khoản người dùng
+                  </button>
+                </div>
+                <div className="employee-account-grid">
+                  <div className="employee-account-fact">
+                    <span>Tài khoản đăng nhập</span>
+                    <strong className="employee-account-email">{account.email}</strong>
+                  </div>
+                  <div className="employee-account-fact">
+                    <span>Vai trò &amp; Trạng thái</span>
+                    <div className="employee-account-badges">
                     {(account.roles ?? [account.role]).map((role) => (
                       <span className="role-chip" key={role}>
                         {formatRole(role)}
                       </span>
                     ))}
-                  </p>
-                  <ActivityStatusBadge isActive={account.isActive} />
+                      <ActivityStatusBadge isActive={account.isActive} />
+                    </div>
+                  </div>
                 </div>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => onOpenUser(account.id)}
-                >
-                  Xem tài khoản người dùng
-                </button>
               </div>
             ) : (
-              <div className="employee-account-content">
-                <div>
-                  <h3>Chưa có tài khoản người dùng</h3>
-                  <p>Hồ sơ nhân sự có thể tồn tại độc lập.</p>
-                </div>
+              <div className="employee-account-empty-state">
+                <span className="employee-account-empty-icon" aria-hidden="true">
+                  <UserRoundPlus size={28} strokeWidth={1.7} />
+                </span>
+                <h3>Chưa có tài khoản người dùng</h3>
+                <p>Nhân viên này chưa có tài khoản để đăng nhập và sử dụng hệ thống.</p>
                 <button
-                  className="primary-button"
+                  className="primary-button compact-button"
                   type="button"
                   onClick={() => onCreateAccount(employee.id)}
                 >
@@ -1045,7 +1294,17 @@ export function EmployeeDetailPage({
               return (
                 <article className="activity-log-row" key={log._id ?? log.id}>
                   <div>
-                    <strong>{description(log, currentUserId)}</strong>
+                    <strong>
+                      {formatAuditSentence({
+                        action: log.action,
+                        actor: log.actor,
+                        currentUserId,
+                        resourceType: log.resource.type,
+                        resourceName: log.resource.type === 'USER'
+                          ? log.resource.code || employee.workEmail || employee.fullName
+                          : employee.fullName,
+                      })}
+                    </strong>
                     {changes.length > 0 && (
                       <p>Thay đổi: {changes.join(" · ")}</p>
                     )}

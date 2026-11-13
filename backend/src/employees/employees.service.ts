@@ -28,6 +28,7 @@ import { isMongoDuplicateKeyError } from '../common/database/mongo-errors.js';
 import { createPaginationMetadata } from '../common/http/pagination.js';
 import { OrganizationScopeService } from '../common/organization/organization-scope.service.js';
 import { OrganizationUnitType } from '../departments/enums/organization-unit-type.enum.js';
+import { EmployeeCodeService } from './employee-code.service.js';
 
 @Injectable()
 export class EmployeesService {
@@ -43,6 +44,7 @@ export class EmployeesService {
     private readonly organizationScopeService: OrganizationScopeService,
     @Inject(AVATAR_STORAGE)
     private readonly avatarStorage: AvatarStorageAdapter,
+    private readonly employeeCodes: EmployeeCodeService,
   ) {}
 
   async findAll(actorUserId: string, query: ListEmployeesDto) {
@@ -235,7 +237,7 @@ export class EmployeesService {
         const employee = await this.employeeModel.create({
           ...input,
           ...references,
-          employeeCode: await this.getNextEmployeeCode(),
+          employeeCode: await this.employeeCodes.allocateNext(),
           workEmail: input.workEmail.toLowerCase(),
           fullNameNormalized: normalizeSearchText(input.fullName),
           isActive: input.isActive ?? true,
@@ -262,6 +264,16 @@ export class EmployeesService {
             field: 'workEmail',
           });
         }
+        if (
+          isMongoDuplicateKeyError(error) &&
+          typeof error.keyPattern?.citizenId !== 'undefined'
+        ) {
+          throw new ConflictException({
+            message: 'Số CCCD đã được sử dụng cho một nhân viên khác.',
+            code: 'CITIZEN_ID_ALREADY_EXISTS',
+            field: 'citizenId',
+          });
+        }
         if (isMongoDuplicateKeyError(error))
           throw new ConflictException('Dữ liệu nhân viên đã tồn tại.');
         throw error;
@@ -273,18 +285,7 @@ export class EmployeesService {
   }
 
   async getNextEmployeeCode(): Promise<string> {
-    const employees = await this.employeeModel
-      .find({ employeeCode: /^NV-\d+$/i })
-      .select({ employeeCode: 1 })
-      .lean()
-      .exec();
-    const largestSequence = employees.reduce((largest, employee) => {
-      const sequence = Number.parseInt(employee.employeeCode.slice(3), 10);
-      return Number.isSafeInteger(sequence)
-        ? Math.max(largest, sequence)
-        : largest;
-    }, 0);
-    return `NV-${String(largestSequence + 1).padStart(3, '0')}`;
+    return this.employeeCodes.previewNext();
   }
 
   async update(
@@ -345,6 +346,18 @@ export class EmployeesService {
       delete update.managerId;
       unset.managerId = 1;
     }
+    if (input.annualLeaveDays === null) {
+      delete update.annualLeaveDays;
+      unset.annualLeaveDays = 1;
+    }
+    if (input.gender === null) {
+      delete update.gender;
+      unset.gender = 1;
+    }
+    if (input.citizenId === null) {
+      delete update.citizenId;
+      unset.citizenId = 1;
+    }
     if (input.isActive === true && !employee.isActive) unset.endedAt = 1;
 
     try {
@@ -379,6 +392,16 @@ export class EmployeesService {
           message: 'Email đã được sử dụng cho một nhân viên khác.',
           code: 'EMAIL_ALREADY_EXISTS',
           field: 'workEmail',
+        });
+      }
+      if (
+        isMongoDuplicateKeyError(error) &&
+        typeof error.keyPattern?.citizenId !== 'undefined'
+      ) {
+        throw new ConflictException({
+          message: 'Số CCCD đã được sử dụng cho một nhân viên khác.',
+          code: 'CITIZEN_ID_ALREADY_EXISTS',
+          field: 'citizenId',
         });
       }
       if (isMongoDuplicateKeyError(error))
@@ -459,11 +482,14 @@ export class EmployeesService {
     if (!manager)
       throw new BadRequestException('Quản lý trực tiếp không tồn tại.');
     let cursor: string | undefined = managerId;
+    const visited = new Set<string>();
+    if (employeeId) visited.add(employeeId);
     while (cursor) {
-      if (cursor === employeeId)
+      if (visited.has(cursor))
         throw new BadRequestException(
           'Cấu trúc quản lý nhân viên không được tạo thành vòng lặp.',
         );
+      visited.add(cursor);
       const current = await this.employeeModel
         .findById(cursor)
         .select({ managerId: 1 })
@@ -624,7 +650,12 @@ export class EmployeesService {
       ...(employee.phone ? { phone: employee.phone } : {}),
       ...(employee.address ? { address: employee.address } : {}),
       ...(employee.dateOfBirth ? { dateOfBirth: employee.dateOfBirth } : {}),
+      ...(employee.gender ? { gender: employee.gender } : {}),
+      ...(employee.citizenId ? { citizenId: employee.citizenId } : {}),
       ...(employee.hiredAt ? { hiredAt: employee.hiredAt } : {}),
+      ...(employee.annualLeaveDays !== undefined
+        ? { annualLeaveDays: employee.annualLeaveDays }
+        : {}),
       employmentType: employee.employmentType,
       ...(employee.managerId
         ? { managerId: employee.managerId.toString() }

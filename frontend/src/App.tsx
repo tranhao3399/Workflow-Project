@@ -64,6 +64,7 @@ function App() {
     function onAuthEvent(event: Event) {
       const detail = (event as CustomEvent<{ type?: string }>).detail
       clearAuthSession()
+      window.history.replaceState(null, '', '/login')
       setUser(null)
       setSessionState('anonymous')
       if (detail?.type === 'expired' && (user || sessionState === 'authenticated')) setSessionNotice(SESSION_EXPIRED_MESSAGE)
@@ -71,6 +72,18 @@ function App() {
     window.addEventListener('workflow:auth-event', onAuthEvent)
     return () => window.removeEventListener('workflow:auth-event', onAuthEvent)
   }, [sessionState, user])
+
+  useEffect(() => {
+    if (sessionState !== 'anonymous') return
+    const syncLoginUrl = () => {
+      if (window.location.pathname !== '/login' || window.location.search || window.location.hash) {
+        window.history.replaceState(null, '', '/login')
+      }
+    }
+    syncLoginUrl()
+    window.addEventListener('popstate', syncLoginUrl)
+    return () => window.removeEventListener('popstate', syncLoginUrl)
+  }, [sessionState])
 
   useEffect(() => {
     let isCurrent = true
@@ -84,6 +97,7 @@ function App() {
         if (!isCurrent) return
         if (error instanceof ApiError && error.status === 401) {
           clearSession()
+          window.history.replaceState(null, '', '/login')
           setSessionState('anonymous')
           return
         }
@@ -122,6 +136,7 @@ function App() {
   }, [sessionNotice])
 
   function handleAuthenticated(authenticatedUser: AuthUser) {
+    window.history.replaceState(null, '', '/overview')
     setUser(authenticatedUser)
     setSessionNotice('')
     setSessionState('authenticated')
@@ -131,6 +146,7 @@ function App() {
     if (isLoggingOut) return
     setIsLoggingOut(true)
     try { await logout() } finally {
+      window.history.replaceState(null, '', '/login')
       setUser(null)
       setSessionState('anonymous')
       setIsLoggingOut(false)
@@ -139,6 +155,7 @@ function App() {
 
   function handlePasswordChanged(message: string) {
     clearSession()
+    window.history.replaceState(null, '', '/login')
     setUser(null)
     setSessionNotice(message)
     setSessionState('anonymous')

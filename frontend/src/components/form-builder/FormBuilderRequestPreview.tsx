@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Clock3, MessageSquareText } from 'lucide-react'
 import type { FormDefinition } from '../../types/workflow'
+import { formatAuditSentence } from '../../utils/audit-display'
 import { formatDateTime } from '../../utils/formatters'
 import { DynamicFormRenderer } from '../dynamic-form'
 import './form-builder-preview.css'
@@ -12,12 +13,15 @@ interface FormBuilderRequestPreviewProps {
 
 type ChatterTab = 'COMMENT' | 'HISTORY'
 
+const commentMaxHeight = 170
+
 export function FormBuilderRequestPreview({
   formDefinition,
   createdAt,
 }: FormBuilderRequestPreviewProps) {
   const [chatterTab, setChatterTab] = useState<ChatterTab>('COMMENT')
   const [comment, setComment] = useState('')
+  const commentInputRef = useRef<HTMLTextAreaElement>(null)
   const dynamicDefinition = useMemo<FormDefinition>(
     () => ({
       ...formDefinition,
@@ -26,6 +30,16 @@ export function FormBuilderRequestPreview({
     }),
     [formDefinition],
   )
+
+  useLayoutEffect(() => {
+    const input = commentInputRef.current
+    if (!input || chatterTab !== 'COMMENT') return
+    input.style.height = 'auto'
+    const nextHeight = Math.min(input.scrollHeight, commentMaxHeight)
+    input.style.height = `${nextHeight}px`
+    input.style.overflowY = input.scrollHeight > commentMaxHeight ? 'auto' : 'hidden'
+  }, [chatterTab, comment])
+
   return (
     <div className="form-builder-request-preview">
       <section className="form-preview-sheet" aria-label="Tờ phiếu xem trước">
@@ -36,11 +50,7 @@ export function FormBuilderRequestPreview({
           </div>
         </header>
 
-        <section className="form-preview-dynamic-fields" aria-labelledby="dynamic-fields-preview-title">
-          <div className="form-preview-dynamic-heading">
-            <h3 id="dynamic-fields-preview-title">Thông tin phiếu</h3>
-            <span>{dynamicDefinition.fields.length} trường dữ liệu</span>
-          </div>
+        <section className="form-preview-dynamic-fields" aria-label="Nội dung phiếu">
           <DynamicFormRenderer
             formDefinition={dynamicDefinition}
             mode="preview"
@@ -52,6 +62,8 @@ export function FormBuilderRequestPreview({
               REQUESTER_DEPARTMENT_NAME: 'Phòng Công nghệ thông tin',
               REQUESTER_WORK_UNIT_NAME: 'NexaSport',
               REQUESTER_POSITION_NAME: 'Chuyên viên phân tích nghiệp vụ',
+              REQUESTER_ANNUAL_LEAVE_DAYS: 12,
+              REQUESTER_DIRECT_MANAGER_NAME: 'Nguyễn Văn Minh',
               REQUESTER_EMAIL: 'tranchihao@nexasport.vn',
               REQUESTER_PHONE: '0901234567',
               CURRENT_DATE: createdAt.slice(0, 10),
@@ -72,14 +84,16 @@ export function FormBuilderRequestPreview({
           </div>
           {chatterTab === 'COMMENT' ? (
             <div className="form-preview-comment-box">
-              <textarea value={comment} rows={3} placeholder="Nhập bình luận..." aria-label="Nội dung bình luận" onChange={(event) => setComment(event.target.value)} />
+              <textarea ref={commentInputRef} value={comment} rows={3} placeholder="Nhập bình luận..." aria-label="Nội dung bình luận" onChange={(event) => setComment(event.target.value)} />
               <button type="button" disabled={!comment.trim()}>Gửi bình luận</button>
             </div>
           ) : (
-            <div className="form-preview-history-item">
-              <span className="form-preview-avatar is-small" aria-hidden="true">TH</span>
-              <div><strong>Trần Chí Hào</strong><p>Đang khởi tạo bản nháp phiếu</p><small><Clock3 size={12} aria-hidden="true" />{formatDateTime(createdAt, 'date-first')}</small></div>
-            </div>
+            <ol className="form-preview-history-list">
+              <li className="form-preview-history-item">
+                <span className="form-preview-avatar is-small" aria-hidden="true">TH</span>
+                <div><strong>{formatAuditSentence({ action: 'CREATED', actorLabel: 'Trần Chí Hào', resourceType: 'REQUEST', resourceName: formDefinition.name || 'Phiếu mới' })}</strong><small><Clock3 size={13} aria-hidden="true" />{formatDateTime(createdAt, 'date-first')}</small></div>
+              </li>
+            </ol>
           )}
         </section>
       </aside>

@@ -5,10 +5,12 @@ import {
   type FormCategory,
   type FormField,
   type FormFieldType,
+  type FormSettings,
   type FormTableColumn,
   type FormTableConfig,
   type TableColumnType,
 } from '../types/workflow'
+import { validateFormCalculationsAndCycles } from './form-calculation'
 
 export const formCategoryLabels: Record<FormCategory, string> = {
   HR: 'Nhân sự',
@@ -57,6 +59,8 @@ export const autoFillSourceLabels: Record<FormAutoFillSource, string> = {
   REQUESTER_DEPARTMENT_NAME: 'Phòng ban quản lý',
   REQUESTER_WORK_UNIT_NAME: 'Đơn vị làm việc',
   REQUESTER_POSITION_NAME: 'Chức danh / Vị trí',
+  REQUESTER_ANNUAL_LEAVE_DAYS: 'Số ngày phép năm còn lại',
+  REQUESTER_DIRECT_MANAGER_NAME: 'Quản lý trực tiếp',
   REQUESTER_EMAIL: 'Email người tạo',
   REQUESTER_PHONE: 'Số điện thoại người tạo',
   CURRENT_DATE: 'Ngày tạo phiếu (hôm nay)',
@@ -72,6 +76,8 @@ const autoFillAllowedFieldTypes: Readonly<Record<FormAutoFillSource, ReadonlySet
   REQUESTER_DEPARTMENT_NAME: new Set(['TEXT', 'TEXTAREA']),
   REQUESTER_WORK_UNIT_NAME: new Set(['TEXT', 'TEXTAREA']),
   REQUESTER_POSITION_NAME: new Set(['TEXT', 'TEXTAREA']),
+  REQUESTER_ANNUAL_LEAVE_DAYS: new Set(['NUMBER']),
+  REQUESTER_DIRECT_MANAGER_NAME: new Set(['TEXT', 'TEXTAREA']),
   CURRENT_DATE: new Set(['DATE', 'DATETIME', 'TEXT']),
 }
 
@@ -114,6 +120,27 @@ export function ensureSystemRequestFields(fields: readonly FormField[]): FormFie
     if (!source || !requestSystemFieldSources.has(source)) {
       const copy = structuredClone(field)
       if (copy.autoFill?.readOnly) copy.required = false
+      if (copy.formula && copy.formula.trim()) {
+        copy.formula = copy.formula.trim()
+        copy.required = false
+        delete copy.defaultValue
+        delete copy.validation
+      } else if (copy.formula === '') {
+        delete copy.formula
+      }
+      if (copy.tableConfig?.columns) {
+        copy.tableConfig.columns = copy.tableConfig.columns.map((col) => {
+          const nextCol = { ...col }
+          if (nextCol.formula && nextCol.formula.trim()) {
+            nextCol.formula = nextCol.formula.trim()
+            nextCol.required = false
+            delete nextCol.validation
+          } else if (nextCol.formula === '') {
+            delete nextCol.formula
+          }
+          return nextCol
+        })
+      }
       return [copy]
     }
     if (seen.has(source)) return []
@@ -176,6 +203,24 @@ export const requesterFieldPresets: readonly RequesterFieldPreset[] = [
     type: 'TEXT',
     required: false,
     source: 'REQUESTER_POSITION_NAME',
+    readOnly: true,
+  },
+  {
+    presetKey: 'ANNUAL_LEAVE_DAYS',
+    baseFieldKey: 'annual_leave_days',
+    label: 'Số ngày phép còn lại',
+    type: 'NUMBER',
+    required: false,
+    source: 'REQUESTER_ANNUAL_LEAVE_DAYS',
+    readOnly: true,
+  },
+  {
+    presetKey: 'DIRECT_MANAGER',
+    baseFieldKey: 'direct_manager_name',
+    label: 'Quản lý trực tiếp',
+    type: 'TEXT',
+    required: false,
+    source: 'REQUESTER_DIRECT_MANAGER_NAME',
     readOnly: true,
   },
   {
@@ -512,7 +557,12 @@ export function removeFieldAndRebalanceRows(
   return finalizeRowBuckets(buckets).fields
 }
 
-export function validateFormBuilderDefinition(code: string, name: string, fields: readonly FormField[]): FormBuilderIssue[] {
+export function validateFormBuilderDefinition(
+  code: string,
+  name: string,
+  fields: readonly FormField[],
+  settings?: FormSettings,
+): FormBuilderIssue[] {
   const issues: FormBuilderIssue[] = []
   const normalizedCode = code.trim().toUpperCase()
   if (!normalizedCode) issues.push({ path: 'code', message: 'Mã biểu mẫu là bắt buộc.' })
@@ -529,6 +579,7 @@ export function validateFormBuilderDefinition(code: string, name: string, fields
     if (!field.label.trim()) issues.push({ path: `fields.${index}.label`, message: 'Nhãn hiển thị là bắt buộc.' })
     validateOptions(field, index, issues)
     validateRules(field, index, issues)
+    validateDefaultValue(field, index, issues)
     validateAutoFill(field, index, issues)
     validateFile(field, index, issues)
     validateTable(field, index, issues)
@@ -540,6 +591,31 @@ export function validateFormBuilderDefinition(code: string, name: string, fields
     for (const index of indexes) issues.push({ path: `fields.${index}.key`, message: 'Mã trường không được trùng trong cùng biểu mẫu.' })
   }
   validateVisibility(fields, issues)
+  for (const calcIssue of validateFormCalculationsAndCycles(fields)) {
+    issues.push(calcIssue)
+  }
+  if (settings?.leaveDeduction?.enabled) {
+    const targetKey = settings.leaveDeduction.fieldKey?.trim() ?? ''
+    if (!targetKey) {
+      issues.push({
+        path: 'settings.leaveDeduction.fieldKey',
+        message: 'Vui lòng chọn trường số ngày nghỉ cần trừ khi phê duyệt.',
+      })
+    } else {
+      const targetField = fields.find((field) => field.key === targetKey)
+      if (!targetField) {
+        issues.push({
+          path: 'settings.leaveDeduction.fieldKey',
+          message: `Trường trừ ngày phép "${targetKey}" không còn tồn tại trong biểu mẫu.`,
+        })
+      } else if (targetField.type !== 'NUMBER' || targetField.autoFill) {
+        issues.push({
+          path: 'settings.leaveDeduction.fieldKey',
+          message: 'Trường trừ ngày phép năm phải là trường kiểu Số (không phải trường tự động điền).',
+        })
+      }
+    }
+  }
   return issues
 }
 
@@ -561,7 +637,7 @@ export function createField(type: FormFieldType, fields: readonly FormField[]): 
     base.fileConfig = {
       multiple: false,
       allowedMimeTypes: ['application/pdf', 'image/jpeg', 'image/png'],
-      maxFileSizeBytes: 10 * 1024 * 1024,
+      maxFileSizeBytes: 5 * 1024 * 1024,
       maxFiles: 1,
     }
   }
@@ -666,7 +742,7 @@ export function normalizeFieldForType(field: FormField, type: FormFieldType): Fo
     next.fileConfig = field.fileConfig ?? {
       multiple: false,
       allowedMimeTypes: ['application/pdf', 'image/jpeg', 'image/png'],
-      maxFileSizeBytes: 10 * 1024 * 1024,
+      maxFileSizeBytes: 5 * 1024 * 1024,
       maxFiles: 1,
     }
   } else {
@@ -698,6 +774,7 @@ export function normalizeFieldForType(field: FormField, type: FormFieldType): Fo
     delete next.placeholder
   }
   if (!numberTypes.has(type)) {
+    delete next.formula
     if (next.validation) {
       const { min: _min, max: _max, ...rest } = next.validation
       next.validation = rest
@@ -766,6 +843,28 @@ export function updateFieldLabelAndGeneratedKey(
   return { ...field, label, key }
 }
 
+export function updateTableColumnLabelAndGeneratedKey(
+  column: FormTableColumn,
+  label: string,
+  columns: readonly FormTableColumn[],
+  columnIndex: number,
+): FormTableColumn {
+  const keyIsGenerated = /^column_\d+$/.test(column.key)
+  if (!keyIsGenerated) return { ...column, label }
+  const baseKey = fieldKeyFromLabel(label)
+  if (!baseKey) return { ...column, label }
+  const usedKeys = new Set(
+    columns.filter((_, index) => index !== columnIndex).map((item) => item.key),
+  )
+  let key = baseKey
+  let suffix = 2
+  while (usedKeys.has(key)) {
+    key = `${baseKey}_${suffix}`
+    suffix += 1
+  }
+  return { ...column, label, key }
+}
+
 export function fieldKeyFromLabel(label: string): string {
   const normalized = label
     .trim()
@@ -832,17 +931,28 @@ function validateOptions(field: FormField, index: number, issues: FormBuilderIss
 }
 
 function validateRules(field: FormField, index: number, issues: FormBuilderIssue[]): void {
+  if (field.formula !== undefined && field.formula.trim() !== '') return
   const rules = field.validation
   if (!rules) return
   const base = `fields.${index}.validation`
   if (rules.min !== undefined && rules.max !== undefined && rules.min > rules.max) {
     issues.push({ path: `${base}.max`, message: 'Giá trị tối đa phải lớn hơn hoặc bằng giá trị tối thiểu.' })
   }
+  if (rules.min !== undefined && rules.min < 0) {
+    issues.push({ path: `${base}.min`, message: 'Giá trị tối thiểu không được âm.' })
+  }
+  if (rules.max !== undefined && rules.max < 0) {
+    issues.push({ path: `${base}.max`, message: 'Giá trị tối đa không được âm.' })
+  }
   if (rules.minLength !== undefined && rules.maxLength !== undefined && rules.minLength > rules.maxLength) {
     issues.push({ path: `${base}.maxLength`, message: 'Độ dài tối đa phải lớn hơn hoặc bằng độ dài tối thiểu.' })
   }
-  if (rules.minLength !== undefined && rules.minLength < 0) issues.push({ path: `${base}.minLength`, message: 'Độ dài tối thiểu không được âm.' })
-  if (rules.maxLength !== undefined && rules.maxLength < 0) issues.push({ path: `${base}.maxLength`, message: 'Độ dài tối đa không được âm.' })
+  if (rules.minLength !== undefined && (rules.minLength < 0 || !Number.isInteger(rules.minLength))) {
+    issues.push({ path: `${base}.minLength`, message: 'Độ dài tối thiểu phải là số nguyên không âm.' })
+  }
+  if (rules.maxLength !== undefined && (rules.maxLength < 0 || !Number.isInteger(rules.maxLength))) {
+    issues.push({ path: `${base}.maxLength`, message: 'Độ dài tối đa phải là số nguyên không âm.' })
+  }
   if (rules.pattern) {
     try {
       new RegExp(rules.pattern)
@@ -851,6 +961,112 @@ function validateRules(field: FormField, index: number, issues: FormBuilderIssue
     }
     if (rules.pattern.length > 200 || /\([^)]*[+*][^)]*\)[+*{]/.test(rules.pattern) || /\\[1-9]/.test(rules.pattern)) {
       issues.push({ path: `${base}.pattern`, message: 'Biểu thức chính quy có cấu trúc không an toàn.' })
+    }
+  }
+}
+
+function validateDefaultValue(field: FormField, index: number, issues: FormBuilderIssue[]): void {
+  const base = `fields.${index}`
+  if (field.defaultValue === undefined || field.defaultValue === null) return
+  if (field.type === 'SECTION') return
+
+  if (field.type === 'NUMBER' || field.type === 'CURRENCY') {
+    if (typeof field.defaultValue !== 'number' || !Number.isFinite(field.defaultValue)) {
+      issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định phải là số hợp lệ.' })
+      return
+    }
+    if (field.defaultValue < 0) {
+      issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định không được âm.' })
+      return
+    }
+    if (field.type === 'CURRENCY' && !Number.isInteger(field.defaultValue)) {
+      issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định tiền tệ phải là số nguyên.' })
+      return
+    }
+    const rules = field.validation
+    if (rules) {
+      if (rules.min !== undefined && field.defaultValue < rules.min) {
+        issues.push({
+          path: `${base}.defaultValue`,
+          message: `Giá trị mặc định (${field.defaultValue}) không được nhỏ hơn mức tối thiểu (${rules.min}).`,
+        })
+      }
+      if (rules.max !== undefined && field.defaultValue > rules.max) {
+        issues.push({
+          path: `${base}.defaultValue`,
+          message: `Giá trị mặc định (${field.defaultValue}) không được lớn hơn mức tối đa (${rules.max}).`,
+        })
+      }
+    }
+    return
+  }
+
+  if (field.type === 'TEXT' || field.type === 'TEXTAREA') {
+    if (typeof field.defaultValue !== 'string') {
+      issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định phải là chuỗi văn bản.' })
+      return
+    }
+    const rules = field.validation
+    if (rules) {
+      if (rules.minLength !== undefined && field.defaultValue.length < rules.minLength) {
+        issues.push({
+          path: `${base}.defaultValue`,
+          message: `Độ dài giá trị mặc định (${field.defaultValue.length} ký tự) không được ngắn hơn độ dài tối thiểu (${rules.minLength} ký tự).`,
+        })
+      }
+      if (rules.maxLength !== undefined && field.defaultValue.length > rules.maxLength) {
+        issues.push({
+          path: `${base}.defaultValue`,
+          message: `Độ dài giá trị mặc định (${field.defaultValue.length} ký tự) không được dài hơn độ dài tối đa (${rules.maxLength} ký tự).`,
+        })
+      }
+      if (rules.pattern) {
+        try {
+          if (!new RegExp(rules.pattern).test(field.defaultValue)) {
+            issues.push({
+              path: `${base}.defaultValue`,
+              message: rules.errorMessage?.trim() || 'Giá trị mặc định không khớp định dạng quy định.',
+            })
+          }
+        } catch {
+          // Handled in validateRules
+        }
+      }
+    }
+    return
+  }
+
+  if (field.type === 'EMAIL' && typeof field.defaultValue === 'string') {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(field.defaultValue)) {
+      issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định không phải là email hợp lệ.' })
+    }
+    return
+  }
+
+  if (field.type === 'PHONE' && typeof field.defaultValue === 'string') {
+    if (!/^\+?\d{1,15}$/.test(field.defaultValue)) {
+      issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định chỉ được gồm tối đa 15 chữ số và có thể bắt đầu bằng dấu +.' })
+    }
+    return
+  }
+
+  if (field.type === 'SELECT' || field.type === 'RADIO') {
+    if (typeof field.defaultValue === 'string') {
+      const allowed = new Set((field.options ?? []).map((o) => o.value))
+      if (!allowed.has(field.defaultValue)) {
+        issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định không nằm trong danh sách lựa chọn.' })
+      }
+    }
+    return
+  }
+
+  if (field.type === 'MULTI_SELECT' || field.type === 'CHECKBOX') {
+    if (Array.isArray(field.defaultValue)) {
+      const allowed = new Set((field.options ?? []).map((o) => o.value))
+      const invalid = field.defaultValue.filter((v) => typeof v !== 'string' || !allowed.has(v))
+      if (invalid.length > 0) {
+        issues.push({ path: `${base}.defaultValue`, message: 'Giá trị mặc định chứa lựa chọn không hợp lệ.' })
+      }
     }
   }
 }
@@ -906,11 +1122,13 @@ function validateTable(field: FormField, index: number, issues: FormBuilderIssue
         })
       }
     }
-    const pseudoField: FormField = { ...column, required: column.required }
-    const before = issues.length
-    validateRules(pseudoField, index, issues)
-    for (let issueIndex = before; issueIndex < issues.length; issueIndex += 1) {
-      issues[issueIndex] = { ...issues[issueIndex], path: issues[issueIndex].path.replace(`fields.${index}.validation`, `${columnBase}.validation`) }
+    if (column.formula === undefined || column.formula.trim() === '') {
+      const pseudoField: FormField = { ...column, required: column.required }
+      const before = issues.length
+      validateRules(pseudoField, index, issues)
+      for (let issueIndex = before; issueIndex < issues.length; issueIndex += 1) {
+        issues[issueIndex] = { ...issues[issueIndex], path: issues[issueIndex].path.replace(`fields.${index}.validation`, `${columnBase}.validation`) }
+      }
     }
   })
 }

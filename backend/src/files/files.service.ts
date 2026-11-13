@@ -30,9 +30,10 @@ import {
   type StoredFileDocument,
 } from './schemas/stored-file.schema.js';
 import { FILE_STORAGE, type StorageAdapter } from './storage/storage-adapter.js';
+import { detectAllowedTextFile } from './text-file-detection.js';
 
 const DEFAULT_ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'] as const;
-const DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 5;
 const TEMPORARY_FILE_LIFETIME_MS = 24 * 60 * 60 * 1000;
 export const ABSOLUTE_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
@@ -114,10 +115,18 @@ export class FilesService {
     }
 
     const originalName = this.validateOriginalName(upload.originalname);
-    const detectedType = await fileTypeFromBuffer(upload.buffer);
-    if (!detectedType) throw new BadRequestException('Không thể xác định định dạng tệp từ nội dung.');
-    const detectedMimeType = this.normalizeMimeType(detectedType.mime);
     const suppliedMimeType = this.normalizeMimeType(upload.mimetype);
+    const binaryType = await fileTypeFromBuffer(upload.buffer);
+    const detectedType = binaryType
+      ? { ext: binaryType.ext, mime: this.normalizeMimeType(binaryType.mime) }
+      : detectAllowedTextFile(
+          upload.buffer,
+          originalName,
+          suppliedMimeType,
+          policy.allowedMimeTypes,
+        );
+    if (!detectedType) throw new BadRequestException('Không thể xác định định dạng tệp từ nội dung.');
+    const detectedMimeType = detectedType.mime;
     if (suppliedMimeType !== detectedMimeType) {
       throw new BadRequestException('Content-Type của tệp không khớp với nội dung thực tế.');
     }

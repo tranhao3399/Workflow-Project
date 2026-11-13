@@ -9,6 +9,7 @@ export interface User {
   roles?: UserRole[]
   roleIds?: string[]
   employeeId?: string
+  employeeCode?: string
   avatarUrl?: string
   isActive: boolean
   lastLoginAt?: string

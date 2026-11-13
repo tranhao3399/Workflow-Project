@@ -25,6 +25,7 @@ function createService(overrides: {
   sessionFindOneAndUpdate?: ReturnType<typeof vi.fn>;
   sessionCreate?: ReturnType<typeof vi.fn>;
   userFindByEmail?: ReturnType<typeof vi.fn>;
+  passwordResetFindOneAndUpdate?: ReturnType<typeof vi.fn>;
 } = {}) {
   const users = {
     findByEmailForAuth: overrides.userFindByEmail ?? vi.fn().mockResolvedValue(user),
@@ -41,41 +42,60 @@ function createService(overrides: {
     create: overrides.sessionCreate ?? vi.fn(),
   };
   const rateLimit = {
+    findOne: vi.fn().mockReturnValue(queryResult(null)),
     findOneAndUpdate: vi.fn().mockReturnValue(queryResult(null)),
+    updateOne: vi.fn().mockReturnValue(queryResult({ modifiedCount: 1 })),
     create: vi.fn().mockResolvedValue(undefined),
   };
   const jwt = { signAsync: vi.fn().mockResolvedValue('access-token') };
   const audit = { recordForResolvedActor: vi.fn().mockResolvedValue(undefined) };
-  const mail = { sendPasswordResetOtp: vi.fn().mockResolvedValue(undefined) };
+  const mail = { sendPasswordResetOtp: vi.fn().mockResolvedValue(true) };
   const config = { get: vi.fn((key: string, fallback?: string) => key === 'SESSION_ABSOLUTE_TTL_HOURS' ? '24' : fallback) };
-  const passwordResetRequest = {};
+  const passwordResetRequest = {
+    findOneAndUpdate: overrides.passwordResetFindOneAndUpdate
+      ?? vi.fn().mockReturnValue(queryResult({ id: 'password-reset-request' })),
+  };
   return { service: new AuthService(users as never, jwt as never, audit as never, mail as never, config as never, session as never, rateLimit as never, passwordResetRequest as never), users, session, rateLimit, mail, jwt };
 }
 
 describe('AuthService password reset eligibility', () => {
-  it('rejects an unregistered email without claiming a send slot or dispatching an email', async () => {
+  it('given an active account, when password reset is requested, then OTP verification is allowed and an email is dispatched', async () => {
+    const { service, mail } = createService();
+
+    await expect(service.requestPasswordReset(request as never, { email: user.email }))
+      .resolves.toMatchObject({
+        message: 'Mã xác minh đã được gửi.',
+        canVerifyOtp: true,
+        resendLocked: false,
+      });
+    expect(mail.sendPasswordResetOtp).toHaveBeenCalledOnce();
+  });
+
+  it('given an unregistered email, when password reset is requested, then OTP verification is blocked without dispatching an email', async () => {
     const { service, rateLimit, mail } = createService({ userFindByEmail: vi.fn().mockResolvedValue(null) });
 
     await expect(service.requestPasswordReset(request as never, { email: 'missing@example.com' }))
-      .rejects.toMatchObject({
-        status: 404,
-        response: { code: 'PASSWORD_RESET_ACCOUNT_NOT_FOUND', message: 'Email này chưa được đăng ký tài khoản.' },
+      .resolves.toMatchObject({
+        message: 'Không thể gửi mã xác minh. Email chưa được đăng ký hoặc tài khoản đã ngưng hoạt động.',
+        canVerifyOtp: false,
+        resendLocked: false,
       });
-    expect(rateLimit.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(rateLimit.create).toHaveBeenCalledOnce();
     expect(mail.sendPasswordResetOtp).not.toHaveBeenCalled();
   });
 
-  it('rejects an inactive account without claiming a send slot or dispatching an email', async () => {
+  it('given an inactive account, when password reset is requested, then OTP verification is blocked without dispatching an email', async () => {
     const { service, rateLimit, mail } = createService({
       userFindByEmail: vi.fn().mockResolvedValue({ ...user, isActive: false }),
     });
 
     await expect(service.requestPasswordReset(request as never, { email: user.email }))
-      .rejects.toMatchObject({
-        status: 403,
-        response: { code: 'PASSWORD_RESET_ACCOUNT_INACTIVE', message: 'Tài khoản này đang ngưng hoạt động. Vui lòng liên hệ quản trị viên.' },
+      .resolves.toMatchObject({
+        message: 'Không thể gửi mã xác minh. Email chưa được đăng ký hoặc tài khoản đã ngưng hoạt động.',
+        canVerifyOtp: false,
+        resendLocked: false,
       });
-    expect(rateLimit.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(rateLimit.create).toHaveBeenCalledOnce();
     expect(mail.sendPasswordResetOtp).not.toHaveBeenCalled();
   });
 });

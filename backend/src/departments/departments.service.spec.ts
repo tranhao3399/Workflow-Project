@@ -31,14 +31,28 @@ function createService() {
     aggregate: vi.fn().mockReturnValue(query([])),
   };
   const departmentPositions = { find: vi.fn() };
+  const organizationScope = {
+    resolve: vi.fn().mockResolvedValue({
+      fullAccess: true,
+      managedRootDepartmentIds: [],
+      departmentIds: [],
+    }),
+  };
   const service = new DepartmentsService(
     departments as never,
     employees as never,
     {} as never,
     departmentPositions as never,
     {} as never,
+    organizationScope as never,
   );
-  return { service, departments, employees, departmentPositions };
+  return {
+    service,
+    departments,
+    employees,
+    departmentPositions,
+    organizationScope,
+  };
 }
 
 type RelationValidator = {
@@ -52,6 +66,56 @@ type RelationValidator = {
 };
 
 describe('DepartmentsService organization hierarchy', () => {
+  it('given a department outside the actor scope, when its detail URL is requested, then the record is hidden as not found', async () => {
+    const { service, departments, organizationScope } = createService();
+    organizationScope.resolve.mockResolvedValue({
+      fullAccess: false,
+      managedRootDepartmentIds: ['allowed-department'],
+      departmentIds: ['allowed-department'],
+    });
+
+    await expect(
+      service.findOne('scoped-user', 'blocked-department'),
+    ).rejects.toThrow('Không tìm thấy phòng ban.');
+    expect(departments.findById).not.toHaveBeenCalled();
+  });
+
+  it('given a scoped manager, when the catalog loads, then only allowed department identifiers are queried', async () => {
+    const { service, departments, organizationScope } = createService();
+    organizationScope.resolve.mockResolvedValue({
+      fullAccess: false,
+      managedRootDepartmentIds: ['region-hcm'],
+      departmentIds: ['region-hcm', 'store-hcm-01'],
+    });
+    departments.find.mockReturnValue(query([]));
+
+    await service.findCatalog('scoped-user', {});
+
+    expect(departments.find).toHaveBeenCalledWith({
+      $and: [{}, { _id: { $in: ['region-hcm', 'store-hcm-01'] } }],
+    });
+  });
+
+  it('given an allowed department whose parent is outside scope, when detail loads, then parent information is not exposed', async () => {
+    const { service, departments, organizationScope } = createService();
+    organizationScope.resolve.mockResolvedValue({
+      fullAccess: false,
+      managedRootDepartmentIds: ['region-hcm'],
+      departmentIds: ['region-hcm'],
+    });
+    departments.findById.mockReturnValue(query({
+      _id: 'region-hcm',
+      code: 'REGION_HCM',
+      name: 'Khu vực TP.HCM',
+      parentId: { _id: 'company', code: 'NEXASPORT', name: 'NexaSport' },
+    }));
+
+    const result = await service.findOne('scoped-user', 'region-hcm');
+
+    expect(result.parentId).toBeUndefined();
+    expect(result.parentName).toBeUndefined();
+  });
+
   it.each([
     { positionNames: [], count: 0 },
     { positionNames: ['Accountant'], count: 1 },
@@ -82,7 +146,7 @@ describe('DepartmentsService organization hierarchy', () => {
         ),
       );
 
-      const result = (await service.findCatalog({
+      const result = (await service.findCatalog('admin', {
         active: true,
       } as never)) as Array<{
         positionCount: number;
@@ -118,7 +182,7 @@ describe('DepartmentsService organization hierarchy', () => {
       query(currentAssignments),
     );
 
-    const withoutTitles = (await service.findCatalog({
+    const withoutTitles = (await service.findCatalog('admin', {
       active: true,
     } as never)) as Array<{
       positionCount: number;
@@ -135,11 +199,11 @@ describe('DepartmentsService organization hierarchy', () => {
         },
       },
     ];
-    const afterAssign = (await service.findCatalog({
+    const afterAssign = (await service.findCatalog('admin', {
       active: true,
     } as never)) as typeof withoutTitles;
     currentAssignments = [];
-    const afterRemove = (await service.findCatalog({
+    const afterRemove = (await service.findCatalog('admin', {
       active: true,
     } as never)) as typeof withoutTitles;
 
@@ -177,7 +241,7 @@ describe('DepartmentsService organization hierarchy', () => {
       .mockReturnValueOnce(query([{ _id: 'unit-1', count: 7 }]))
       .mockReturnValueOnce(query([{ _id: 'unit-2', count: 4 }]));
 
-    const result = (await service.findCatalog({
+    const result = (await service.findCatalog('admin', {
       active: true,
     } as never)) as Array<{ employeeCount: number }>;
 
@@ -322,6 +386,26 @@ describe('DepartmentsService organization hierarchy', () => {
         'descendant',
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('given a pre-existing parent cycle, when a new department selects that hierarchy, then validation stops and rejects the cycle', async () => {
+    const { service, departments } = createService();
+    departments.findById.mockImplementation((id: string) =>
+      query({
+        _id: id,
+        unitType: OrganizationUnitType.FUNCTIONAL,
+        parentId: id === 'department-a' ? 'department-b' : 'department-a',
+      }),
+    );
+
+    await expect(
+      (service as unknown as RelationValidator).ensureRelations(
+        undefined,
+        OrganizationUnitType.FUNCTIONAL,
+        'department-a',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(departments.findById).toHaveBeenCalledTimes(3);
   });
 
   it('given a legacy department without a type, when it is returned, then it remains available as unclassified', () => {

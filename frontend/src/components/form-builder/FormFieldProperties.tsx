@@ -15,12 +15,20 @@ import {
   compatibleAutoFillSourcesForType,
   createTableColumn,
   defaultAutoFillReadOnly,
+  defaultFieldPlaceholder,
   issueForPath,
   normalizeFieldForType,
   readFieldColumnSpan,
   updateFieldLabelAndGeneratedKey,
+  updateTableColumnLabelAndGeneratedKey,
   type FormBuilderIssue,
 } from '../../utils/form-builder'
+import {
+  replaceFieldKeyInFormula,
+} from '../../utils/form-calculation'
+import { FormulaEditorPanel, type FormulaVariableOption } from './FormulaTokenInput'
+import { DatePicker } from '../ui/DatePicker'
+import { DateTimePicker } from '../ui/DateTimePicker'
 import { FilterSelect } from '../ui/FilterSelect'
 
 interface FormFieldPropertiesProps {
@@ -34,8 +42,8 @@ interface FormFieldPropertiesProps {
 }
 
 const typeLabels: Record<FormFieldType, string> = {
-  TEXT: 'Văn bản ngắn',
-  TEXTAREA: 'Văn bản dài',
+  TEXT: 'Văn bản',
+  TEXTAREA: 'Văn bản',
   NUMBER: 'Số',
   CURRENCY: 'Tiền tệ',
   EMAIL: 'Email',
@@ -62,15 +70,21 @@ const tableColumnLabels: Record<TableColumnType, string> = {
 }
 
 const columnSpanOptions = [
-  { value: '12', label: 'Toàn hàng (1 cột)' },
-  { value: '6', label: 'Một nửa (2 cột)' },
-  { value: '4', label: 'Một phần ba (3 cột)' },
-  { value: '3', label: 'Một phần tư (4 cột)' },
+  { value: '12', label: '1 cột' },
+  { value: '6', label: '2 cột' },
+  { value: '4', label: '3 cột' },
+  { value: '3', label: '4 cột' },
+]
+
+const fileSizeOptions = [
+  { value: '5', label: '5 MB' },
+  { value: '10', label: '10 MB' },
+  { value: '20', label: '20 MB' },
 ]
 
 const optionTypes = new Set<FormFieldType>(['SELECT', 'MULTI_SELECT', 'RADIO', 'CHECKBOX'])
 const propertyFieldTypes = formFieldTypes.filter(
-  (type) => type !== 'MULTI_SELECT' && type !== 'CHECKBOX',
+  (type) => type !== 'MULTI_SELECT' && type !== 'CHECKBOX' && type !== 'TEXTAREA',
 )
 
 export function FormFieldProperties({
@@ -155,7 +169,22 @@ export function FormFieldProperties({
     if (type === 'SELECT') next.options = column.options?.length ? column.options : [newOption([])]
     else delete next.options
     if (type !== 'NUMBER' && type !== 'CURRENCY' && type !== 'TEXT') delete next.validation
+    if (type !== 'NUMBER' && type !== 'CURRENCY') delete next.formula
     return next
+  }
+
+  function toggleStandaloneFormula(enabled: boolean) {
+    const next: FormField = { ...field }
+    if (!enabled) {
+      delete next.formula
+      onChange(next)
+      return
+    }
+    next.formula = field.formula ?? ''
+    next.required = false
+    delete next.defaultValue
+    delete next.validation
+    onChange(next)
   }
 
   return (
@@ -166,7 +195,11 @@ export function FormFieldProperties({
           <span>Giá trị được hệ thống tự động cập nhật. Bạn có thể di chuyển và thay đổi độ rộng trường.</span>
         </div>
       )}
-      <PropertyField label={field.type === 'SECTION' ? 'Tiêu đề phân đoạn' : 'Nhãn hiển thị'} required={!systemField} error={issueForPath(issues, path('label'))}>
+      <PropertyField
+        label={field.type === 'SECTION' ? 'Nội dung tiêu đề' : 'Nhãn hiển thị'}
+        required={!systemField && field.type !== 'SECTION'}
+        error={issueForPath(issues, path('label'))}
+      >
         <input
           value={field.label}
           disabled={disabled || systemField}
@@ -186,17 +219,19 @@ export function FormFieldProperties({
         />
       </PropertyField>
 
-      <PropertyField label="Loại trường">
-        <FilterSelect
-          menuPortal
-          menuPlacement="auto"
-          disabled={disabled || systemField}
-          ariaLabel="Loại trường"
-          value={displayFieldType(field.type)}
-          options={propertyFieldTypes.map((type) => ({ value: type, label: typeLabels[type] }))}
-          onChange={(value) => onChange(changeDisplayFieldType(field, value as FormFieldType))}
-        />
-      </PropertyField>
+      {field.type !== 'SECTION' && (
+        <PropertyField label="Loại trường">
+          <FilterSelect
+            menuPortal
+            menuPlacement="auto"
+            disabled={disabled || systemField}
+            ariaLabel="Loại trường"
+            value={displayFieldType(field.type)}
+            options={propertyFieldTypes.map((type) => ({ value: type, label: typeLabels[type] }))}
+            onChange={(value) => onChange(changeDisplayFieldType(field, value as FormFieldType))}
+          />
+        </PropertyField>
+      )}
 
       {field.autoFill && !systemField && compatibleAutoFillSources.length > 0 && (
         <section className="form-builder-property-section form-builder-autofill-section">
@@ -234,12 +269,21 @@ export function FormFieldProperties({
         </section>
       )}
 
-      {field.type !== 'SECTION' && !systemField && !field.autoFill?.readOnly && (
+      {field.type !== 'SECTION' && !systemField && !field.autoFill?.readOnly && field.formula === undefined && (
         <SettingSwitch
           checked={field.required}
           disabled={disabled}
           label="Bắt buộc nhập"
           onChange={(checked) => update('required', checked)}
+        />
+      )}
+
+      {(field.type === 'TEXT' || field.type === 'TEXTAREA') && !systemField && !field.autoFill && (
+        <SettingSwitch
+          checked={field.type === 'TEXTAREA'}
+          disabled={disabled}
+          label="Cho phép nhập nhiều dòng"
+          onChange={(checked) => onChange(changeMultilineMode(field, checked))}
         />
       )}
 
@@ -252,37 +296,32 @@ export function FormFieldProperties({
         />
       )}
 
-      <details className="form-builder-property-section form-builder-advanced-section">
-        <summary className="form-builder-property-title">
-          <strong>Cài đặt nâng cao</strong>
-        </summary>
-        <PropertyField label="Độ rộng trên hàng">
-          <FilterSelect
-            menuPortal
-            menuPlacement="auto"
-            disabled={disabled || field.type === 'TABLE' || field.type === 'SECTION'}
-            ariaLabel="Độ rộng trường"
-            value={String(currentSpan)}
-            options={columnSpanOptions}
-            onChange={(value) => updateColumnSpan(Number(value))}
-          />
-        </PropertyField>
-      </details>
-
       {optionTypes.has(field.type) && (
         <section className="form-builder-property-section">
           <div className="form-builder-property-title">
             <strong>Danh sách lựa chọn</strong>
-            <button
-              className="text-action-button"
-              type="button"
-              disabled={disabled}
-              onClick={() =>
-                update('options', [...(field.options ?? []), newOption(field.options ?? [])])
-              }
-            >
-              + Thêm lựa chọn
-            </button>
+            <div className="form-builder-option-title-actions">
+              {field.defaultValue !== undefined && (
+                <button
+                  className="text-action-button"
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onChange(clearOptionDefault(field))}
+                >
+                  Bỏ mặc định
+                </button>
+              )}
+              <button
+                className="text-action-button"
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  update('options', [...(field.options ?? []), newOption(field.options ?? [])])
+                }
+              >
+                + Thêm lựa chọn
+              </button>
+            </div>
           </div>
           {issueForPath(issues, path('options')) && (
             <p className="field-error">{issueForPath(issues, path('options'))}</p>
@@ -344,7 +383,207 @@ export function FormFieldProperties({
         </section>
       )}
 
+      {(field.type === 'TEXT' || field.type === 'TEXTAREA') && !systemField && (() => {
+        const minLengthError = issueForPath(issues, path('validation.minLength'))
+        const maxLengthError =
+          issueForPath(issues, path('validation.maxLength')) ?? issueForPath(issues, path('validation'))
+        return (
+          <section className="form-builder-property-section">
+            <div className="form-builder-property-title">
+              <strong>Giới hạn độ dài ký tự</strong>
+            </div>
+            <div className="form-builder-rule-grid">
+              <PropertyField
+                label="Độ dài tối thiểu"
+                error={minLengthError}
+                hideErrorMessage
+              >
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="Tối thiểu"
+                  value={field.validation?.minLength ?? ''}
+                  disabled={disabled}
+                  aria-invalid={Boolean(minLengthError)}
+                  onChange={(event) =>
+                    update(
+                      'validation',
+                      compactValidation({
+                        ...(field.validation ?? {}),
+                        minLength: optionalNonNegativeInteger(event.target.value),
+                      }),
+                    )
+                  }
+                />
+              </PropertyField>
+              <PropertyField
+                label="Độ dài tối đa"
+                error={maxLengthError}
+                hideErrorMessage
+              >
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="Không giới hạn"
+                  value={field.validation?.maxLength ?? ''}
+                  disabled={disabled}
+                  aria-invalid={Boolean(maxLengthError)}
+                  onChange={(event) =>
+                    update(
+                      'validation',
+                      compactValidation({
+                        ...(field.validation ?? {}),
+                        maxLength: optionalNonNegativeInteger(event.target.value),
+                      }),
+                    )
+                  }
+                />
+              </PropertyField>
+              {(minLengthError || maxLengthError) && (
+                <div className="form-builder-rule-grid-errors">
+                  {minLengthError && <small className="field-error">{minLengthError}</small>}
+                  {maxLengthError && (!minLengthError || maxLengthError !== minLengthError) && (
+                    <small className="field-error">{maxLengthError}</small>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )
+      })()}
+
+      {(field.type === 'NUMBER' || field.type === 'CURRENCY') && !systemField && field.formula === undefined && (() => {
+        const minError = issueForPath(issues, path('validation.min'))
+        const maxError =
+          issueForPath(issues, path('validation.max')) ?? issueForPath(issues, path('validation'))
+        return (
+          <section className="form-builder-property-section">
+            <div className="form-builder-property-title">
+              <strong>Giới hạn giá trị</strong>
+            </div>
+            <div className="form-builder-rule-grid">
+              <PropertyField
+                label="Giá trị tối thiểu"
+                error={minError}
+                hideErrorMessage
+              >
+                <input
+                  type="number"
+                  min="0"
+                  step={field.type === 'NUMBER' ? 'any' : '1'}
+                  placeholder="Tối thiểu"
+                  value={field.validation?.min ?? ''}
+                  disabled={disabled}
+                  aria-invalid={Boolean(minError)}
+                  onChange={(event) =>
+                    update(
+                      'validation',
+                      compactValidation({
+                        ...(field.validation ?? {}),
+                        min: optionalNonNegativeNumber(event.target.value),
+                      }),
+                    )
+                  }
+                />
+              </PropertyField>
+              <PropertyField
+                label="Giá trị tối đa"
+                error={maxError}
+                hideErrorMessage
+              >
+                <input
+                  type="number"
+                  min="0"
+                  step={field.type === 'NUMBER' ? 'any' : '1'}
+                  placeholder="Không giới hạn"
+                  value={field.validation?.max ?? ''}
+                  disabled={disabled}
+                  aria-invalid={Boolean(maxError)}
+                  onChange={(event) =>
+                    update(
+                      'validation',
+                      compactValidation({
+                        ...(field.validation ?? {}),
+                        max: optionalNonNegativeNumber(event.target.value),
+                      }),
+                    )
+                  }
+                />
+              </PropertyField>
+              {(minError || maxError) && (
+                <div className="form-builder-rule-grid-errors">
+                  {minError && <small className="field-error">{minError}</small>}
+                  {maxError && (!minError || maxError !== minError) && (
+                    <small className="field-error">{maxError}</small>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )
+      })()}
+
+      {(field.type === 'NUMBER' || field.type === 'CURRENCY') && !systemField && !field.autoFill && (() => {
+        const formulaError = issueForPath(issues, path('formula'))
+        const isFormulaMode = field.formula !== undefined
+        const variables: FormulaVariableOption[] = [
+          ...allFields
+            .filter(
+              (item, index) =>
+                index !== fieldIndex &&
+                (item.type === 'NUMBER' || item.type === 'CURRENCY'),
+            )
+            .map((other) => ({
+              id: `field:${other.key}`,
+              label: other.label || other.key,
+              token: `[${other.key}]`,
+              kind: 'FIELD' as const,
+            })),
+          ...allFields.flatMap((item) => {
+            if (item.type !== 'TABLE' || !item.tableConfig) return []
+            return item.tableConfig.columns
+              .filter((col) => col.type === 'NUMBER' || col.type === 'CURRENCY')
+              .map((col) => ({
+                id: `sum:${item.key}.${col.key}`,
+                label: `Tổng: ${item.label || item.key} · ${col.label || col.key}`,
+                token: `SUM([${item.key}].[${col.key}])`,
+                kind: 'SUM' as const,
+              }))
+          }),
+        ]
+        return (
+          <section className="form-builder-property-section form-builder-formula-section">
+            <div className="form-builder-property-title">
+              <strong>Công thức tính toán</strong>
+            </div>
+            <SettingSwitch
+              checked={isFormulaMode}
+              disabled={disabled}
+              label="Tính toán tự động"
+              onChange={toggleStandaloneFormula}
+            />
+            {isFormulaMode && (
+              <FormulaEditorPanel
+                key={field.key}
+                label="Công thức"
+                value={field.formula ?? ''}
+                error={formulaError}
+                disabled={disabled}
+                placeholder="Chọn biến bên dưới hoặc nhập số, + - * /"
+                emptyHint="Thêm các trường Số / Tiền tệ hoặc Bảng dữ liệu khác vào biểu mẫu để tham chiếu trong công thức."
+                variables={variables}
+                allFields={allFields}
+                onChange={(nextFormula) => update('formula', nextFormula)}
+              />
+            )}
+          </section>
+        )
+      })()}
+
       {!field.autoFill &&
+        field.formula === undefined &&
         field.type !== 'SECTION' &&
         field.type !== 'FILE' &&
         field.type !== 'TABLE' &&
@@ -353,6 +592,7 @@ export function FormFieldProperties({
             <DefaultValueControl
               field={field}
               disabled={disabled}
+              error={issueForPath(issues, path('defaultValue'))}
               onChange={(value) => update('defaultValue', value)}
             />
           </section>
@@ -375,61 +615,60 @@ export function FormFieldProperties({
               })
             }
           />
-          <PropertyField
-            label="MIME types"
-            error={issueForPath(issues, path('fileConfig.allowedMimeTypes'))}
-          >
-            <input
-              value={field.fileConfig.allowedMimeTypes.join(', ')}
-              disabled={disabled}
-              onChange={(event) =>
-                update('fileConfig', {
-                  ...field.fileConfig!,
-                  allowedMimeTypes: event.target.value
-                    .split(',')
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                })
-              }
-            />
-          </PropertyField>
-          <div className="form-builder-rule-grid">
-            <PropertyField
-              label="Dung lượng tối đa (MB)"
-              error={issueForPath(issues, path('fileConfig.maxFileSizeBytes'))}
-            >
-              <input
-                type="number"
-                min="1"
-                value={Math.max(1, Math.round(field.fileConfig.maxFileSizeBytes / 1024 / 1024))}
-                disabled={disabled}
-                onChange={(event) =>
-                  update('fileConfig', {
-                    ...field.fileConfig!,
-                    maxFileSizeBytes: Math.max(1, Number(event.target.value)) * 1024 * 1024,
-                  })
-                }
-              />
-            </PropertyField>
-            <PropertyField
-              label="Số tệp tối đa"
-              error={issueForPath(issues, path('fileConfig.maxFiles'))}
-            >
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={field.fileConfig.maxFiles}
-                disabled={disabled || !field.fileConfig.multiple}
-                onChange={(event) =>
-                  update('fileConfig', {
-                    ...field.fileConfig!,
-                    maxFiles: Number(event.target.value),
-                  })
-                }
-              />
-            </PropertyField>
-          </div>
+          {(() => {
+            const maxFileSizeError = issueForPath(issues, path('fileConfig.maxFileSizeBytes'))
+            const maxFilesError = issueForPath(issues, path('fileConfig.maxFiles'))
+            return (
+              <div className="form-builder-rule-grid">
+                <PropertyField
+                  label="Dung lượng tối đa (MB)"
+                  error={maxFileSizeError}
+                  hideErrorMessage
+                >
+                  <FilterSelect
+                    ariaLabel="Dung lượng tối đa mỗi tệp"
+                    disabled={disabled}
+                    menuPlacement="auto"
+                    menuPortal
+                    options={fileSizeOptions}
+                    value={String(Math.round(field.fileConfig.maxFileSizeBytes / 1024 / 1024))}
+                    onChange={(value) =>
+                      update('fileConfig', {
+                        ...field.fileConfig!,
+                        maxFileSizeBytes: Number(value) * 1024 * 1024,
+                      })
+                    }
+                  />
+                </PropertyField>
+                <PropertyField
+                  label="Số tệp tối đa"
+                  error={maxFilesError}
+                  hideErrorMessage
+                >
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={field.fileConfig.maxFiles}
+                    disabled={disabled || !field.fileConfig.multiple}
+                    aria-invalid={Boolean(maxFilesError)}
+                    onChange={(event) =>
+                      update('fileConfig', {
+                        ...field.fileConfig!,
+                        maxFiles: Number(event.target.value),
+                      })
+                    }
+                  />
+                </PropertyField>
+                {(maxFileSizeError || maxFilesError) && (
+                  <div className="form-builder-rule-grid-errors">
+                    {maxFileSizeError && <small className="field-error">{maxFileSizeError}</small>}
+                    {maxFilesError && <small className="field-error">{maxFilesError}</small>}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </section>
       )}
 
@@ -475,44 +714,62 @@ export function FormFieldProperties({
           {issueForPath(issues, path('tableConfig.columns')) && (
             <p className="field-error">{issueForPath(issues, path('tableConfig.columns'))}</p>
           )}
-          <div className="form-builder-rule-grid">
-            <PropertyField
-              label="Số dòng tối thiểu"
-              error={issueForPath(issues, path('tableConfig.minRows'))}
-            >
-              <input
-                type="number"
-                min="0"
-                max="100"
-                value={field.tableConfig.minRows}
-                disabled={disabled}
-                onChange={(event) =>
-                  update('tableConfig', {
-                    ...field.tableConfig!,
-                    minRows: Number(event.target.value),
-                  })
-                }
-              />
-            </PropertyField>
-            <PropertyField
-              label="Số dòng tối đa"
-              error={issueForPath(issues, path('tableConfig.maxRows'))}
-            >
-              <input
-                type="number"
-                min="1"
-                max="100"
-                value={field.tableConfig.maxRows}
-                disabled={disabled}
-                onChange={(event) =>
-                  update('tableConfig', {
-                    ...field.tableConfig!,
-                    maxRows: Number(event.target.value),
-                  })
-                }
-              />
-            </PropertyField>
-          </div>
+          {(() => {
+            const minRowsError = issueForPath(issues, path('tableConfig.minRows'))
+            const maxRowsError = issueForPath(issues, path('tableConfig.maxRows'))
+            return (
+              <div className="form-builder-rule-grid">
+                <PropertyField
+                  label="Số dòng tối thiểu"
+                  error={minRowsError}
+                  hideErrorMessage
+                >
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={field.tableConfig.minRows}
+                    disabled={disabled}
+                    aria-invalid={Boolean(minRowsError)}
+                    onChange={(event) =>
+                      update('tableConfig', {
+                        ...field.tableConfig!,
+                        minRows: Number(event.target.value),
+                      })
+                    }
+                  />
+                </PropertyField>
+                <PropertyField
+                  label="Số dòng tối đa"
+                  error={maxRowsError}
+                  hideErrorMessage
+                >
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={field.tableConfig.maxRows}
+                    disabled={disabled}
+                    aria-invalid={Boolean(maxRowsError)}
+                    onChange={(event) =>
+                      update('tableConfig', {
+                        ...field.tableConfig!,
+                        maxRows: Number(event.target.value),
+                      })
+                    }
+                  />
+                </PropertyField>
+                {(minRowsError || maxRowsError) && (
+                  <div className="form-builder-rule-grid-errors">
+                    {minRowsError && <small className="field-error">{minRowsError}</small>}
+                    {maxRowsError && (!minRowsError || maxRowsError !== minRowsError) && (
+                      <small className="field-error">{maxRowsError}</small>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
           <SettingSwitch
             checked={field.tableConfig.allowAddRows}
             disabled={disabled}
@@ -596,6 +853,31 @@ export function FormFieldProperties({
                       onChange={(event) =>
                         updateTableColumn(columnIndex, { ...column, label: event.target.value })
                       }
+                      onBlur={(event) => {
+                        if (!field.tableConfig) return
+                        const updatedCol = updateTableColumnLabelAndGeneratedKey(
+                          column,
+                          event.currentTarget.value,
+                          field.tableConfig.columns,
+                          columnIndex,
+                        )
+                        const keyChanged = updatedCol.key !== column.key
+                        update('tableConfig', {
+                          ...field.tableConfig,
+                          columns: field.tableConfig.columns.map((item, idx) => {
+                            if (idx === columnIndex) return updatedCol
+                            if (!keyChanged || !item.formula) return item
+                            return {
+                              ...item,
+                              formula: replaceFieldKeyInFormula(
+                                item.formula,
+                                column.key,
+                                updatedCol.key,
+                              ),
+                            }
+                          }),
+                        })
+                      }}
                     />
                   </PropertyField>
                   <PropertyField label="Định dạng dữ liệu được nhập">
@@ -617,101 +899,200 @@ export function FormFieldProperties({
                       }
                     />
                   </PropertyField>
-                  <SettingSwitch
-                    checked={column.required}
-                    disabled={disabled}
-                    label="Bắt buộc nhập"
-                    onChange={(checked) =>
-                      updateTableColumn(columnIndex, {
-                        ...column,
-                        required: checked,
-                      })
-                    }
-                  />
-                  {(column.type === 'NUMBER' || column.type === 'CURRENCY') && (
-                    <div className="form-builder-rule-grid">
-                      <PropertyField label="Tối thiểu">
-                        <input
-                          type="number"
-                          min="0"
-                          step={column.type === 'NUMBER' ? 'any' : '1'}
-                          value={column.validation?.min ?? ''}
-                          disabled={disabled}
-                          onChange={(event) =>
-                            updateTableColumn(columnIndex, {
-                              ...column,
-                              validation: compactValidation({
-                                ...(column.validation ?? {}),
-                                min: optionalNonNegativeNumber(event.target.value),
-                              }),
-                            })
-                          }
-                        />
-                      </PropertyField>
-                      <PropertyField
-                        label="Tối đa"
-                        error={issueForPath(issues, `${columnPath}.validation.max`)}
-                      >
-                        <input
-                          type="number"
-                          min="0"
-                          step={column.type === 'NUMBER' ? 'any' : '1'}
-                          value={column.validation?.max ?? ''}
-                          disabled={disabled}
-                          onChange={(event) =>
-                            updateTableColumn(columnIndex, {
-                              ...column,
-                              validation: compactValidation({
-                                ...(column.validation ?? {}),
-                                max: optionalNonNegativeNumber(event.target.value),
-                              }),
-                            })
-                          }
-                        />
-                      </PropertyField>
-                    </div>
+                  {column.formula === undefined && (
+                    <SettingSwitch
+                      checked={column.required}
+                      disabled={disabled}
+                      label="Bắt buộc nhập"
+                      onChange={(checked) =>
+                        updateTableColumn(columnIndex, {
+                          ...column,
+                          required: checked,
+                        })
+                      }
+                    />
                   )}
-                  {column.type === 'TEXT' && (
-                    <div className="form-builder-rule-grid">
-                      <PropertyField label="Độ dài tối thiểu">
-                        <input
-                          type="number"
-                          min="0"
-                          value={column.validation?.minLength ?? ''}
+                  {(column.type === 'NUMBER' || column.type === 'CURRENCY') && (() => {
+                    const colFormulaError = issueForPath(issues, `${columnPath}.formula`)
+                    const isColFormulaMode = column.formula !== undefined
+                    const colVariables: FormulaVariableOption[] = (field.tableConfig?.columns ?? [])
+                      .filter(
+                        (sibling, idx) =>
+                          idx !== columnIndex &&
+                          (sibling.type === 'NUMBER' || sibling.type === 'CURRENCY'),
+                      )
+                      .map((sibling) => ({
+                        id: `col:${sibling.key}`,
+                        label: sibling.label || sibling.key,
+                        token: `[${sibling.key}]`,
+                        kind: 'FIELD' as const,
+                      }))
+                    return (
+                      <div className="form-builder-table-column-formula">
+                        <SettingSwitch
+                          checked={isColFormulaMode}
                           disabled={disabled}
-                          onChange={(event) =>
-                            updateTableColumn(columnIndex, {
+                          label="Tự động tính ngang theo dòng"
+                          onChange={(checked) => {
+                            if (!checked) {
+                              const nextCol = { ...column }
+                              delete nextCol.formula
+                              updateTableColumn(columnIndex, nextCol)
+                              return
+                            }
+                            const nextCol: FormTableColumn = {
                               ...column,
-                              validation: compactValidation({
-                                ...(column.validation ?? {}),
-                                minLength: optionalNumber(event.target.value),
-                              }),
-                            })
-                          }
+                              required: false,
+                              formula: column.formula ?? '',
+                            }
+                            delete nextCol.validation
+                            updateTableColumn(columnIndex, nextCol)
+                          }}
                         />
-                      </PropertyField>
-                      <PropertyField
-                        label="Độ dài tối đa"
-                        error={issueForPath(issues, `${columnPath}.validation.maxLength`)}
-                      >
-                        <input
-                          type="number"
-                          min="0"
-                          value={column.validation?.maxLength ?? ''}
-                          disabled={disabled}
-                          onChange={(event) =>
-                            updateTableColumn(columnIndex, {
-                              ...column,
-                              validation: compactValidation({
-                                ...(column.validation ?? {}),
-                                maxLength: optionalNumber(event.target.value),
-                              }),
-                            })
-                          }
-                        />
-                      </PropertyField>
-                    </div>
-                  )}
+                        {isColFormulaMode && (
+                          <FormulaEditorPanel
+                            key={`${field.key}-${column.key}`}
+                            label="Công thức"
+                            value={column.formula ?? ''}
+                            error={colFormulaError}
+                            disabled={disabled}
+                            compact
+                            placeholder="Chọn cột bên dưới hoặc nhập số, + - * /"
+                            emptyHint="Thêm các cột kiểu Số hoặc Tiền tệ khác trong bảng để tính ngang theo từng dòng."
+                            variables={colVariables}
+                            allFields={allFields}
+                            currentTableField={field}
+                            onChange={(nextFormula) =>
+                              updateTableColumn(columnIndex, {
+                                ...column,
+                                formula: nextFormula,
+                              })
+                            }
+                          />
+                        )}
+                      </div>
+                    )
+                  })()}
+                  {(column.type === 'NUMBER' || column.type === 'CURRENCY') && column.formula === undefined && (() => {
+                    const colMinError = issueForPath(issues, `${columnPath}.validation.min`)
+                    const colMaxError =
+                      issueForPath(issues, `${columnPath}.validation.max`) ??
+                      issueForPath(issues, `${columnPath}.validation`)
+                    return (
+                      <div className="form-builder-rule-grid">
+                        <PropertyField label="Tối thiểu" error={colMinError} hideErrorMessage>
+                          <input
+                            type="number"
+                            min="0"
+                            step={column.type === 'NUMBER' ? 'any' : '1'}
+                            value={column.validation?.min ?? ''}
+                            disabled={disabled}
+                            aria-invalid={Boolean(colMinError)}
+                            onChange={(event) =>
+                              updateTableColumn(columnIndex, {
+                                ...column,
+                                validation: compactValidation({
+                                  ...(column.validation ?? {}),
+                                  min: optionalNonNegativeNumber(event.target.value),
+                                }),
+                              })
+                            }
+                          />
+                        </PropertyField>
+                        <PropertyField label="Tối đa" error={colMaxError} hideErrorMessage>
+                          <input
+                            type="number"
+                            min="0"
+                            step={column.type === 'NUMBER' ? 'any' : '1'}
+                            value={column.validation?.max ?? ''}
+                            disabled={disabled}
+                            aria-invalid={Boolean(colMaxError)}
+                            onChange={(event) =>
+                              updateTableColumn(columnIndex, {
+                                ...column,
+                                validation: compactValidation({
+                                  ...(column.validation ?? {}),
+                                  max: optionalNonNegativeNumber(event.target.value),
+                                }),
+                              })
+                            }
+                          />
+                        </PropertyField>
+                        {(colMinError || colMaxError) && (
+                          <div className="form-builder-rule-grid-errors">
+                            {colMinError && <small className="field-error">{colMinError}</small>}
+                            {colMaxError && (!colMinError || colMaxError !== colMinError) && (
+                              <small className="field-error">{colMaxError}</small>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+                  {column.type === 'TEXT' && (() => {
+                    const colMinLengthError = issueForPath(issues, `${columnPath}.validation.minLength`)
+                    const colMaxLengthError =
+                      issueForPath(issues, `${columnPath}.validation.maxLength`) ??
+                      issueForPath(issues, `${columnPath}.validation`)
+                    return (
+                      <div className="form-builder-rule-grid">
+                        <PropertyField
+                          label="Độ dài tối thiểu"
+                          error={colMinLengthError}
+                          hideErrorMessage
+                        >
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={column.validation?.minLength ?? ''}
+                            disabled={disabled}
+                            aria-invalid={Boolean(colMinLengthError)}
+                            onChange={(event) =>
+                              updateTableColumn(columnIndex, {
+                                ...column,
+                                validation: compactValidation({
+                                  ...(column.validation ?? {}),
+                                  minLength: optionalNonNegativeInteger(event.target.value),
+                                }),
+                              })
+                            }
+                          />
+                        </PropertyField>
+                        <PropertyField
+                          label="Độ dài tối đa"
+                          error={colMaxLengthError}
+                          hideErrorMessage
+                        >
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={column.validation?.maxLength ?? ''}
+                            disabled={disabled}
+                            aria-invalid={Boolean(colMaxLengthError)}
+                            onChange={(event) =>
+                              updateTableColumn(columnIndex, {
+                                ...column,
+                                validation: compactValidation({
+                                  ...(column.validation ?? {}),
+                                  maxLength: optionalNonNegativeInteger(event.target.value),
+                                }),
+                              })
+                            }
+                          />
+                        </PropertyField>
+                        {(colMinLengthError || colMaxLengthError) && (
+                          <div className="form-builder-rule-grid-errors">
+                            {colMinLengthError && <small className="field-error">{colMinLengthError}</small>}
+                            {colMaxLengthError && (!colMinLengthError || colMaxLengthError !== colMinLengthError) && (
+                              <small className="field-error">{colMaxLengthError}</small>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                   {column.type === 'SELECT' && (
                     <div className="form-builder-table-column-options">
                       <div className="form-builder-property-title">
@@ -788,6 +1169,57 @@ export function FormFieldProperties({
           </div>
         </section>
       )}
+
+      {field.type !== 'SECTION' && (() => {
+        const keyError = issueForPath(issues, path('key'))
+        const isLockedKey = systemField || Boolean(field.autoFill)
+        return (
+          <details
+            className="form-builder-property-section form-builder-advanced-section"
+            open={keyError ? true : undefined}
+          >
+            <summary className="form-builder-property-title">
+              <strong>Cài đặt nâng cao</strong>
+            </summary>
+            <div className="form-builder-advanced-section-body">
+              <PropertyField label="Độ rộng trên hàng">
+                <FilterSelect
+                  menuPortal
+                  menuPlacement="auto"
+                  disabled={disabled || field.type === 'TABLE'}
+                  ariaLabel="Độ rộng trường"
+                  value={String(currentSpan)}
+                  options={columnSpanOptions}
+                  onChange={(value) => updateColumnSpan(Number(value))}
+                />
+              </PropertyField>
+              <PropertyField
+                label="Mã biến (Field ID)"
+                required={!isLockedKey}
+                error={keyError}
+              >
+                <input
+                  value={field.key}
+                  disabled={disabled || isLockedKey}
+                  readOnly={isLockedKey}
+                  maxLength={80}
+                  placeholder="VD: so_luong"
+                  title={
+                    isLockedKey
+                      ? 'Trường hệ thống tự động điền. Không thể thay đổi mã định danh.'
+                      : undefined
+                  }
+                  aria-invalid={Boolean(keyError)}
+                  onChange={(event) => {
+                    if (isLockedKey) return
+                    update('key', event.target.value.replace(/\s+/g, '_'))
+                  }}
+                />
+              </PropertyField>
+            </div>
+          </details>
+        )
+      })()}
     </div>
   )
 }
@@ -822,18 +1254,20 @@ function PropertyField({
   label,
   required = false,
   error,
+  hideErrorMessage = false,
   children,
 }: {
   label: string
   required?: boolean
   error?: string
+  hideErrorMessage?: boolean
   children: ReactNode
 }) {
   return (
-    <label className="form-builder-property-field">
+    <label className={`form-builder-property-field${error ? ' has-error' : ''}`}>
       <span className={required ? 'required-field-label' : ''}>{label}</span>
       {children}
-      {error && <small className="field-error">{error}</small>}
+      {error && !hideErrorMessage && <small className="field-error">{error}</small>}
     </label>
   )
 }
@@ -841,16 +1275,34 @@ function PropertyField({
 function DefaultValueControl({
   field,
   disabled,
+  error,
   onChange,
 }: {
   field: FormField
   disabled: boolean
+  error?: string
   onChange: (value: unknown) => void
 }) {
   if (field.type === 'FILE' || field.type === 'TABLE' || field.type === 'SECTION') return null
+  if (field.type === 'TEXTAREA') {
+    return (
+      <PropertyField label="Giá trị mặc định" error={error}>
+        <textarea
+          rows={3}
+          value={typeof field.defaultValue === 'string' ? field.defaultValue : ''}
+          disabled={disabled}
+          placeholder="Nhập giá trị mặc định"
+          aria-invalid={Boolean(error)}
+          onChange={(event) =>
+            onChange(event.target.value === '' ? undefined : event.target.value)
+          }
+        />
+      </PropertyField>
+    )
+  }
   if (field.type === 'BOOLEAN') {
     return (
-      <PropertyField label="Giá trị mặc định">
+      <PropertyField label="Giá trị mặc định" error={error}>
         <FilterSelect
           menuPortal
           menuPlacement="auto"
@@ -858,7 +1310,7 @@ function DefaultValueControl({
           ariaLabel="Giá trị mặc định"
           value={field.defaultValue === true ? 'true' : field.defaultValue === false ? 'false' : ''}
           options={[
-            { value: '', label: 'Không đặt' },
+            { value: '', label: 'Nhập giá trị mặc định' },
             { value: 'true', label: 'Có' },
             { value: 'false', label: 'Không' },
           ]}
@@ -867,30 +1319,54 @@ function DefaultValueControl({
       </PropertyField>
     )
   }
+  if (field.type === 'DATE') {
+    return (
+      <PropertyField label="Giá trị mặc định" error={error}>
+        <DatePicker
+          ariaLabel="Giá trị mặc định"
+          value={typeof field.defaultValue === 'string' ? field.defaultValue : undefined}
+          placeholder="Nhập giá trị mặc định"
+          disabled={disabled}
+          onChange={onChange}
+        />
+      </PropertyField>
+    )
+  }
+  if (field.type === 'DATETIME') {
+    return (
+      <PropertyField label="Giá trị mặc định" error={error}>
+        <DateTimePicker
+          ariaLabel="Giá trị ngày và giờ mặc định"
+          value={typeof field.defaultValue === 'string' ? field.defaultValue : undefined}
+          placeholder="Nhập giá trị mặc định"
+          disabled={disabled}
+          onChange={onChange}
+        />
+      </PropertyField>
+    )
+  }
   const inputType =
     field.type === 'NUMBER' || field.type === 'CURRENCY'
       ? 'number'
-      : field.type === 'DATE'
-        ? 'date'
-        : field.type === 'DATETIME'
-          ? 'datetime-local'
-          : field.type === 'EMAIL'
-            ? 'email'
-            : field.type === 'PHONE'
-              ? 'tel'
-              : 'text'
+      : field.type === 'EMAIL'
+        ? 'email'
+        : field.type === 'PHONE'
+          ? 'tel'
+          : 'text'
   return (
-    <PropertyField label="Giá trị mặc định">
+    <PropertyField label="Giá trị mặc định" error={error}>
       <input
         type={inputType}
         min={field.type === 'NUMBER' || field.type === 'CURRENCY' ? 0 : undefined}
         step={field.type === 'NUMBER' ? 'any' : field.type === 'CURRENCY' ? 1 : undefined}
+        placeholder="Nhập giá trị mặc định"
         value={
           typeof field.defaultValue === 'string' || typeof field.defaultValue === 'number'
             ? String(field.defaultValue)
             : ''
         }
         disabled={disabled}
+        aria-invalid={Boolean(error)}
         onChange={(event) =>
           onChange(
             event.target.value === ''
@@ -1020,6 +1496,7 @@ function isMultipleOptionType(type: FormFieldType): boolean {
 function displayFieldType(type: FormFieldType): FormFieldType {
   if (type === 'MULTI_SELECT') return 'SELECT'
   if (type === 'CHECKBOX') return 'RADIO'
+  if (type === 'TEXTAREA') return 'TEXT'
   return type
 }
 
@@ -1027,7 +1504,22 @@ function resolveDisplayFieldType(currentType: FormFieldType, displayType: FormFi
   const multiple = isMultipleOptionType(currentType)
   if (displayType === 'SELECT') return multiple ? 'MULTI_SELECT' : 'SELECT'
   if (displayType === 'RADIO') return multiple ? 'CHECKBOX' : 'RADIO'
+  if (displayType === 'TEXT') return currentType === 'TEXTAREA' ? 'TEXTAREA' : 'TEXT'
   return displayType
+}
+
+function changeMultilineMode(field: FormField, multiline: boolean): FormField {
+  const type: FormFieldType = multiline ? 'TEXTAREA' : 'TEXT'
+  const next: FormField = { ...field, type }
+  if (
+    field.placeholder === defaultFieldPlaceholder('TEXT') ||
+    field.placeholder === defaultFieldPlaceholder('TEXTAREA')
+  ) {
+    const ph = defaultFieldPlaceholder(type)
+    if (ph) next.placeholder = ph
+    else delete next.placeholder
+  }
+  return next
 }
 
 function changeDisplayFieldType(field: FormField, displayType: FormFieldType): FormField {
@@ -1089,12 +1581,21 @@ function changeOptionDefault(
   return next
 }
 
-function optionalNumber(value: string): number | undefined {
-  return value === '' ? undefined : Number(value)
+function clearOptionDefault(field: FormField): FormField {
+  const next = { ...field }
+  delete next.defaultValue
+  return next
 }
 
 function optionalNonNegativeNumber(value: string): number | undefined {
   return value === '' ? undefined : Math.max(0, Number(value))
+}
+
+function optionalNonNegativeInteger(value: string): number | undefined {
+  if (value === '') return undefined
+  const num = Number(value)
+  if (Number.isNaN(num)) return undefined
+  return Math.max(0, Math.trunc(num))
 }
 
 function compactValidation(

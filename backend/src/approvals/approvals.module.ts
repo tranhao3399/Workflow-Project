@@ -11,6 +11,7 @@ import { Role, RoleSchema } from '../roles/schemas/role.schema.js';
 import { User, UserSchema } from '../users/schemas/user.schema.js';
 import { WorkflowRuntimeModule } from '../workflow-runtime/workflow-runtime.module.js';
 import { ApprovalsController } from './approvals.controller.js';
+import { ApprovalSlaReminderService } from './approval-sla-reminder.service.js';
 import { ApprovalsService } from './approvals.service.js';
 import { ApprovalHistory, ApprovalHistorySchema } from './schemas/approval-history.schema.js';
 import { ApprovalTask, ApprovalTaskSchema } from './schemas/approval-task.schema.js';
@@ -33,6 +34,6 @@ import { ApprovalTask, ApprovalTaskSchema } from './schemas/approval-task.schema
     ]),
   ],
   controllers: [ApprovalsController],
-  providers: [ApprovalsService],
+  providers: [ApprovalsService, ApprovalSlaReminderService],
 })
 export class ApprovalsModule {}

@@ -156,6 +156,10 @@ export class FormTableColumnDto {
   @ApiPropertyOptional({ type: FormFieldValidationDto })
   @IsOptional() @ValidateNested() @Type(() => FormFieldValidationDto)
   validation?: FormFieldValidationDto;
+
+  @ApiPropertyOptional({ example: '[so_luong] * [don_gia]', maxLength: 500 })
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(500)
+  formula?: string;
 }
 
 export class FormTableConfigDto {
@@ -229,6 +233,10 @@ export class FormFieldDto {
   @IsOptional() @ValidateNested() @Type(() => FormFieldAutoFillDto)
   autoFill?: FormFieldAutoFillDto;
 
+  @ApiPropertyOptional({ example: 'SUM([chi_tiet].[thanh_tien])', maxLength: 500 })
+  @IsOptional() @Transform(trim) @IsString() @MaxLength(500)
+  formula?: string;
+
   @ApiPropertyOptional({ type: 'object', additionalProperties: true })
   @IsOptional() @IsObject()
   layout?: Record<string, unknown>;
@@ -240,6 +248,29 @@ export class FormFieldDto {
   @ApiPropertyOptional({ type: FormTableConfigDto })
   @IsOptional() @ValidateNested() @Type(() => FormTableConfigDto)
   tableConfig?: FormTableConfigDto;
+}
+
+export class FormLeaveDeductionSettingsDto {
+  @ApiProperty({ example: true, default: false })
+  @IsBoolean()
+  enabled: boolean;
+
+  @ApiPropertyOptional({ example: 'so_ngay_nghi', maxLength: 80 })
+  @IsOptional()
+  @Transform(({ value }) => {
+    const trimmed = typeof value === 'string' ? value.trim() : value;
+    return trimmed === '' ? undefined : trimmed;
+  })
+  @IsString()
+  @MaxLength(80)
+  @ValidateIf((object: FormLeaveDeductionSettingsDto) => Boolean(object.fieldKey))
+  @Matches(/^[A-Za-z][A-Za-z0-9_]*$/)
+  fieldKey?: string;
+
+  @ApiPropertyOptional({ example: false, default: false })
+  @IsOptional()
+  @IsBoolean()
+  allowNegative?: boolean;
 }
 
 export class FormSettingsDto {
@@ -258,6 +289,12 @@ export class FormSettingsDto {
   @ApiPropertyOptional({ example: 'Vui lòng nhập đầy đủ thông tin.', maxLength: 2000 })
   @IsOptional() @Transform(trim) @IsString() @MaxLength(2000)
   instructions?: string;
+
+  @ApiPropertyOptional({ type: FormLeaveDeductionSettingsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => FormLeaveDeductionSettingsDto)
+  leaveDeduction?: FormLeaveDeductionSettingsDto;
 }
 
 export class CreateFormDefinitionDto {
@@ -294,6 +331,12 @@ export class CreateFormDefinitionDto {
 }
 
 export class UpdateFormDefinitionDto {
+  @ApiPropertyOptional({ example: 'LEAVE_REQUEST', pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 80 })
+  @IsOptional()
+  @Transform(({ value }) => typeof value === 'string' ? value.trim().toUpperCase() : value)
+  @IsString() @IsNotEmpty() @MaxLength(80) @Matches(/^[A-Z][A-Z0-9_]*$/)
+  code?: string;
+
   @ApiPropertyOptional({ example: 'Phiếu xin nghỉ', maxLength: 160 })
   @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
   name?: string;

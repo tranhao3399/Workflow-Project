@@ -12,6 +12,11 @@ import { DepartmentPosition, DepartmentPositionSchema } from '../departments/sch
 import { AVATAR_STORAGE } from './avatar-storage/avatar-storage.adapter.js';
 import { LocalAvatarStorageAdapter } from './avatar-storage/local-avatar-storage.adapter.js';
 import { OrganizationScopeModule } from '../common/organization/organization-scope.module.js';
+import { EmployeeCodeService } from './employee-code.service.js';
+import {
+  EmployeeCodeSequence,
+  EmployeeCodeSequenceSchema,
+} from './schemas/employee-code-sequence.schema.js';
 
 @Module({
   imports: [
@@ -19,9 +24,20 @@ import { OrganizationScopeModule } from '../common/organization/organization-sco
     UsersModule,
     OrganizationScopeModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    MongooseModule.forFeature([{ name: Employee.name, schema: EmployeeSchema }, { name: Department.name, schema: DepartmentSchema }, { name: Position.name, schema: PositionSchema }, { name: DepartmentPosition.name, schema: DepartmentPositionSchema }]),
+    MongooseModule.forFeature([
+      { name: Employee.name, schema: EmployeeSchema },
+      { name: EmployeeCodeSequence.name, schema: EmployeeCodeSequenceSchema },
+      { name: Department.name, schema: DepartmentSchema },
+      { name: Position.name, schema: PositionSchema },
+      { name: DepartmentPosition.name, schema: DepartmentPositionSchema },
+    ]),
   ],
   controllers: [EmployeesController],
-  providers: [EmployeesService, LocalAvatarStorageAdapter, { provide: AVATAR_STORAGE, useExisting: LocalAvatarStorageAdapter }],
+  providers: [
+    EmployeesService,
+    EmployeeCodeService,
+    LocalAvatarStorageAdapter,
+    { provide: AVATAR_STORAGE, useExisting: LocalAvatarStorageAdapter },
+  ],
 })
 export class EmployeesModule {}

@@ -30,8 +30,35 @@ export interface UserEmployeeOption {
   userId?: string
 }
 
-export async function getUsers(): Promise<User[]> {
-  return apiClient<{ data: User[] }>('/users?page=1&limit=100').then((response) => response.data)
+export type UserSortField = 'createdAt' | 'email' | 'employeeCode' | 'fullName' | 'status'
+
+export interface UserListQuery {
+  search?: string
+  role?: UserRole
+  isActive?: boolean
+  sortBy?: UserSortField
+  sortOrder?: 'asc' | 'desc'
+  page?: number
+  limit?: number
+}
+
+export interface UserPagination {
+  page: number
+  limit: number
+  total: number
+  totalPages: number
+}
+
+export async function getUserPage(query: UserListQuery = {}): Promise<{ data: User[]; pagination: UserPagination }> {
+  const parameters = new URLSearchParams()
+  if (query.search?.trim()) parameters.set('search', query.search.trim())
+  if (query.role) parameters.set('role', query.role)
+  if (query.isActive !== undefined) parameters.set('isActive', String(query.isActive))
+  if (query.sortBy) parameters.set('sortBy', query.sortBy)
+  if (query.sortOrder) parameters.set('sortOrder', query.sortOrder)
+  parameters.set('page', String(query.page ?? 1))
+  parameters.set('limit', String(query.limit ?? 10))
+  return apiClient<{ data: User[]; pagination: UserPagination }>(`/users?${parameters.toString()}`)
 }
 
 export async function getUserEmployeeOptions(options: { availableOnly?: boolean; includeEmployeeId?: string } = {}): Promise<UserEmployeeOption[]> {
@@ -103,9 +130,7 @@ export async function getUserActivity(userId: string): Promise<UserActivityLog[]
     resourceCode: item.resource.code,
     outcome: item.outcome,
     description: item.actor.fullName ?? 'Người dùng hệ thống',
-    actorName: item.actor.fullName
-      ? item.actor.employeeCode ? `${item.actor.fullName} (${item.actor.employeeCode})` : item.actor.fullName
-      : undefined,
+    actorName: item.actor.fullName,
     actorEmployeeCode: item.actor.employeeCode,
     changes: item.changes,
   }))

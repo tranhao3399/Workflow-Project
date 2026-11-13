@@ -641,7 +641,7 @@ export function DepartmentCatalogPage({
             >
               <thead>
                 <tr>
-                  <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã</SortableTableHeader>
+                  <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã phòng ban</SortableTableHeader>
                   <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Tên phòng ban</SortableTableHeader>
                   <th>Phòng ban cấp trên</th>
                   <th>Người quản lý</th>
@@ -690,6 +690,7 @@ export function DepartmentCatalogPage({
               totalPages={totalPages}
               onPrevious={() => setPage(currentPage - 1)}
               onNext={() => setPage(currentPage + 1)}
+              onPageChange={setPage}
               rangeLabel={`${filtered.length ? (currentPage - 1) * pageSize + 1 : 0}–${Math.min(currentPage * pageSize, filtered.length)} trên ${filtered.length} phòng ban`}
               pageSize={pageSize}
               pageSizes={[10, 20, 50]}

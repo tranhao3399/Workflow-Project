@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
@@ -12,9 +12,7 @@ import { MailService } from '../mail/mail.service.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
 import { UsersService } from '../users/users.service.js';
 import type { SafeUser, SafeUserWithPermissions } from '../users/users.service.js';
-import { UserRole } from '../users/enums/user-role.enum.js';
 import { LoginDto } from './dto/login.dto.js';
-import { RegisterDto } from './dto/register.dto.js';
 import { ForgotPasswordRequestDto, ForgotPasswordResetDto, ForgotPasswordVerifyDto } from './dto/forgot-password.dto.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { JwtPayload } from './interfaces/jwt-payload.interface.js';
@@ -34,6 +32,7 @@ const PASSWORD_RESET_SEND_DELAYS_MS = [60_000, 3 * 60_000, 5 * 60_000, 30 * 60_0
 
 export interface PasswordResetRequestResult {
   message: string;
+  canVerifyOtp: boolean;
   retryAfterSeconds: number;
   resendLocked: boolean;
 }
@@ -65,52 +64,23 @@ export class AuthService {
     @InjectModel(PasswordResetRequest.name) private readonly passwordResetRequestModel: Model<PasswordResetRequest>,
   ) {}
 
-  async register(request: RequestWithContext, registerDto: RegisterDto): Promise<SafeUser> {
-    if (registerDto.role === UserRole.ADMIN) throw new BadRequestException('Không thể gán vai trò ADMIN qua đăng ký công khai.');
-    const email = registerDto.email.toLowerCase();
-    if (await this.usersService.findByEmailForAuth(email)) throw new ConflictException('Email đã được sử dụng.');
-    const passwordHash = await bcrypt.hash(registerDto.password, 12);
-    try {
-      const user = await this.usersService.create({ fullName: registerDto.fullName, email, passwordHash, role: registerDto.role });
-      const safeUser = await this.usersService.toSafeUser(user);
-      await this.auditLogService.recordForResolvedActor(request, safeUser, {
-        action: 'AUTH.REGISTER', outcome: AuditOutcome.SUCCESS, resource: { type: 'USER', id: safeUser.id },
-        changes: { after: { fullName: safeUser.fullName, email: safeUser.email, role: safeUser.role, isActive: safeUser.isActive } },
-      });
-      return safeUser;
-    } catch (error) {
-      if (isMongoDuplicateKeyError(error)) throw new ConflictException('Email đã được sử dụng.');
-      throw error;
-    }
-  }
-
   async requestPasswordReset(_request: RequestWithContext, input: ForgotPasswordRequestDto): Promise<PasswordResetRequestResult> {
     const now = new Date();
     const email = input.email.trim().toLowerCase();
     const user = await this.usersService.findByEmailForAuth(email);
-    if (!user) {
-      throw new NotFoundException({
-        code: 'PASSWORD_RESET_ACCOUNT_NOT_FOUND',
-        message: 'Email này chưa được đăng ký tài khoản.',
-      });
-    }
-    if (!user.isActive) {
-      throw new ForbiddenException({
-        code: 'PASSWORD_RESET_ACCOUNT_INACTIVE',
-        message: 'Tài khoản này đang ngưng hoạt động. Vui lòng liên hệ quản trị viên.',
-      });
-    }
-
     const sendClaim = await this.claimPasswordResetSend(email, now);
-    if (!sendClaim.shouldSend) return this.passwordResetRequestResponse(sendClaim);
+    if (!sendClaim.shouldSend) return this.passwordResetRequestResponse(sendClaim, Boolean(user?.isActive));
 
     const otp = this.createPasswordResetOtp();
+    const otpHash = await bcrypt.hash(otp, 12);
+    if (!user?.isActive) return this.passwordResetRequestResponse(sendClaim, false);
+
     await this.passwordResetRequestModel.findOneAndUpdate(
       { userId: user._id },
       {
         $set: {
           emailSnapshot: email,
-          otpHash: await bcrypt.hash(otp, 12),
+          otpHash,
           attemptCount: 0,
           maxAttempts: PASSWORD_RESET_MAX_ATTEMPTS,
           lastSentAt: now,
@@ -128,7 +98,7 @@ export class AuthService {
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     ).exec();
     this.dispatchPasswordResetOtp(email, otp);
-    return this.passwordResetRequestResponse(sendClaim);
+    return this.passwordResetRequestResponse(sendClaim, true);
   }
 
   async verifyPasswordResetOtp(input: ForgotPasswordVerifyDto): Promise<{ resetToken: string }> {
@@ -455,9 +425,12 @@ export class AuthService {
     return Math.max(1, Math.ceil((target.getTime() - now.getTime()) / 1000));
   }
 
-  private passwordResetRequestResponse(claim: PasswordResetSendClaim): PasswordResetRequestResult {
+  private passwordResetRequestResponse(claim: PasswordResetSendClaim, canVerifyOtp: boolean): PasswordResetRequestResult {
     return {
-      message: 'Nếu email tồn tại, mã xác minh đã được gửi.',
+      message: canVerifyOtp
+        ? 'Mã xác minh đã được gửi.'
+        : 'Không thể gửi mã xác minh. Email chưa được đăng ký hoặc tài khoản đã ngưng hoạt động.',
+      canVerifyOtp,
       retryAfterSeconds: claim.retryAfterSeconds,
       resendLocked: claim.resendLocked,
     };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DynamicFormValidatorService } from './dynamic-form-validator.service.js';
+import { evaluateFormCalculations } from './form-calculation.helper.js';
 
 const tableField = {
   key: 'items',
@@ -29,6 +30,58 @@ const tableField = {
 
 describe('DynamicFormValidatorService TABLE fields', () => {
   const validator = new DynamicFormValidatorService();
+
+  it('given selection defaults, when the definition is validated, then valid single and multiple defaults are accepted', () => {
+    const errors = validator.validateDefinition([
+      {
+        key: 'leave_type',
+        label: 'Loại nghỉ phép',
+        type: 'SELECT',
+        required: true,
+        order: 10,
+        options: [
+          { value: 'ANNUAL', label: 'Nghỉ phép năm', order: 10, isActive: true },
+          { value: 'UNPAID', label: 'Nghỉ không lương', order: 20, isActive: true },
+        ],
+        defaultValue: 'ANNUAL',
+      },
+      {
+        key: 'recipients',
+        label: 'Nơi nhận',
+        type: 'MULTI_SELECT',
+        required: false,
+        order: 20,
+        options: [
+          { value: 'HR', label: 'Nhân sự', order: 10, isActive: true },
+          { value: 'MANAGER', label: 'Quản lý', order: 20, isActive: true },
+        ],
+        defaultValue: ['HR', 'MANAGER'],
+      },
+    ]);
+
+    expect(errors).toEqual([]);
+  });
+
+  it('given a selection default outside the option list, when the definition is validated, then saving is rejected', () => {
+    const errors = validator.validateDefinition([
+      {
+        key: 'leave_type',
+        label: 'Loại nghỉ phép',
+        type: 'SELECT',
+        required: true,
+        order: 10,
+        options: [
+          { value: 'ANNUAL', label: 'Nghỉ phép năm', order: 10, isActive: true },
+        ],
+        defaultValue: 'UNKNOWN',
+      },
+    ]);
+
+    expect(errors).toContainEqual(expect.objectContaining({
+      path: 'fields.0.defaultValue',
+      code: 'INVALID_DEFAULT_INVALID_TYPE',
+    }));
+  });
 
   it('given a form without request metadata, when system fields are ensured, then code and status are added once and remain movable', () => {
     const normalized = validator.ensureSystemRequestFields([
@@ -227,5 +280,285 @@ describe('DynamicFormValidatorService TABLE fields', () => {
     expect(validator.validateFormData({ fields }, { phone: '+84ABC123' }).errors).toContainEqual(
       expect.objectContaining({ fieldKey: 'phone', code: 'INVALID_PHONE' }),
     );
+  });
+
+  it('given min and max or minLength and maxLength where max < min, or default value out of bounds, when definition is validated, then saving is rejected', () => {
+    const invalidInvertedNumeric = [
+      { key: 'leave_days', label: 'Số ngày nghỉ', type: 'NUMBER', required: true, order: 10, validation: { min: 5, max: 4 } },
+    ];
+    const invalidInvertedText = [
+      { key: 'reason', label: 'Lý do', type: 'TEXT', required: true, order: 10, validation: { minLength: 15, maxLength: 10 } },
+    ];
+    const invalidDefaultBelowMin = [
+      { key: 'amount', label: 'Số lượng', type: 'NUMBER', required: true, order: 10, defaultValue: 0, validation: { min: 4, max: 10 } },
+    ];
+    const invalidDefaultAboveMax = [
+      { key: 'amount', label: 'Số lượng', type: 'NUMBER', required: true, order: 10, defaultValue: 15, validation: { min: 4, max: 10 } },
+    ];
+    const invalidDefaultTextTooShort = [
+      { key: 'reason', label: 'Lý do', type: 'TEXT', required: true, order: 10, defaultValue: 'abc', validation: { minLength: 5, maxLength: 20 } },
+    ];
+    const invalidDefaultTextTooLong = [
+      { key: 'reason', label: 'Lý do', type: 'TEXT', required: true, order: 10, defaultValue: '12345678901', validation: { minLength: 2, maxLength: 10 } },
+    ];
+    const validNumericAndText = [
+      { key: 'leave_days', label: 'Số ngày nghỉ', type: 'NUMBER', required: true, order: 10, defaultValue: 4, validation: { min: 4, max: 4 } },
+      { key: 'reason', label: 'Lý do', type: 'TEXT', required: true, order: 20, defaultValue: 'Hợp lệ nè', validation: { minLength: 5, maxLength: 50 } },
+    ];
+
+    expect(validator.validateDefinition(invalidInvertedNumeric)).toContainEqual(
+      expect.objectContaining({ path: 'fields.0.validation.max', code: 'INVALID_RANGE' }),
+    );
+    expect(validator.validateDefinition(invalidInvertedText)).toContainEqual(
+      expect.objectContaining({ path: 'fields.0.validation.maxLength', code: 'INVALID_LENGTH_RANGE' }),
+    );
+    expect(validator.validateDefinition(invalidDefaultBelowMin)).toContainEqual(
+      expect.objectContaining({ path: 'fields.0.defaultValue', code: 'INVALID_DEFAULT_MIN' }),
+    );
+    expect(validator.validateDefinition(invalidDefaultAboveMax)).toContainEqual(
+      expect.objectContaining({ path: 'fields.0.defaultValue', code: 'INVALID_DEFAULT_MAX' }),
+    );
+    expect(validator.validateDefinition(invalidDefaultTextTooShort)).toContainEqual(
+      expect.objectContaining({ path: 'fields.0.defaultValue', code: 'INVALID_DEFAULT_MIN_LENGTH' }),
+    );
+    expect(validator.validateDefinition(invalidDefaultTextTooLong)).toContainEqual(
+      expect.objectContaining({ path: 'fields.0.defaultValue', code: 'INVALID_DEFAULT_MAX_LENGTH' }),
+    );
+    expect(validator.validateDefinition(validNumericAndText)).toHaveLength(0);
+  });
+
+  it('given standalone formula, table row-level formula, and SUM aggregation, when evaluated, then values are calculated in topological order', () => {
+    const fields = [
+      {
+        key: 'bang_vat_tu',
+        label: 'Bảng chi tiết vật tư',
+        type: 'TABLE',
+        required: true,
+        order: 10,
+        tableConfig: {
+          minRows: 1,
+          maxRows: 10,
+          allowAddRows: true,
+          allowRemoveRows: true,
+          columns: [
+            { key: 'so_luong', label: 'Số lượng', type: 'NUMBER', required: true, order: 10 },
+            { key: 'don_gia', label: 'Đơn giá', type: 'CURRENCY', required: true, order: 20 },
+            {
+              key: 'thanh_tien',
+              label: 'Thành tiền',
+              type: 'CURRENCY',
+              required: false,
+              order: 30,
+              formula: '[so_luong] * [don_gia]',
+            },
+          ],
+        },
+      },
+      {
+        key: 'tong_tien_hang',
+        label: 'Tổng tiền hàng',
+        type: 'CURRENCY',
+        required: false,
+        order: 20,
+        formula: 'SUM([bang_vat_tu].[thanh_tien])',
+      },
+      {
+        key: 'giam_gia',
+        label: 'Giảm giá',
+        type: 'CURRENCY',
+        required: false,
+        order: 30,
+      },
+      {
+        key: 'tong_thanh_toan',
+        label: 'Tổng thanh toán',
+        type: 'CURRENCY',
+        required: false,
+        order: 40,
+        formula: '[tong_tien_hang] - [giam_gia]',
+      },
+    ];
+
+    expect(validator.validateDefinition(fields)).toEqual([]);
+
+    const evaluated = evaluateFormCalculations(fields, {
+      bang_vat_tu: [
+        { so_luong: 2, don_gia: 150000 },
+        { so_luong: 3, don_gia: 200000 },
+      ],
+      giam_gia: 50000,
+    });
+
+    expect(evaluated).toEqual({
+      bang_vat_tu: [
+        { so_luong: 2, don_gia: 150000, thanh_tien: 300000 },
+        { so_luong: 3, don_gia: 200000, thanh_tien: 600000 },
+      ],
+      tong_tien_hang: 900000,
+      giam_gia: 50000,
+      tong_thanh_toan: 850000,
+    });
+
+    expect(
+      validator.validateFormData(
+        { fields },
+        {
+          bang_vat_tu: [
+            { so_luong: 2, don_gia: 150000 },
+            { so_luong: 3, don_gia: 200000 },
+          ],
+          giam_gia: 50000,
+        },
+      ),
+    ).toEqual({ valid: true, errors: [] });
+  });
+
+  it('given circular formula dependencies between fields or table columns, when definition is validated, then CIRCULAR_FORMULA_DEPENDENCY is returned', () => {
+    const circularStandalone = [
+      { key: 'field_a', label: 'Trường A', type: 'NUMBER', required: false, order: 10, formula: '[field_b] + 1' },
+      { key: 'field_b', label: 'Trường B', type: 'NUMBER', required: false, order: 20, formula: '[field_a] + 1' },
+    ];
+
+    const circularTableColumns = [
+      {
+        key: 'items',
+        label: 'Chi tiết',
+        type: 'TABLE',
+        required: false,
+        order: 10,
+        tableConfig: {
+          minRows: 0,
+          maxRows: 10,
+          allowAddRows: true,
+          allowRemoveRows: true,
+          columns: [
+            { key: 'col_a', label: 'Cột A', type: 'NUMBER', required: false, order: 10, formula: '[col_b] * 2' },
+            { key: 'col_b', label: 'Cột B', type: 'NUMBER', required: false, order: 20, formula: '[col_a] + 5' },
+          ],
+        },
+      },
+    ];
+
+    expect(validator.validateDefinition(circularStandalone)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'fields.0.formula', code: 'CIRCULAR_FORMULA_DEPENDENCY' }),
+        expect.objectContaining({ path: 'fields.1.formula', code: 'CIRCULAR_FORMULA_DEPENDENCY' }),
+      ]),
+    );
+    expect(validator.validateDefinition(circularTableColumns)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: 'fields.0.tableConfig.columns.0.formula',
+          code: 'CIRCULAR_FORMULA_DEPENDENCY',
+        }),
+      ]),
+    );
+  });
+
+  it('given incomplete formula syntax missing a right-hand operand, when definition is validated, then INVALID_FORMULA_SYNTAX is returned', () => {
+    const brokenFormula = [
+      { key: 'so_tien', label: 'Số tiền', type: 'CURRENCY', required: false, order: 10 },
+      { key: 'tong', label: 'Tổng', type: 'CURRENCY', required: false, order: 20, formula: '[so_tien] + ' },
+    ];
+
+    expect(validator.validateDefinition(brokenFormula)).toEqual([
+      expect.objectContaining({
+        path: 'fields.1.formula',
+        code: 'INVALID_FORMULA_SYNTAX',
+        message: 'Cú pháp không hợp lệ.',
+      }),
+    ]);
+  });
+
+  it('given leave auto-fill fields and valid leaveDeduction settings, when definition is validated, then no errors are returned', () => {
+    const errors = validator.validateDefinition(
+      [
+        {
+          key: 'annual_leave_days',
+          label: 'Số ngày phép còn lại',
+          type: 'NUMBER',
+          required: false,
+          order: 10,
+          autoFill: { source: 'REQUESTER_ANNUAL_LEAVE_DAYS', readOnly: true },
+        },
+        {
+          key: 'direct_manager_name',
+          label: 'Quản lý trực tiếp',
+          type: 'TEXT',
+          required: false,
+          order: 20,
+          autoFill: { source: 'REQUESTER_DIRECT_MANAGER_NAME', readOnly: true },
+        },
+        {
+          key: 'so_ngay_nghi',
+          label: 'Số ngày nghỉ',
+          type: 'NUMBER',
+          required: true,
+          order: 30,
+        },
+      ],
+      {
+        leaveDeduction: {
+          enabled: true,
+          fieldKey: 'so_ngay_nghi',
+          allowNegative: false,
+        },
+      },
+    );
+
+    expect(errors).toEqual([]);
+  });
+
+  it('given invalid leaveDeduction settings or incompatible leave auto-fill type, when definition is validated, then clear validation errors are returned', () => {
+    const badAutoFill = validator.validateDefinition([
+      {
+        key: 'annual_leave_days',
+        label: 'Số ngày phép còn lại',
+        type: 'TEXT',
+        required: false,
+        order: 10,
+        autoFill: { source: 'REQUESTER_ANNUAL_LEAVE_DAYS', readOnly: true },
+      },
+    ]);
+    expect(badAutoFill).toContainEqual(expect.objectContaining({
+      path: 'fields.0.autoFill.source',
+      code: 'INCOMPATIBLE_AUTO_FILL_SOURCE',
+    }));
+
+    const missingFieldKey = validator.validateDefinition(
+      [{ key: 'so_ngay_nghi', label: 'Số ngày nghỉ', type: 'NUMBER', required: true, order: 10 }],
+      { leaveDeduction: { enabled: true } },
+    );
+    expect(missingFieldKey).toContainEqual(expect.objectContaining({
+      path: 'settings.leaveDeduction.fieldKey',
+      code: 'LEAVE_DEDUCTION_FIELD_REQUIRED',
+    }));
+
+    const autoFillTarget = validator.validateDefinition(
+      [
+        {
+          key: 'annual_leave_days',
+          label: 'Số ngày phép còn lại',
+          type: 'NUMBER',
+          required: false,
+          order: 10,
+          autoFill: { source: 'REQUESTER_ANNUAL_LEAVE_DAYS', readOnly: true },
+        },
+      ],
+      { leaveDeduction: { enabled: true, fieldKey: 'annual_leave_days' } },
+    );
+    expect(autoFillTarget).toContainEqual(expect.objectContaining({
+      path: 'settings.leaveDeduction.fieldKey',
+      code: 'LEAVE_DEDUCTION_AUTOFILL_NOT_ALLOWED',
+    }));
+
+    const nonNumberTarget = validator.validateDefinition(
+      [{ key: 'reason', label: 'Lý do', type: 'TEXT', required: true, order: 10 }],
+      { leaveDeduction: { enabled: true, fieldKey: 'reason' } },
+    );
+    expect(nonNumberTarget).toContainEqual(expect.objectContaining({
+      path: 'settings.leaveDeduction.fieldKey',
+      code: 'LEAVE_DEDUCTION_FIELD_TYPE_INVALID',
+    }));
   });
 });

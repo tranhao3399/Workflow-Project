@@ -8,8 +8,19 @@ import { HttpExceptionFilter } from './common/http/http-exception.filter.js';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const configuredFrontendOrigin =
+    process.env.FRONTEND_ORIGIN ??
+    process.env.FRONTEND_URL ??
+    'http://localhost:5173';
   app.enableCors({
-    origin: process.env.FRONTEND_ORIGIN ?? process.env.FRONTEND_URL ?? 'http://localhost:5173',
+    origin:
+      process.env.NODE_ENV === 'production'
+        ? configuredFrontendOrigin
+        : [
+            configuredFrontendOrigin,
+            /^https?:\/\/localhost:\d+$/,
+            /^https?:\/\/127\.0\.0\.1:\d+$/,
+          ],
     credentials: true,
     exposedHeaders: ['X-Request-Id'],
   });

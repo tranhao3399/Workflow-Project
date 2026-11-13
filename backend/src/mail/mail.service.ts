@@ -26,8 +26,13 @@ export class MailService {
         html: `<p>Mã xác minh đặt lại mật khẩu của bạn là:</p><p style="font-size:24px;font-weight:700;letter-spacing:4px">${otp}</p><p>Mã có hiệu lực trong <strong>10 phút</strong>.</p><p>Nếu bạn không yêu cầu đặt lại mật khẩu, vui lòng bỏ qua email này.</p>`,
       });
       return true;
-    } catch {
-      this.logger.error('Password reset email could not be sent.');
+    } catch (error) {
+      const smtpError = error as { code?: string; responseCode?: number };
+      if (smtpError.code === 'EAUTH' || smtpError.responseCode === 535) {
+        this.logger.error('Không thể gửi email đặt lại mật khẩu: Gmail từ chối thông tin xác thực SMTP. Hãy tạo App Password mới và cập nhật MAIL_PASSWORD.');
+      } else {
+        this.logger.error('Không thể gửi email đặt lại mật khẩu do kết nối SMTP thất bại.');
+      }
       return false;
     }
   }
@@ -36,7 +41,10 @@ export class MailService {
     if (this.transporter) return this.transporter;
     const host = this.configService.get<string>('MAIL_HOST')?.trim();
     const user = this.configService.get<string>('MAIL_USER')?.trim();
-    const password = this.configService.get<string>('MAIL_PASSWORD');
+    const configuredPassword = this.configService.get<string>('MAIL_PASSWORD')?.trim();
+    const password = host?.toLowerCase() === 'smtp.gmail.com'
+      ? configuredPassword?.replace(/\s+/g, '')
+      : configuredPassword;
     if (!host || !user || !password) return undefined;
 
     const configuredPort = Number(this.configService.get<string>('MAIL_PORT', '587'));

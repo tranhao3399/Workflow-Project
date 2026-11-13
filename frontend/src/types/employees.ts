@@ -1,7 +1,16 @@
 import type { UserRole } from "./auth";
 
-export const employmentTypes = ["FULL_TIME", "CONTRACT", "INTERN"] as const;
+export const employmentTypes = [
+  "OFFICIAL",
+  "FULL_TIME",
+  "PART_TIME",
+  "CONTRACT",
+  "INTERN",
+] as const;
 export type EmploymentType = (typeof employmentTypes)[number];
+
+export const genders = ["MALE", "FEMALE", "OTHER"] as const;
+export type Gender = (typeof genders)[number];
 
 export interface EmployeeAvatarMetadata {
   contentType: "image/jpeg" | "image/png";
@@ -25,7 +34,10 @@ export interface Employee {
   phone?: string;
   address?: string;
   dateOfBirth?: string;
+  gender?: Gender;
+  citizenId?: string;
   hiredAt?: string;
+  annualLeaveDays?: number;
   employmentType?: EmploymentType;
   managerId?: string;
   isActive: boolean;
@@ -50,7 +62,10 @@ export interface EmployeeFormValues {
   phone?: string;
   address?: string;
   dateOfBirth?: string;
+  gender?: Gender;
+  citizenId?: string;
   hiredAt?: string;
+  annualLeaveDays?: number;
   employmentType: EmploymentType;
   managerId?: string;
   isActive: boolean;

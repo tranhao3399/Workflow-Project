@@ -7,28 +7,16 @@ import { dataResponse } from '../common/http/api-response.js';
 import type { AuthTokenResult } from './auth.service.js';
 import { AuthService } from './auth.service.js';
 import { LoginDto } from './dto/login.dto.js';
-import { RegisterDto } from './dto/register.dto.js';
 import { ForgotPasswordRequestDto, ForgotPasswordResetDto, ForgotPasswordVerifyDto } from './dto/forgot-password.dto.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { ApiAuthenticationErrors, ApiDataResponseDto, ApiResourceConflict, ApiValidationError } from '../common/http/swagger-response.dto.js';
+import { ApiAuthenticationErrors, ApiDataResponseDto, ApiValidationError } from '../common/http/swagger-response.dto.js';
 
 @Controller('auth')
 @ApiTags('Xác thực')
 export class AuthController {
   constructor(private readonly authService: AuthService, private readonly usersService: UsersService) {}
-
-  @Post('register')
-  @ApiOperation({ summary: 'Đăng ký tài khoản', description: 'Tạo tài khoản theo contract đăng ký hiện có. Endpoint không yêu cầu Bearer token.' })
-  @ApiConsumes('application/json')
-  @ApiBody({ type: RegisterDto })
-  @ApiOkResponse({ description: 'Đăng ký thành công.', type: ApiDataResponseDto })
-  @ApiValidationError()
-  @ApiResourceConflict('Email đã tồn tại.')
-  async register(@Req() request: RequestWithContext, @Body() registerDto: RegisterDto) {
-    return dataResponse(await this.authService.register(request, registerDto));
-  }
 
   @Post('login')
   @ApiOperation({ summary: 'Đăng nhập', description: 'Cấp access token và đặt refresh token bằng HttpOnly Cookie. Refresh token không có trong JSON response.' })

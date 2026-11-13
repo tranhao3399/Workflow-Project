@@ -1,6 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
 import {
+  evaluateFormCalculations,
+  validateFormCalculationsAndCycles,
+} from './form-calculation.helper.js';
+import {
   formAutoFillSources,
   formFieldTypes,
   tableColumnTypes,
@@ -22,6 +26,8 @@ const AUTO_FILL_ALLOWED_FIELD_TYPES: Readonly<Record<FormAutoFillSource, Readonl
   REQUESTER_DEPARTMENT_NAME: new Set(['TEXT', 'TEXTAREA']),
   REQUESTER_WORK_UNIT_NAME: new Set(['TEXT', 'TEXTAREA']),
   REQUESTER_POSITION_NAME: new Set(['TEXT', 'TEXTAREA']),
+  REQUESTER_ANNUAL_LEAVE_DAYS: new Set(['NUMBER']),
+  REQUESTER_DIRECT_MANAGER_NAME: new Set(['TEXT', 'TEXTAREA']),
   CURRENT_DATE: new Set(['DATE', 'DATETIME', 'TEXT']),
 };
 
@@ -76,6 +82,35 @@ export class DynamicFormValidatorService {
         if (this.isRecord(plainField.autoFill) && plainField.autoFill.readOnly === true) {
           plainField.required = false;
         }
+        if (typeof plainField.formula === 'string' && plainField.formula.trim()) {
+          plainField.formula = plainField.formula.trim();
+          plainField.required = false;
+          delete plainField.defaultValue;
+          delete plainField.validation;
+        } else if (plainField.formula === '') {
+          delete plainField.formula;
+        }
+        if (
+          plainField.type === 'TABLE' &&
+          this.isRecord(plainField.tableConfig) &&
+          Array.isArray(plainField.tableConfig.columns)
+        ) {
+          plainField.tableConfig = {
+            ...plainField.tableConfig,
+            columns: plainField.tableConfig.columns.map((col) => {
+              if (!this.isRecord(col)) return col;
+              const nextCol = { ...col };
+              if (typeof nextCol.formula === 'string' && nextCol.formula.trim()) {
+                nextCol.formula = nextCol.formula.trim();
+                nextCol.required = false;
+                delete nextCol.validation;
+              } else if (nextCol.formula === '') {
+                delete nextCol.formula;
+              }
+              return nextCol;
+            }),
+          };
+        }
         return [plainField];
       }
       if (seen.has(template.source)) return [];
@@ -129,7 +164,10 @@ export class DynamicFormValidatorService {
     }
   }
 
-  validateDefinition(fields: readonly unknown[]): DefinitionValidationError[] {
+  validateDefinition(
+    fields: readonly unknown[],
+    settings?: unknown,
+  ): DefinitionValidationError[] {
     const errors: DefinitionValidationError[] = [];
     const fieldsByKey = new Map<string, Record<string, unknown>>();
     if (fields.length === 0) {
@@ -211,16 +249,70 @@ export class DynamicFormValidatorService {
       }
     }
     this.validateVisibilityCycles(fieldsByKey, errors);
+    const calcIssues = validateFormCalculationsAndCycles(fields);
+    for (const issue of calcIssues) {
+      errors.push({
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+      });
+    }
+    this.validateSettings(fieldsByKey, settings, errors);
     return errors;
   }
 
-  assertDefinitionValid(fields: readonly unknown[]): void {
-    const errors = this.validateDefinition(fields);
+  assertDefinitionValid(fields: readonly unknown[], settings?: unknown): void {
+    const errors = this.validateDefinition(fields, settings);
     if (!errors.length) return;
     throw new BadRequestException({
       message: errors.map((error) => error.message).join(' '),
       field: errors[0].path,
     });
+  }
+
+  private validateSettings(
+    fieldsByKey: ReadonlyMap<string, Record<string, unknown>>,
+    settings: unknown,
+    errors: DefinitionValidationError[],
+  ): void {
+    if (!this.isRecord(settings) || !this.isRecord(settings.leaveDeduction)) return;
+    const leaveDeduction = settings.leaveDeduction;
+    if (leaveDeduction.enabled !== true) return;
+    const fieldKey = typeof leaveDeduction.fieldKey === 'string'
+      ? leaveDeduction.fieldKey.trim()
+      : '';
+    if (!fieldKey) {
+      errors.push({
+        path: 'settings.leaveDeduction.fieldKey',
+        code: 'LEAVE_DEDUCTION_FIELD_REQUIRED',
+        message: 'Cần chọn trường số ngày nghỉ khi bật trừ ngày phép năm.',
+      });
+      return;
+    }
+    const targetField = fieldsByKey.get(fieldKey);
+    if (!targetField) {
+      errors.push({
+        path: 'settings.leaveDeduction.fieldKey',
+        code: 'LEAVE_DEDUCTION_FIELD_NOT_FOUND',
+        message: `Trường trừ ngày phép ${fieldKey} không tồn tại trong biểu mẫu.`,
+      });
+      return;
+    }
+    if (targetField.type !== 'NUMBER') {
+      errors.push({
+        path: 'settings.leaveDeduction.fieldKey',
+        code: 'LEAVE_DEDUCTION_FIELD_TYPE_INVALID',
+        message: 'Trường trừ ngày phép năm phải có kiểu Số (NUMBER).',
+      });
+      return;
+    }
+    if (this.isRecord(targetField.autoFill)) {
+      errors.push({
+        path: 'settings.leaveDeduction.fieldKey',
+        code: 'LEAVE_DEDUCTION_AUTOFILL_NOT_ALLOWED',
+        message: 'Không thể dùng trường tự động điền làm trường số ngày nghỉ cần trừ.',
+      });
+    }
   }
 
   validateFormData(source: DynamicFormSource, formData: Record<string, unknown>): DynamicFormValidationResult {
@@ -250,13 +342,15 @@ export class DynamicFormValidatorService {
       }
     }
 
+    const effectiveFormData = evaluateFormCalculations(fields, formData);
     const visibility = new Map<string, boolean>();
     for (const field of fields) {
       if (field.type === 'SECTION') continue;
       const key = String(field.key);
-      const visible = this.isFieldVisible(key, fieldsByKey, formData, visibility, new Set());
-      const value = formData[key];
-      if (visible && field.required === true && this.isEmpty(value)) {
+      const visible = this.isFieldVisible(key, fieldsByKey, effectiveFormData, visibility, new Set());
+      const value = effectiveFormData[key];
+      const hasFormula = typeof field.formula === 'string' && field.formula.trim().length > 0;
+      if (visible && field.required === true && !hasFormula && this.isEmpty(value)) {
         errors.push({ fieldKey: key, code: 'REQUIRED', message: `Trường ${this.fieldLabel(field)} là bắt buộc.` });
         continue;
       }
@@ -343,9 +437,13 @@ export class DynamicFormValidatorService {
     }
     if (rules.min !== undefined && (typeof rules.min !== 'number' || !Number.isFinite(rules.min))) {
       errors.push({ path: `${path}.validation.min`, code: 'INVALID_MIN', message: 'min phải là số hữu hạn.' });
+    } else if (typeof rules.min === 'number' && rules.min < 0) {
+      errors.push({ path: `${path}.validation.min`, code: 'INVALID_MIN', message: 'Giá trị tối thiểu không được là số âm.' });
     }
     if (rules.max !== undefined && (typeof rules.max !== 'number' || !Number.isFinite(rules.max))) {
       errors.push({ path: `${path}.validation.max`, code: 'INVALID_MAX', message: 'max phải là số hữu hạn.' });
+    } else if (typeof rules.max === 'number' && rules.max < 0) {
+      errors.push({ path: `${path}.validation.max`, code: 'INVALID_MAX', message: 'Giá trị tối đa không được là số âm.' });
     }
     if (rules.minLength !== undefined && !this.isNonNegativeInteger(rules.minLength)) {
       errors.push({ path: `${path}.validation.minLength`, code: 'INVALID_MIN_LENGTH', message: 'minLength phải là số nguyên không âm.' });
@@ -354,14 +452,14 @@ export class DynamicFormValidatorService {
       errors.push({ path: `${path}.validation.maxLength`, code: 'INVALID_MAX_LENGTH', message: 'maxLength phải là số nguyên không âm.' });
     }
     if (typeof rules.min === 'number' && typeof rules.max === 'number' && rules.min > rules.max) {
-      errors.push({ path: `${path}.validation`, code: 'INVALID_RANGE', message: 'min không được lớn hơn max.' });
+      errors.push({ path: `${path}.validation.max`, code: 'INVALID_RANGE', message: 'Giá trị tối đa phải lớn hơn hoặc bằng giá trị tối thiểu.' });
     }
     if (
       typeof rules.minLength === 'number'
       && typeof rules.maxLength === 'number'
       && rules.minLength > rules.maxLength
     ) {
-      errors.push({ path: `${path}.validation`, code: 'INVALID_LENGTH_RANGE', message: 'minLength không được lớn hơn maxLength.' });
+      errors.push({ path: `${path}.validation.maxLength`, code: 'INVALID_LENGTH_RANGE', message: 'Độ dài tối đa phải lớn hơn hoặc bằng độ dài tối thiểu.' });
     }
     if (rules.pattern !== undefined) {
       if (typeof rules.pattern !== 'string' || !this.isSafePattern(rules.pattern)) {

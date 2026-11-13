@@ -1,4 +1,4 @@
-import type { AuthUser, LoginInput, LoginResponse, RegisterInput } from '../types/auth'
+import type { AuthUser, LoginInput, LoginResponse } from '../types/auth'
 import { apiClient, refreshAccessToken, resetSessionExpiryNotice } from './api-client'
 import type { ApiDataResponse } from './api-client'
 import { broadcastAuthEvent, clearAuthSession, setAuthSession } from './auth-session.store'
@@ -16,13 +16,10 @@ export async function restoreSession(): Promise<AuthUser> {
   return (await refreshAccessToken()).user
 }
 
-export async function register(input: RegisterInput): Promise<AuthUser> {
-  return apiClient<ApiDataResponse<AuthUser>>('/auth/register', { method: 'POST', body: JSON.stringify(input) }).then((response) => response.data)
-}
-
 interface MessageResponse { message: string }
 
 export interface PasswordResetRequestResponse extends MessageResponse {
+  canVerifyOtp: boolean
   retryAfterSeconds: number
   resendLocked: boolean
 }

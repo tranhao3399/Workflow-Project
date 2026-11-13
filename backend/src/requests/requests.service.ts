@@ -15,8 +15,10 @@ import { ApprovalTask } from '../approvals/schemas/approval-task.schema.js';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { Employee } from '../employees/schemas/employee.schema.js';
 import { FilesService } from '../files/files.service.js';
 import { DynamicFormValidatorService } from '../form-definitions/dynamic-form-validator.service.js';
+import { evaluateFormCalculations } from '../form-definitions/form-calculation.helper.js';
 import { FormDefinition } from '../form-definitions/schemas/form-definition.schema.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { WorkflowDefinition } from '../workflow-definitions/schemas/workflow-definition.schema.js';
@@ -27,8 +29,16 @@ import {
   ListRequestsDto,
   UpdateRequestDto,
 } from './dto/request.dto.js';
+import {
+  extractLeaveDaysFromFormData,
+  extractLeaveDeductionConfig,
+  roundLeaveDays,
+} from './leave-deduction.helper.js';
 import { RequestAccessPolicy } from './request-access.policy.js';
-import { RequestActorContextService } from './request-actor-context.service.js';
+import {
+  RequestActorContextService,
+  type RequestActorAutoFillProfile,
+} from './request-actor-context.service.js';
 import {
   applyAutoFillToMigratedFormData,
   buildInitialRequestFormData,
@@ -62,6 +72,7 @@ export class RequestsService {
     @InjectModel(FormDefinition.name) private readonly forms: Model<FormDefinition>,
     @InjectModel(WorkflowDefinition.name) private readonly workflows: Model<WorkflowDefinition>,
     @InjectModel(ApprovalTask.name) private readonly tasks: Model<ApprovalTask>,
+    @InjectModel(Employee.name) private readonly employees: Model<Employee>,
     private readonly dynamicFormValidator: DynamicFormValidatorService,
     private readonly files: FilesService,
     private readonly runtime: WorkflowRuntimeService,
@@ -193,7 +204,9 @@ export class RequestsService {
         const source = await this.requestFileValidationSource(request, session);
         let nextFormData = input.formData;
         if (hasLockedAutoFillFields(source.fields)) {
-          const actor = await this.actorContext.resolve(userId, session);
+          const actor = await this.actorContext.resolve(userId, session, {
+            excludeRequestId: request._id,
+          });
           nextFormData = enforceLockedAutoFillFormData(
             source.fields,
             input.formData,
@@ -358,19 +371,22 @@ export class RequestsService {
       if (request.status !== 'DRAFT') {
         throw new ConflictException({ code: 'REQUEST_NOT_DRAFT', message: 'Chỉ phiếu DRAFT mới có thể gửi.' });
       }
-      const actor = await this.actorContext.resolve(userId, session);
+      const actor = await this.actorContext.resolve(userId, session, {
+        excludeRequestId: request._id,
+      });
       const { form, workflow } = await this.publishedPackage(request, session);
-      if (hasLockedAutoFillFields(form.fields)) {
-        request.formData = enforceLockedAutoFillFormData(
-          form.fields,
-          request.formData,
-          request.formData,
-          actor.autoFillProfile,
-        );
-        request.markModified('formData');
-      }
+      request.formData = hasLockedAutoFillFields(form.fields)
+        ? enforceLockedAutoFillFormData(
+            form.fields,
+            request.formData,
+            request.formData,
+            actor.autoFillProfile,
+          )
+        : evaluateFormCalculations(form.fields, request.formData);
+      request.markModified('formData');
       this.dynamicFormValidator.assertFormDataValid({ fields: form.fields }, request.formData);
       await this.files.assertRequestFileReferencesValid(request._id, request.formData, { fields: form.fields }, session);
+      this.assertLeaveBalanceSufficient(form.settings, request.formData, actor.autoFillProfile);
 
       request.requesterEmployeeId = actor.employeeId;
       request.requesterSnapshot = actor.requesterSnapshot;
@@ -419,6 +435,21 @@ export class RequestsService {
         });
       }
       const formSnapshot = this.snapshots.requireSnapshot(request.formSnapshot, 'Form Snapshot');
+      const fields = Array.isArray(formSnapshot.fields) ? formSnapshot.fields : [];
+      const leaveConfig = extractLeaveDeductionConfig(formSnapshot.settings);
+      const needsActor = hasLockedAutoFillFields(fields) || Boolean(leaveConfig?.enabled);
+      const actor = needsActor
+        ? await this.actorContext.resolve(userId, session, { excludeRequestId: request._id })
+        : undefined;
+      request.formData = actor && hasLockedAutoFillFields(fields)
+        ? enforceLockedAutoFillFormData(
+            fields,
+            request.formData,
+            request.formData,
+            actor.autoFillProfile,
+          )
+        : evaluateFormCalculations(fields, request.formData);
+      request.markModified('formData');
       const result = this.dynamicFormValidator.validateSnapshot(formSnapshot, request.formData);
       if (!result.valid) {
         throw new BadRequestException({
@@ -427,8 +458,10 @@ export class RequestsService {
           field: result.errors[0]?.fieldKey,
         });
       }
-      const fields = Array.isArray(formSnapshot.fields) ? formSnapshot.fields : [];
       await this.files.assertRequestFileReferencesValid(request._id, request.formData, { fields }, session);
+      if (actor) {
+        this.assertLeaveBalanceSufficient(formSnapshot.settings, request.formData, actor.autoFillProfile);
+      }
       const resumeStepKey = request.currentStepKey;
       const nextStepRunNo = (request.currentStepRunNo ?? 0) + 1;
       if (!resumeStepKey) {
@@ -590,6 +623,32 @@ export class RequestsService {
       const notificationRecipients = await this.requestParticipantUserIds(request._id, userId, session);
       notificationRecipients.add(request.requesterUserId.toString());
       await this.cancelPendingTasks(request._id, 'Phiếu đã bị vô hiệu hóa.', session);
+      let leaveRefundedDays: number | undefined;
+      if (request.leaveDeductionApplied && !request.leaveDeductionApplied.refundedAt) {
+        const refundDays = roundLeaveDays(request.leaveDeductionApplied.days);
+        if (refundDays > 0) {
+          const updatedEmployee = await this.employees
+            .findOneAndUpdate(
+              { _id: request.requesterEmployeeId },
+              { $inc: { annualLeaveDays: refundDays } },
+              { session, returnDocument: 'after' },
+            )
+            .select({ annualLeaveDays: 1 })
+            .exec();
+          if (!updatedEmployee) {
+            throw new ConflictException({
+              code: 'EMPLOYEE_NOT_FOUND',
+              message: 'Không tìm thấy hồ sơ nhân viên để hoàn lại ngày phép năm.',
+            });
+          }
+          request.leaveDeductionApplied = {
+            ...request.leaveDeductionApplied,
+            refundedAt: new Date(),
+          };
+          request.markModified('leaveDeductionApplied');
+          leaveRefundedDays = refundDays;
+        }
+      }
       request.status = 'VOIDED';
       request.voidedAt = new Date();
       request.voidedBy = actorUserId;
@@ -604,6 +663,7 @@ export class RequestsService {
         fromStatus,
         toStatus: 'VOIDED',
         comment: reason,
+        ...(leaveRefundedDays !== undefined ? { metadata: { leaveRefundedDays } } : {}),
       }, session);
       await this.notifyRequestParticipants(
         notificationRecipients,
@@ -624,7 +684,10 @@ export class RequestsService {
         session,
         { status: fromStatus, stepKey, stepRunNo },
         { status: request.status },
-        { reason },
+        {
+          reason,
+          ...(leaveRefundedDays !== undefined ? { leaveRefundedDays } : {}),
+        },
       );
     });
     return this.findOne(userId, id, [...permissionKeys, 'REQUESTS.VIEW_ALL']);
@@ -889,6 +952,45 @@ export class RequestsService {
       code: 'CONCURRENT_MODIFICATION',
       message: 'Phiếu đã được thay đổi bởi một thao tác khác. Vui lòng tải lại dữ liệu.',
     });
+  }
+
+  private assertLeaveBalanceSufficient(
+    settings: unknown,
+    formData: Record<string, unknown>,
+    profile: RequestActorAutoFillProfile,
+  ): void {
+    const config = extractLeaveDeductionConfig(settings);
+    if (!config?.enabled) return;
+    const days = extractLeaveDaysFromFormData(formData, config.fieldKey);
+    if (days === undefined) {
+      throw new BadRequestException({
+        code: 'INVALID_LEAVE_DAYS',
+        message: 'Số ngày nghỉ phép không hợp lệ.',
+        field: config.fieldKey,
+      });
+    }
+    if (days < 0) {
+      throw new BadRequestException({
+        code: 'INVALID_LEAVE_DAYS',
+        message: 'Số ngày nghỉ phép không được nhỏ hơn 0.',
+        field: config.fieldKey,
+      });
+    }
+    if (profile.annualLeaveDays === undefined) {
+      throw new ConflictException({
+        code: 'ANNUAL_LEAVE_NOT_CONFIGURED',
+        message: 'Nhân viên chưa được cấu hình số ngày phép năm.',
+      });
+    }
+    if (!config.allowNegative) {
+      const available = profile.availableAnnualLeaveDays ?? 0;
+      if (days > available) {
+        throw new ConflictException({
+          code: 'INSUFFICIENT_ANNUAL_LEAVE',
+          message: `Số ngày phép năm khả dụng không đủ (cần ${days} ngày, còn ${available} ngày khả dụng).`,
+        });
+      }
+    }
   }
 
 }

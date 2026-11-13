@@ -40,6 +40,7 @@ export class ApprovalTask {
   @Prop({ required: true, type: String, enum: approvalTaskStatuses, default: 'PENDING' }) status: ApprovalTaskStatus;
   @Prop({ required: true, default: Date.now }) assignedAt: Date;
   @Prop({ required: false }) dueAt?: Date;
+  @Prop({ required: false }) slaReminderSentAt?: Date;
   @Prop({ required: false }) actedAt?: Date;
   @Prop({ required: false, trim: true, maxlength: 2000 }) decisionComment?: string;
   @Prop({ required: false, trim: true, maxlength: 1000 }) cancelReason?: string;
@@ -59,4 +60,4 @@ ApprovalTaskSchema.pre('validate', function validateTaskState() {
 ApprovalTaskSchema.index({ requestId: 1, stepKey: 1, stepRunNo: 1, assigneeUserId: 1 }, { unique: true });
 ApprovalTaskSchema.index({ assigneeUserId: 1, status: 1, assignedAt: -1 });
 ApprovalTaskSchema.index({ requestId: 1, stepRunNo: 1, status: 1 });
-ApprovalTaskSchema.index({ status: 1, dueAt: 1 });
+ApprovalTaskSchema.index({ status: 1, dueAt: 1, slaReminderSentAt: 1 });

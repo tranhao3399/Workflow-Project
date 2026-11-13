@@ -47,6 +47,16 @@ export class RequesterSnapshot {
 export const RequesterSnapshotSchema =
   SchemaFactory.createForClass(RequesterSnapshot);
 
+@Schema({ _id: false })
+export class LeaveDeductionApplied {
+  @Prop({ required: true, trim: true, maxlength: 80 }) fieldKey: string;
+  @Prop({ required: true, min: 0 }) days: number;
+  @Prop({ required: true }) deductedAt: Date;
+  @Prop({ required: false }) refundedAt?: Date;
+}
+export const LeaveDeductionAppliedSchema =
+  SchemaFactory.createForClass(LeaveDeductionApplied);
+
 export type RequestDocument = HydratedDocument<Request>;
 
 @Schema({
@@ -120,6 +130,8 @@ export class Request {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false })
   voidedBy?: Types.ObjectId;
   @Prop({ required: false, trim: true, maxlength: 1000 }) voidReason?: string;
+  @Prop({ type: LeaveDeductionAppliedSchema, required: false })
+  leaveDeductionApplied?: LeaveDeductionApplied;
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false })
   updatedBy?: Types.ObjectId;
   createdAt: Date;

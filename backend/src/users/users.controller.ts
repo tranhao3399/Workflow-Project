@@ -28,6 +28,8 @@ export class UsersController {
   @ApiQuery({ name: 'search', required: false, description: 'Tìm theo dữ liệu tài khoản.' })
   @ApiQuery({ name: 'role', required: false, enum: ['ADMIN', 'DIRECTOR', 'MANAGER', 'ACCOUNTANT', 'EMPLOYEE'] })
   @ApiQuery({ name: 'isActive', required: false, type: Boolean })
+  @ApiQuery({ name: 'sortBy', required: false, enum: ['createdAt', 'email', 'employeeCode', 'fullName', 'status'] })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'] })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
   @ApiOkResponse({ description: 'Danh sách phân trang theo response runtime { data, pagination }.', type: Object })

@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { CreateEmployeeDto } from './create-employee.dto.js';
 import { UpdateEmployeeDto } from './update-employee.dto.js';
 import { ListEmployeesDto } from './list-employees.dto.js';
+import { Gender } from '../enums/gender.enum.js';
+import { EmploymentType } from '../enums/employment-type.enum.js';
 
 describe('Employee DTO validation', () => {
   it('rejects an invalid work email and manager identifier', async () => {
@@ -53,6 +55,79 @@ describe('Employee DTO validation', () => {
     expect(
       (await validate(invalidDto)).map((error) => error.property),
     ).toContain('dateOfBirth');
+  });
+
+  it('accepts fractional annual leave days and rejects values outside the allowed range', async () => {
+    const validDto = Object.assign(new UpdateEmployeeDto(), {
+      annualLeaveDays: 12.5,
+    });
+    const negativeDto = Object.assign(new UpdateEmployeeDto(), {
+      annualLeaveDays: -0.5,
+    });
+    const excessiveDto = Object.assign(new UpdateEmployeeDto(), {
+      annualLeaveDays: 365.5,
+    });
+
+    expect(await validate(validDto)).toHaveLength(0);
+    expect(
+      (await validate(negativeDto)).map((error) => error.property),
+    ).toContain('annualLeaveDays');
+    expect(
+      (await validate(excessiveDto)).map((error) => error.property),
+    ).toContain('annualLeaveDays');
+  });
+
+  it('permits null when clearing annual leave days from an employee profile', async () => {
+    const dto = Object.assign(new UpdateEmployeeDto(), {
+      annualLeaveDays: null,
+    });
+
+    expect(await validate(dto)).toHaveLength(0);
+  });
+
+  it('accepts a supported gender and a 12-digit citizen identifier', async () => {
+    const dto = Object.assign(new UpdateEmployeeDto(), {
+      gender: Gender.FEMALE,
+      citizenId: '079123456789',
+    });
+
+    expect(await validate(dto)).toHaveLength(0);
+  });
+
+  it('rejects an unsupported gender or malformed citizen identifier', async () => {
+    const dto = Object.assign(new UpdateEmployeeDto(), {
+      gender: 'UNKNOWN',
+      citizenId: '123ABC',
+    });
+
+    expect((await validate(dto)).map((error) => error.property)).toEqual(
+      expect.arrayContaining(['gender', 'citizenId']),
+    );
+  });
+
+  it('permits null when clearing gender and citizen identifier', async () => {
+    const dto = Object.assign(new UpdateEmployeeDto(), {
+      gender: null,
+      citizenId: null,
+    });
+
+    expect(await validate(dto)).toHaveLength(0);
+  });
+
+  it('accepts official, part-time and probation employment types', async () => {
+    const official = Object.assign(new UpdateEmployeeDto(), {
+      employmentType: EmploymentType.OFFICIAL,
+    });
+    const partTime = Object.assign(new UpdateEmployeeDto(), {
+      employmentType: EmploymentType.PART_TIME,
+    });
+    const probation = Object.assign(new UpdateEmployeeDto(), {
+      employmentType: EmploymentType.CONTRACT,
+    });
+
+    expect(await validate(official)).toHaveLength(0);
+    expect(await validate(partTime)).toHaveLength(0);
+    expect(await validate(probation)).toHaveLength(0);
   });
 
   it('accepts the simplified active flag and rejects non-boolean values', async () => {

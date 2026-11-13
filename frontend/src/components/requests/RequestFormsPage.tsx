@@ -9,6 +9,8 @@ import { PageHeader } from '../ui/PageHeader'
 import { SurfaceCard } from '../ui/SurfaceCard'
 
 interface RequestFormsPageProps {
+  initialFormId?: string
+  initialSearch?: string
   onBack: () => void
   onOpenRequest: (id: string, replace?: boolean) => void
   onNotify: (message: string, tone?: 'success' | 'error') => void
@@ -24,9 +26,9 @@ interface RequestFormGroup {
 
 const ungroupedId = 'UNGROUPED'
 
-export function RequestFormsPage({ onBack, onOpenRequest, onNotify }: RequestFormsPageProps) {
+export function RequestFormsPage({ initialFormId, initialSearch, onBack, onOpenRequest, onNotify }: RequestFormsPageProps) {
   const [forms, setForms] = useState<AvailableFormDefinition[]>([])
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(initialSearch ?? '')
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [hasError, setHasError] = useState(false)
@@ -60,9 +62,13 @@ export function RequestFormsPage({ onBack, onOpenRequest, onNotify }: RequestFor
   }, [forms])
 
   const query = normalizeSearchText(search.trim())
-  const searchResults = query ? forms.filter((form) => normalizeSearchText(`${form.code} ${form.name} ${form.description ?? ''} ${form.group?.name ?? ''}`).includes(query)) : []
+  const searchResults = query
+    ? forms.filter((form) => normalizeSearchText(`${form.code} ${form.name} ${form.description ?? ''} ${form.group?.name ?? ''}`).includes(query))
+    : initialFormId
+      ? forms.filter((form) => form.id === initialFormId)
+      : []
   const selectedGroup = groups.find((group) => group.id === selectedGroupId)
-  const visibleForms = query ? searchResults : selectedGroup?.forms ?? []
+  const visibleForms = query || initialFormId ? searchResults : selectedGroup?.forms ?? []
 
   async function create(form: AvailableFormDefinition) {
     if (creatingFormId) return
@@ -91,7 +97,7 @@ export function RequestFormsPage({ onBack, onOpenRequest, onNotify }: RequestFor
           {search && <button className="clear-search-button" type="button" aria-label="Xóa tìm kiếm" onClick={() => setSearch('')}>×</button>}
         </span></label>
       </div>
-      {isLoading ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : forms.length === 0 ? <EmptyState title="Chưa có biểu mẫu khả dụng" description="Hiện chưa có gói Form-Workflow nào đang được phát hành." /> : query || selectedGroup ? (
+      {isLoading ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setHasError(false); setReloadVersion((value) => value + 1) }} /> : forms.length === 0 ? <EmptyState title="Chưa có biểu mẫu khả dụng" description="Hiện chưa có gói Form-Workflow nào đang được phát hành." /> : query || initialFormId || selectedGroup ? (
         visibleForms.length === 0 ? <EmptyState title="Không tìm thấy biểu mẫu" description="Thử lại với từ khóa hoặc nhóm biểu mẫu khác." /> : <div className="request-form-grid">{visibleForms.map((form) => <article className="request-form-card" key={form.id}>
           <div className="request-form-card-heading"><span className="request-form-symbol" aria-hidden="true">{form.icon || form.name.trim().charAt(0).toUpperCase()}</span><div><strong>{form.name}</strong><span>{form.code} · v{form.version}</span></div></div>
           {form.group && <span className="request-form-category">{form.group.name}</span>}
