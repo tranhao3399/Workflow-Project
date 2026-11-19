@@ -66,3 +66,22 @@ export function normalizeSearchText(value: string): string {
     .replace(/Đ/g, 'D')
     .toLocaleLowerCase('vi-VN')
 }
+
+export function formatRequestFormSubtitle(item: {
+  title?: string
+  form?: { code?: string; name?: string; version: number }
+  formVersion?: number
+}): string {
+  if (!item.form) return item.formVersion !== undefined ? `Form v${item.formVersion}` : '—'
+  const formName = item.form.name?.trim() ?? ''
+  const versionMeta = [item.form.code?.trim(), `v${item.form.version}`].filter(Boolean).join(' · ')
+  if (!formName || (item.title && item.title.trim() === formName)) {
+    return versionMeta || `v${item.form.version}`
+  }
+  return versionMeta ? `${formName} (${versionMeta})` : formName
+}
+
+export function toFilterDateIso(value: string, boundary: 'start' | 'end'): string | undefined {
+  if (!value) return undefined
+  return new Date(`${value}${boundary === 'start' ? 'T00:00:00' : 'T23:59:59.999'}`).toISOString()
+}

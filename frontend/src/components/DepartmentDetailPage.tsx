@@ -6,7 +6,6 @@ import {
   type EmployeePagination,
 } from '../services/employees.service';
 import {
-  applyDepartmentJobTitlesFromApi,
   deleteDepartmentFromApi,
   getActivePositionCatalogFromApi,
   getDepartmentAuditLogs,
@@ -14,7 +13,6 @@ import {
   getDepartmentPositionsFromApi,
   getDepartmentsFromApi,
   getOrganizationManagerOptionsFromApi,
-  removeDepartmentPositionsFromApi,
   updateDepartmentFromApi,
   type DepartmentAuditLog,
 } from '../services/master-data.service';
@@ -145,6 +143,7 @@ export function DepartmentDetailPage({
 }: DepartmentDetailPageProps) {
   const [department, setDepartment] = useState<DepartmentPreview | null>(null);
   const [positions, setPositions] = useState<JobTitlePreview[]>([]);
+  const [draftPositions, setDraftPositions] = useState<JobTitlePreview[]>([]);
   const [catalog, setCatalog] = useState<JobTitlePreview[]>([]);
   const [logs, setLogs] = useState<DepartmentAuditLog[]>([]);
   const [visibleLogs, setVisibleLogs] = useState(5);
@@ -210,6 +209,7 @@ export function DepartmentDetailPage({
       getDepartmentAuditLogs(departmentId).catch(() => []),
     ]);
     setPositions(assigned);
+    setDraftPositions(assigned);
     setCatalog(activeCatalog);
     setLogs(auditLogs);
     setVisibleLogs(5);
@@ -295,6 +295,12 @@ export function DepartmentDetailPage({
     setEmployeePage(1);
   }, [departmentId]);
 
+  const displayedPositions = isEditing ? draftPositions : positions;
+  const positionsChanged = useMemo(() => {
+    if (draftPositions.length !== positions.length) return true;
+    const currentIds = new Set(positions.map((item) => item.id));
+    return draftPositions.some((item) => !currentIds.has(item.id));
+  }, [draftPositions, positions]);
   const normalizedDraftCode = draftCode.trim().toUpperCase();
   const isCodeValid = /^[A-Z0-9_]+$/.test(normalizedDraftCode);
   const isParentRequired = isOrganizationParentRequired(draftUnitType);
@@ -306,7 +312,8 @@ export function DepartmentDetailPage({
         draftIsActive !== department.isActive ||
         draftUnitType !== department.unitType ||
         draftParentId !== (department.parentId ?? '') ||
-        draftManagerEmployeeId !== (department.managerEmployeeId ?? '')),
+        draftManagerEmployeeId !== (department.managerEmployeeId ?? '') ||
+        positionsChanged),
   );
 
   useEffect(() => {
@@ -343,9 +350,12 @@ export function DepartmentDetailPage({
       catalog.filter(
         (item) =>
           item.isActive &&
-          !positions.some((assigned) => assigned.code === item.code),
+          !displayedPositions.some(
+            (assigned) =>
+              assigned.id === item.id || assigned.code === item.code,
+          ),
       ),
-    [catalog, positions],
+    [catalog, displayedPositions],
   );
   const filteredAvailablePositions = useMemo(() => {
     const query = normalizeSearchText(jobTitleSearch);
@@ -364,12 +374,16 @@ export function DepartmentDetailPage({
     );
   const selectedPositions = useMemo(
     () =>
-      positions.filter((position) => selectedPositionIds.includes(position.id)),
-    [positions, selectedPositionIds],
+      displayedPositions.filter((position) =>
+        selectedPositionIds.includes(position.id),
+      ),
+    [displayedPositions, selectedPositionIds],
   );
   const allPositionsSelected =
-    positions.length > 0 &&
-    positions.every((position) => selectedPositionIds.includes(position.id));
+    displayedPositions.length > 0 &&
+    displayedPositions.every((position) =>
+      selectedPositionIds.includes(position.id),
+    );
 
   function resetDraftFromDepartment(target: DepartmentPreview) {
     setDraftCode(target.code);
@@ -378,6 +392,11 @@ export function DepartmentDetailPage({
     setDraftUnitType(target.unitType);
     setDraftParentId(target.parentId ?? '');
     setDraftManagerEmployeeId(target.managerEmployeeId ?? '');
+    setDraftPositions(positions);
+    setSelectedPositionIds([]);
+    setSelectedJobTitleIds([]);
+    setIsJobTitleDialogOpen(false);
+    setPendingRemoval(null);
     setCodeError('');
     setNameError('');
     setParentError('');
@@ -452,6 +471,9 @@ export function DepartmentDetailPage({
         unitType: draftUnitType,
         parentId: draftParentId || null,
         managerEmployeeId: draftManagerEmployeeId || null,
+        ...(positionsChanged
+          ? { positionIds: draftPositions.map((item) => item.id) }
+          : {}),
       });
       const parent = allDepartments.find((item) => item.id === draftParentId);
       const manager = managerOptions.find(
@@ -477,10 +499,16 @@ export function DepartmentDetailPage({
       );
       setDraftCode(code);
       setDraftName(name);
+      setSelectedPositionIds([]);
+      setSelectedJobTitleIds([]);
       setIsEditing(false);
       showToast('Đã lưu thay đổi thông tin phòng ban.');
-      setLogs(await getDepartmentAuditLogs(departmentId).catch(() => logs));
-      setVisibleLogs(5);
+      if (positionsChanged) {
+        await refreshAppliedPositions();
+      } else {
+        setLogs(await getDepartmentAuditLogs(departmentId).catch(() => logs));
+        setVisibleLogs(5);
+      }
     } catch (error) {
       let message =
         error instanceof Error
@@ -513,6 +541,8 @@ export function DepartmentDetailPage({
       ]);
       setManagerOptions(managers);
       setAllDepartments(units);
+      setDraftPositions(positions);
+      setSelectedPositionIds([]);
       setHasInvalidParentSelection(false);
       setShowInvalidParentWarning(false);
       setIsEditing(true);
@@ -564,56 +594,40 @@ export function DepartmentDetailPage({
 
   function toggleAllPositions() {
     setSelectedPositionIds(
-      allPositionsSelected ? [] : positions.map((position) => position.id),
+      allPositionsSelected
+        ? []
+        : displayedPositions.map((position) => position.id),
     );
   }
 
-  async function applyJobTitles() {
+  function applyJobTitles() {
     if (selectedJobTitleIds.length === 0) return;
-    setIsSaving(true);
-    try {
-      await applyDepartmentJobTitlesFromApi(departmentId, selectedJobTitleIds);
-      await refreshAppliedPositions();
-      setSelectedJobTitleIds([]);
-      setIsJobTitleDialogOpen(false);
-      window.requestAnimationFrame(() =>
-        showToast('Gán chức danh thành công.'),
-      );
-    } catch (error) {
+    const toAdd = availablePositions.filter((item) =>
+      selectedJobTitleIds.includes(item.id),
+    );
+    if (toAdd.length === 0) return;
+    setDraftPositions((current) => [...current, ...toAdd]);
+    setSelectedJobTitleIds([]);
+    setIsJobTitleDialogOpen(false);
+    window.requestAnimationFrame(() =>
       showToast(
-        error instanceof Error
-          ? error.message
-          : 'Không thể áp dụng chức danh cho phòng ban.',
-        true,
-      );
-    } finally {
-      setIsSaving(false);
-    }
+        'Đã thêm chức danh vào danh sách chỉnh sửa. Bấm "Lưu thay đổi" để lưu.',
+      ),
+    );
   }
 
-  async function removePositions() {
+  function removePositions() {
     if (!pendingRemoval || pendingRemoval.length === 0) return;
     const removalCount = pendingRemoval.length;
-    setIsSaving(true);
-    try {
-      await removeDepartmentPositionsFromApi(
-        departmentId,
-        pendingRemoval.map((position) => position.id),
-      );
-      setPendingRemoval(null);
-      setSelectedPositionIds([]);
-      await refreshAppliedPositions();
-      showToast(`Đã gỡ ${removalCount} chức danh khỏi phòng ban.`);
-    } catch (error) {
-      showToast(
-        error instanceof Error
-          ? error.message
-          : 'Không thể gỡ chức danh khỏi phòng ban.',
-        true,
-      );
-    } finally {
-      setIsSaving(false);
-    }
+    const removalIds = new Set(pendingRemoval.map((position) => position.id));
+    setDraftPositions((current) =>
+      current.filter((position) => !removalIds.has(position.id)),
+    );
+    setPendingRemoval(null);
+    setSelectedPositionIds([]);
+    showToast(
+      `Đã gỡ ${removalCount} chức danh khỏi danh sách chỉnh sửa. Bấm "Lưu thay đổi" để lưu.`,
+    );
   }
 
   async function deleteDepartment() {
@@ -946,7 +960,7 @@ export function DepartmentDetailPage({
         </div>
         {!isPositionsCollapsed && (
         <div id="department-applied-positions">
-        {positions.length === 0 ? (
+        {displayedPositions.length === 0 ? (
           <p className="department-position-empty">
             Chưa có chức danh nào được áp dụng cho phòng ban này.
           </p>
@@ -971,7 +985,7 @@ export function DepartmentDetailPage({
               </tr>
             </thead>
             <tbody>
-              {positions.map((position, index) => (
+              {displayedPositions.map((position, index) => (
                 <tr
                   key={position.id}
                   className={
@@ -1079,14 +1093,10 @@ export function DepartmentDetailPage({
                   departmentEmployees.map((employee) => (
                     <tr key={employee.id}>
                       <td>
-                        <button
-                          className="department-employee-link"
-                          type="button"
-                          onClick={() => onOpenEmployee(employee.id)}
-                        >
+                        <div className="department-employee-person">
                           <DepartmentEmployeeAvatar employee={employee} />
                           <strong>{employee.fullName}</strong>
-                        </button>
+                        </div>
                       </td>
                       <td>
                         <button
@@ -1252,12 +1262,10 @@ export function DepartmentDetailPage({
               <button
                 className="primary-button"
                 type="button"
-                onClick={() => void applyJobTitles()}
+                onClick={applyJobTitles}
                 disabled={selectedJobTitleIds.length === 0 || isSaving}
               >
-                {isSaving
-                  ? 'Đang áp dụng...'
-                  : `Áp dụng${selectedJobTitleIds.length ? ` (${selectedJobTitleIds.length})` : ''}`}
+                {`Áp dụng${selectedJobTitleIds.length ? ` (${selectedJobTitleIds.length})` : ''}`}
               </button>
             </footer>
           </section>
@@ -1361,12 +1369,12 @@ export function DepartmentDetailPage({
       {pendingRemoval && (
         <ConfirmDialog
           title="Gỡ chức danh"
-          description={`Bạn có chắc chắn muốn gỡ ${pendingRemoval.length} chức danh đã chọn?`}
+          description={`Bạn có chắc chắn muốn gỡ ${pendingRemoval.length} chức danh đã chọn khỏi danh sách chỉnh sửa?`}
           confirmLabel="Gỡ"
           tone="danger"
           onCancel={() => setPendingRemoval(null)}
-          onConfirm={() => void removePositions()}
-          isConfirming={isSaving}
+          onConfirm={removePositions}
+          isConfirming={false}
           compact
         />
       )}

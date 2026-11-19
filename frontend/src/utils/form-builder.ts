@@ -562,12 +562,14 @@ export function validateFormBuilderDefinition(
   name: string,
   fields: readonly FormField[],
   settings?: FormSettings,
+  groupId = '',
 ): FormBuilderIssue[] {
   const issues: FormBuilderIssue[] = []
   const normalizedCode = code.trim().toUpperCase()
   if (!normalizedCode) issues.push({ path: 'code', message: 'Mã biểu mẫu là bắt buộc.' })
   else if (!formCodePattern.test(normalizedCode)) issues.push({ path: 'code', message: 'Mã chỉ gồm chữ in hoa, số và dấu gạch dưới.' })
   if (!name.trim()) issues.push({ path: 'name', message: 'Tên biểu mẫu là bắt buộc.' })
+  if (!groupId.trim()) issues.push({ path: 'groupId', message: 'Vui lòng chọn nhóm biểu mẫu.' })
   if (!fields.length) issues.push({ path: 'fields', message: 'Biểu mẫu cần có ít nhất một trường.' })
 
   const keyIndexes = new Map<string, number[]>()

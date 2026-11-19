@@ -2,8 +2,10 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { definitionStatuses, type DefinitionStatus } from '../../form-definitions/schemas/form-definition.schema.js';
 
-export const workflowStepTypes = ['APPROVAL', 'CONDITION', 'END'] as const;
+export const workflowStepTypes = ['APPROVAL', 'CONDITION', 'ACTION', 'END'] as const;
 export type WorkflowStepType = (typeof workflowStepTypes)[number];
+export const workflowActionTypes = ['BALANCE_DEDUCT', 'BALANCE_ADD', 'SEND_NOTIFICATION'] as const;
+export type WorkflowActionType = (typeof workflowActionTypes)[number];
 export const workflowEndResults = ['APPROVED', 'REJECTED'] as const;
 export type WorkflowEndResult = (typeof workflowEndResults)[number];
 export const approvalModes = ['ANY', 'ALL', 'MAJORITY'] as const;
@@ -23,7 +25,7 @@ export const assigneeRuleTypes = [
   'SPECIFIC_USER',
 ] as const;
 export type AssigneeRuleType = (typeof assigneeRuleTypes)[number];
-export const workflowConditionSources = ['FORM_FIELD', 'REQUESTER_ATTRIBUTE'] as const;
+export const workflowConditionSources = ['FORM_FIELD', 'REQUESTER_ATTRIBUTE', 'APPROVAL_OUTCOME'] as const;
 export type WorkflowConditionSource = (typeof workflowConditionSources)[number];
 export const workflowConditionOperators = ['EQUALS', 'NOT_EQUALS', 'IN', 'GREATER_THAN', 'LESS_THAN'] as const;
 export type WorkflowConditionOperator = (typeof workflowConditionOperators)[number];
@@ -59,6 +61,17 @@ export class WorkflowCondition {
 export const WorkflowConditionSchema = SchemaFactory.createForClass(WorkflowCondition);
 
 @Schema({ _id: false })
+export class WorkflowActionConfig {
+  @Prop({ required: true, type: String, enum: workflowActionTypes }) actionType: WorkflowActionType;
+  @Prop({ required: false, trim: true, maxlength: 80 }) fieldKey?: string;
+  @Prop({ required: false, default: false }) allowNegative?: boolean;
+  @Prop({ type: WorkflowAssigneeRuleSchema, required: false }) assigneeRule?: WorkflowAssigneeRule;
+  @Prop({ required: false, trim: true, maxlength: 160 }) notificationTitle?: string;
+  @Prop({ required: false, trim: true, maxlength: 500 }) notificationMessage?: string;
+}
+export const WorkflowActionConfigSchema = SchemaFactory.createForClass(WorkflowActionConfig);
+
+@Schema({ _id: false })
 export class WorkflowStep {
   @Prop({ required: true, trim: true, uppercase: true, maxlength: 80, match: /^[A-Z][A-Z0-9_]*$/ }) stepKey: string;
   @Prop({ required: true, trim: true, maxlength: 160 }) name: string;
@@ -75,8 +88,22 @@ export class WorkflowStep {
     },
   })
   allowSelfApproval?: boolean;
+  @Prop({
+    required: false,
+    default: function (this: { type?: WorkflowStepType }) {
+      return this.type === 'APPROVAL' ? true : undefined;
+    },
+  })
+  allowReassign?: boolean;
   @Prop({ required: false, min: 1 }) dueInHours?: number;
   @Prop({ type: WorkflowConditionSchema, required: false }) condition?: WorkflowCondition;
+  @Prop({
+    type: WorkflowActionConfigSchema,
+    required: function (this: { type?: WorkflowStepType }) {
+      return this.type === 'ACTION';
+    },
+  })
+  actionConfig?: WorkflowActionConfig;
   @Prop({
     type: String,
     enum: workflowEndResults,
@@ -90,6 +117,7 @@ export class WorkflowStep {
   @Prop({ required: false, trim: true, uppercase: true, maxlength: 80 }) onRevisionStepKey?: string;
   @Prop({ required: false, trim: true, uppercase: true, maxlength: 80 }) onTrueStepKey?: string;
   @Prop({ required: false, trim: true, uppercase: true, maxlength: 80 }) onFalseStepKey?: string;
+  @Prop({ required: false, trim: true, uppercase: true, maxlength: 80 }) onNextStepKey?: string;
 }
 export const WorkflowStepSchema = SchemaFactory.createForClass(WorkflowStep);
 
@@ -115,13 +143,20 @@ export class WorkflowDefinition {
   updatedAt: Date;
 }
 
-function transitions(step: WorkflowStep): string[] {
+function forwardTransitions(step: WorkflowStep): string[] {
   return [
     step.onApproveStepKey,
     step.onRejectStepKey,
-    step.onRevisionStepKey,
     step.onTrueStepKey,
     step.onFalseStepKey,
+    step.onNextStepKey,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function transitions(step: WorkflowStep): string[] {
+  return [
+    ...forwardTransitions(step),
+    step.onRevisionStepKey,
   ].filter((value): value is string => Boolean(value));
 }
 
@@ -136,6 +171,12 @@ WorkflowDefinitionSchema.pre('validate', function validateWorkflow() {
     stepsByKey.set(step.stepKey, step);
     if (step.type !== 'APPROVAL' && step.allowSelfApproval !== undefined) {
       this.invalidate(`steps.${index}.allowSelfApproval`, 'allowSelfApproval is only allowed for APPROVAL steps');
+    }
+    if (step.type !== 'APPROVAL' && step.allowReassign !== undefined) {
+      this.invalidate(`steps.${index}.allowReassign`, 'allowReassign is only allowed for APPROVAL steps');
+    }
+    if (step.type !== 'ACTION' && step.actionConfig !== undefined) {
+      this.invalidate(`steps.${index}.actionConfig`, 'actionConfig is only allowed for ACTION steps');
     }
     if (step.type !== 'END' && step.endResult !== undefined) {
       this.invalidate(`steps.${index}.endResult`, 'endResult is only allowed for END steps');
@@ -162,6 +203,10 @@ WorkflowDefinitionSchema.pre('validate', function validateWorkflow() {
       }
     }
     if (step.type === 'CONDITION' && !step.condition) this.invalidate(`steps.${index}.condition`, 'CONDITION requires condition');
+    if (step.type === 'ACTION') {
+      if (!step.actionConfig) this.invalidate(`steps.${index}.actionConfig`, 'ACTION requires actionConfig');
+      if (!step.onNextStepKey) this.invalidate(`steps.${index}.onNextStepKey`, 'ACTION requires onNextStepKey');
+    }
   }
   if (!stepsByKey.has(this.startStepKey)) this.invalidate('startStepKey', 'startStepKey must reference an existing step');
   for (const [index, step] of this.steps.entries()) {
@@ -170,10 +215,20 @@ WorkflowDefinitionSchema.pre('validate', function validateWorkflow() {
     }
   }
 
+  const reachable = new Set<string>();
+  const collectReachable = (stepKey: string) => {
+    if (reachable.has(stepKey) || !stepsByKey.has(stepKey)) return;
+    reachable.add(stepKey);
+    const step = stepsByKey.get(stepKey)!;
+    for (const target of transitions(step)) collectReachable(target);
+  };
+  collectReachable(this.startStepKey);
+  if (reachable.size !== stepsByKey.size) this.invalidate('steps', 'Workflow contains orphan steps');
+
   const visited = new Set<string>();
   const visiting = new Set<string>();
   let reachesEnd = false;
-  const visit = (stepKey: string) => {
+  const visitForward = (stepKey: string) => {
     if (visiting.has(stepKey)) {
       this.invalidate('steps', `Workflow contains a cycle at step: ${stepKey}`);
       return;
@@ -183,12 +238,11 @@ WorkflowDefinitionSchema.pre('validate', function validateWorkflow() {
     if (!step) return;
     visiting.add(stepKey);
     if (step.type === 'END') reachesEnd = true;
-    for (const target of transitions(step)) visit(target);
+    for (const target of forwardTransitions(step)) visitForward(target);
     visiting.delete(stepKey);
     visited.add(stepKey);
   };
-  visit(this.startStepKey);
-  if (visited.size !== stepsByKey.size) this.invalidate('steps', 'Workflow contains orphan steps');
+  for (const key of reachable) visitForward(key);
   if (!reachesEnd) this.invalidate('steps', 'Workflow must contain a reachable END step');
   if (!this.publishedBy) this.invalidate('publishedBy', 'publishedBy is required for a published workflow');
   if (!this.publishedAt) this.invalidate('publishedAt', 'publishedAt is required for a published workflow');

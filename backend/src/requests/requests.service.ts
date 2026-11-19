@@ -111,6 +111,77 @@ export class RequestsService {
     return this.queryService.history(userId, id, permissionKeys);
   }
 
+  async addComment(
+    context: RequestWithContext,
+    userId: string,
+    id: string,
+    comment: string,
+    permissionKeys: readonly string[] = [],
+  ) {
+    return this.inTransaction(async (session) => {
+      const request = await this.requests.findById(id).session(session).exec();
+      if (!request) throw this.accessPolicy.notFound();
+      await this.accessPolicy.requireReadAccess(request as StoredRequest, userId, permissionKeys);
+
+      const actorUserId = new Types.ObjectId(userId);
+      let actorSnapshot: { fullName?: string; employeeCode?: string; departmentName?: string; positionName?: string };
+      try {
+        const actor = await this.actorContext.resolve(userId, session);
+        actorSnapshot = {
+          fullName: actor.requesterSnapshot.fullName,
+          employeeCode: actor.requesterSnapshot.employeeCode,
+          departmentName: actor.requesterSnapshot.departmentName,
+          positionName: actor.requesterSnapshot.positionName,
+        };
+      } catch {
+        actorSnapshot = {
+          fullName: context.user?.fullName || context.user?.email || 'Người dùng',
+          ...(context.user?.department ? { departmentName: context.user.department } : {}),
+        };
+      }
+
+      const historyEntry = await this.workflowHistory.record(request, {
+        stepKey: request.currentStepKey,
+        stepRunNo: request.currentStepRunNo,
+        actorUserId,
+        actorSnapshot,
+        action: 'COMMENTED',
+        comment,
+      }, session);
+
+      if (request.status !== 'DRAFT') {
+        const recipients = await this.requestParticipantUserIds(request._id, userId, session);
+        if (request.requesterUserId.toString() !== userId) {
+          recipients.add(request.requesterUserId.toString());
+        }
+        await this.notifyRequestParticipants(
+          recipients,
+          request,
+          'COMMENT',
+          historyEntry.sequenceNo,
+          'COMMENTED',
+          'Có bình luận mới trên phiếu',
+          `${actorSnapshot.fullName || 'Một người dùng'} đã bình luận trên phiếu ${request.requestNo}.`,
+          userId,
+          session,
+        );
+      }
+
+      await this.recordRequestAudit(
+        context,
+        request,
+        'REQUEST.COMMENTED',
+        'Đã bình luận trên phiếu yêu cầu.',
+        session,
+        undefined,
+        undefined,
+        { sequenceNo: historyEntry.sequenceNo, commentLength: comment.length },
+      );
+
+      return historyEntry.toObject();
+    });
+  }
+
   async create(
     context: RequestWithContext,
     userId: string,
@@ -462,6 +533,45 @@ export class RequestsService {
       if (actor) {
         this.assertLeaveBalanceSufficient(formSnapshot.settings, request.formData, actor.autoFillProfile);
       }
+      if (request.leaveDeductionApplied && !request.leaveDeductionApplied.refundedAt) {
+        const nextDays = extractLeaveDaysFromFormData(
+          request.formData,
+          request.leaveDeductionApplied.fieldKey,
+        );
+        if (nextDays === undefined || nextDays < 0) {
+          throw new BadRequestException({
+            code: 'INVALID_LEAVE_DAYS',
+            message: 'Số ngày nghỉ phép không hợp lệ.',
+            field: request.leaveDeductionApplied.fieldKey,
+          });
+        }
+        const delta = roundLeaveDays(nextDays - request.leaveDeductionApplied.days);
+        if (delta !== 0) {
+          const updatedEmployee = await this.employees
+            .findOneAndUpdate(
+              {
+                _id: request.requesterEmployeeId,
+                ...(delta > 0 ? { annualLeaveDays: { $gte: delta } } : {}),
+              },
+              { $inc: { annualLeaveDays: -delta } },
+              { session, returnDocument: 'after' },
+            )
+            .select({ annualLeaveDays: 1 })
+            .exec();
+          if (!updatedEmployee) {
+            throw new ConflictException({
+              code: 'INSUFFICIENT_ANNUAL_LEAVE',
+              message: 'Số ngày phép năm còn lại không đủ cho phần điều chỉnh tăng thêm.',
+            });
+          }
+          request.leaveDeductionApplied = {
+            ...request.leaveDeductionApplied,
+            days: nextDays,
+            deductedAt: new Date(),
+          };
+          request.markModified('leaveDeductionApplied');
+        }
+      }
       const resumeStepKey = request.currentStepKey;
       const nextStepRunNo = (request.currentStepRunNo ?? 0) + 1;
       if (!resumeStepKey) {
@@ -559,6 +669,24 @@ export class RequestsService {
       const notificationRecipients = await this.requestParticipantUserIds(request._id, userId, session);
       notificationRecipients.add(request.requesterUserId.toString());
       await this.cancelPendingTasks(request._id, 'Phiếu đã bị người tạo hủy.', session);
+      if (request.leaveDeductionApplied && !request.leaveDeductionApplied.refundedAt) {
+        const refundDays = roundLeaveDays(request.leaveDeductionApplied.days);
+        if (refundDays > 0) {
+          await this.employees
+            .findOneAndUpdate(
+              { _id: request.requesterEmployeeId },
+              { $inc: { annualLeaveDays: refundDays } },
+              { session, returnDocument: 'after' },
+            )
+            .select({ annualLeaveDays: 1 })
+            .exec();
+          request.leaveDeductionApplied = {
+            ...request.leaveDeductionApplied,
+            refundedAt: new Date(),
+          };
+          request.markModified('leaveDeductionApplied');
+        }
+      }
       request.status = 'CANCELLED';
       request.cancelledAt = new Date();
       request.cancelledBy = new Types.ObjectId(userId);
@@ -845,7 +973,7 @@ export class RequestsService {
     request: RequestDocument,
     stepKey: string,
     stepRunNo: number,
-    action: 'CANCELLED' | 'VOIDED',
+    action: 'CANCELLED' | 'VOIDED' | 'COMMENTED',
     title: string,
     message: string,
     actorUserId: string,

@@ -37,6 +37,7 @@ import {
 import {
   CreateRequestDto,
   ListRequestsDto,
+  RequestCommentDto,
   RequestIdParamDto,
   RequestReasonDto,
   RequestResponseDto,
@@ -102,6 +103,29 @@ export class RequestsController {
     return dataResponse(await this.service.history(
       this.userId(request),
       params.id,
+      request.effectivePermissionKeys ?? [],
+    ));
+  }
+
+  @Post(':id/comments')
+  @HttpCode(201)
+  @RequirePermissions({ any: ['REQUESTS.VIEW_OWN', 'APPROVALS.VIEW_ASSIGNED', 'REQUESTS.VIEW_SCOPE', 'REQUESTS.VIEW_ALL'] })
+  @ApiOperation({ summary: 'Thêm bình luận vào phiếu yêu cầu' })
+  @ApiParam({ name: 'id', description: 'MongoDB ObjectId của phiếu.' })
+  @ApiBody({ type: RequestCommentDto })
+  @ApiCreatedResponse({ type: ApiDataResponseDto })
+  @ApiResourceNotFound()
+  @ApiValidationError()
+  async addComment(
+    @Req() request: RequestWithContext,
+    @Param() params: RequestIdParamDto,
+    @Body() input: RequestCommentDto,
+  ) {
+    return dataResponse(await this.service.addComment(
+      request,
+      this.userId(request),
+      params.id,
+      input.comment,
       request.effectivePermissionKeys ?? [],
     ));
   }

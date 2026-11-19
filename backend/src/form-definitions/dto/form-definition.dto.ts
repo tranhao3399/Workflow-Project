@@ -307,9 +307,9 @@ export class CreateFormDefinitionDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
   name: string;
 
-  @ApiPropertyOptional({ description: 'Nhóm biểu mẫu được gán.' })
-  @IsOptional() @IsMongoId()
-  groupId?: string;
+  @ApiProperty({ description: 'Nhóm biểu mẫu được gán.' })
+  @IsMongoId({ message: 'Vui lòng chọn nhóm biểu mẫu hợp lệ.' })
+  groupId: string;
 
   @ApiPropertyOptional({ enum: formCategories, example: 'HR' })
   @IsOptional()
@@ -341,11 +341,10 @@ export class UpdateFormDefinitionDto {
   @IsOptional() @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160)
   name?: string;
 
-  @ApiPropertyOptional({ description: 'Nhóm biểu mẫu được gán; null để bỏ gán.', nullable: true })
-  @Transform(({ value }) => (value === '' ? null : value))
-  @ValidateIf((_, value) => value !== undefined && value !== null)
-  @IsMongoId()
-  groupId?: string | null;
+  @ApiPropertyOptional({ description: 'Nhóm biểu mẫu được gán.' })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsMongoId({ message: 'Vui lòng chọn nhóm biểu mẫu hợp lệ.' })
+  groupId?: string;
 
   @ApiPropertyOptional({ enum: formCategories, nullable: true, example: 'HR' })
   @Transform(({ value }) => (value === '' ? null : value))
@@ -367,10 +366,9 @@ export class UpdateFormDefinitionDto {
 }
 
 export class UpdateFormDefinitionGroupDto {
-  @ApiPropertyOptional({ description: 'Nhóm mới; null để chuyển về Chưa phân nhóm.', nullable: true })
-  @ValidateIf((_, value) => value !== null)
-  @IsMongoId()
-  groupId: string | null;
+  @ApiProperty({ description: 'Nhóm biểu mẫu được gán.' })
+  @IsMongoId({ message: 'Vui lòng chọn nhóm biểu mẫu hợp lệ.' })
+  groupId: string;
 }
 
 export class CloneFormDefinitionDto {

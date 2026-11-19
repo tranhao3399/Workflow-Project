@@ -6,6 +6,7 @@ export const approvalHistoryActions = [
   'SUBMITTED',
   'ASSIGNED',
   'CONDITION_EVALUATED',
+  'ACTION_EXECUTED',
   'APPROVED',
   'REJECTED',
   'REVISION_REQUESTED',
@@ -15,6 +16,7 @@ export const approvalHistoryActions = [
   'VOIDED',
   'AUTO_SKIPPED',
   'COMPLETED',
+  'COMMENTED',
 ] as const;
 export type ApprovalHistoryAction = (typeof approvalHistoryActions)[number];
 

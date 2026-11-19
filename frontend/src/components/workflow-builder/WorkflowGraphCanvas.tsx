@@ -97,12 +97,14 @@ const supportedTypes = new Set([
   'bpmn:Process',
   'bpmn:StartEvent',
   'bpmn:UserTask',
+  'bpmn:ServiceTask',
   'bpmn:ExclusiveGateway',
   'bpmn:EndEvent',
   'bpmn:SequenceFlow',
 ])
 
 const errorMarker = 'workflow-bpmn-error'
+const flowLabelMarker = 'workflow-flow-label'
 
 export interface WorkflowGraphCanvasHandle {
   exportXml: () => Promise<string>
@@ -184,6 +186,12 @@ export const WorkflowGraphCanvas = forwardRef<WorkflowGraphCanvasHandle, Workflo
       callbacksRef.current.onSelectionChange(readSelection(target))
     }
 
+    editor.on<EventWithElements>('shape.added', (event) => {
+      if (event.element?.type === 'label' && event.element.labelTarget?.type === 'bpmn:SequenceFlow') {
+        editor.get<CanvasService>('canvas').addMarker(event.element, flowLabelMarker)
+      }
+    })
+
     if (editable) {
       editor.on<EventWithElements>('selection.changed', (event) => select(event.newSelection?.[0]))
       editor.on('commandStack.changed', () => {
@@ -197,7 +205,7 @@ export const WorkflowGraphCanvas = forwardRef<WorkflowGraphCanvasHandle, Workflo
       editor.on<EventWithElements>('element.click', (event) => select(event.element))
     }
 
-    void editor.importXML(xml).then(() => {
+    void editor.importXML(stripExclusiveGatewayDefault(xml)).then(() => {
       if (disposed) return
       const unsupported = unsupportedElements(editor)
       if (unsupported.length) callbacksRef.current.onError(`Sơ đồ chứa phần tử backend không hỗ trợ: ${unsupported.join(', ')}.`)
@@ -234,7 +242,7 @@ export const WorkflowGraphCanvas = forwardRef<WorkflowGraphCanvasHandle, Workflo
   return <div className="workflow-bpmn-shell">
     {isLoading && <div className="workflow-bpmn-loading">Đang mở sơ đồ BPMN...</div>}
     <div ref={containerRef} className={`workflow-bpmn-canvas${editable ? '' : ' is-readonly'}`} aria-label={editable ? 'Trình thiết kế quy trình BPMN' : 'Sơ đồ quy trình BPMN'} />
-    <div className="workflow-bpmn-legend" aria-hidden="true"><span><i className="legend-start" />Bắt đầu</span><span><i className="legend-task" />Phê duyệt</span><span><i className="legend-condition" />Điều kiện</span><span><i className="legend-end" />Kết thúc</span></div>
+    <div className="workflow-bpmn-legend" aria-hidden="true"><span><i className="legend-start" />Bắt đầu</span><span><i className="legend-task" />Phê duyệt</span><span><i className="legend-action" />Tự động</span><span><i className="legend-condition" />Điều kiện</span><span><i className="legend-end" />Kết thúc</span></div>
   </div>
 })
 
@@ -271,6 +279,7 @@ class RestrictedPaletteProvider {
     return {
       'create.start-event': createEntry('bpmn:StartEvent', 'bpmn-icon-start-event-none', 'Tạo điểm bắt đầu'),
       'create.user-task': createEntry('bpmn:UserTask', 'bpmn-icon-user-task', 'Tạo bước phê duyệt'),
+      'create.service-task': createEntry('bpmn:ServiceTask', 'bpmn-icon-service', 'Tạo bước hành động tự động'),
       'create.exclusive-gateway': createEntry('bpmn:ExclusiveGateway', 'bpmn-icon-gateway-xor', 'Tạo điều kiện'),
       'create.end-event': createEntry('bpmn:EndEvent', 'bpmn-icon-end-event-none', 'Tạo điểm kết thúc'),
     }
@@ -324,30 +333,54 @@ function initializeBusinessObject(businessObject: BpmnBusinessObject, type: stri
     businessObject.name = 'Bắt đầu'
     return
   }
-  const prefix = type === 'bpmn:UserTask' ? 'APPROVAL' : type === 'bpmn:ExclusiveGateway' ? 'CONDITION' : 'END'
+  const prefix = type === 'bpmn:UserTask'
+    ? 'APPROVAL'
+    : type === 'bpmn:ServiceTask'
+      ? 'ACTION'
+      : type === 'bpmn:ExclusiveGateway'
+        ? 'CONDITION'
+        : 'END'
   const stepKey = nextStepKey(prefix, registry)
-  businessObject.name = type === 'bpmn:UserTask' ? 'Bước phê duyệt' : type === 'bpmn:ExclusiveGateway' ? 'Điều kiện' : 'Kết thúc'
+  businessObject.name = type === 'bpmn:UserTask'
+    ? 'Bước phê duyệt'
+    : type === 'bpmn:ServiceTask'
+      ? 'Hành động tự động'
+      : type === 'bpmn:ExclusiveGateway'
+        ? 'Điều kiện'
+        : 'Kết thúc'
   const metadata = type === 'bpmn:UserTask'
     ? moddle.create<BpmnMetadata>('wf:Approval', {
         stepKey,
         approvalMode: 'ANY',
         allowSelfApproval: false,
+        allowReassign: true,
         assigneeRuleType: 'REQUESTER_DIRECT_MANAGER',
         includeInactive: false,
-        approveFlow: '',
-        rejectFlow: '',
+        nextFlow: '',
       })
-    : type === 'bpmn:ExclusiveGateway'
-      ? moddle.create<BpmnMetadata>('wf:Condition', {
+    : type === 'bpmn:ServiceTask'
+      ? moddle.create<BpmnMetadata>('wf:Action', {
           stepKey,
-          source: 'FORM_FIELD',
+          actionType: 'BALANCE_DEDUCT',
           fieldKey: '',
-          operator: 'EQUALS',
-          valueJson: '""',
-          trueFlow: '',
-          falseFlow: '',
+          allowNegative: false,
+          assigneeRuleType: 'REQUESTER_DIRECT_MANAGER',
+          includeInactive: false,
+          notificationTitle: '',
+          notificationMessage: '',
+          nextFlow: '',
         })
-      : moddle.create<BpmnMetadata>('wf:End', { stepKey, endResult: 'APPROVED' })
+      : type === 'bpmn:ExclusiveGateway'
+        ? moddle.create<BpmnMetadata>('wf:Condition', {
+            stepKey,
+            source: 'FORM_FIELD',
+            fieldKey: '',
+            operator: 'EQUALS',
+            valueJson: '""',
+            trueFlow: '',
+            falseFlow: '',
+          })
+        : moddle.create<BpmnMetadata>('wf:End', { stepKey, endResult: 'APPROVED' })
   businessObject.extensionElements = moddle.create('bpmn:ExtensionElements', { values: [metadata] })
 }
 
@@ -356,6 +389,10 @@ function nextStepKey(prefix: string, registry: ElementRegistryService): string {
   let index = 1
   while (used.has(`${prefix}_${index}`)) index += 1
   return `${prefix}_${index}`
+}
+
+function stripExclusiveGatewayDefault(xml: string): string {
+  return xml.replace(/(<bpmn:exclusiveGateway\b[^>]*?)\s+default="[^"]*"/g, '$1')
 }
 
 function unsupportedElements(editor: BpmnEditor): string[] {
@@ -388,6 +425,7 @@ function updateSelectedElement(editor: BpmnEditor | null, selectedId: string | n
     if (patch.stepKey !== undefined) attributes.stepKey = patch.stepKey.toUpperCase()
     if (patch.approvalMode !== undefined) attributes.approvalMode = patch.approvalMode
     if (patch.allowSelfApproval !== undefined) attributes.allowSelfApproval = patch.allowSelfApproval
+    if (patch.allowReassign !== undefined) attributes.allowReassign = patch.allowReassign
     if ('dueInHours' in patch) attributes.dueInHours = patch.dueInHours ? String(patch.dueInHours) : undefined
     if (patch.approveFlow !== undefined) attributes.approveFlow = patch.approveFlow
     if (patch.rejectFlow !== undefined) attributes.rejectFlow = patch.rejectFlow
@@ -398,6 +436,13 @@ function updateSelectedElement(editor: BpmnEditor | null, selectedId: string | n
     if (patch.conditionValue !== undefined) attributes.valueJson = JSON.stringify(patch.conditionValue)
     if (patch.trueFlow !== undefined) attributes.trueFlow = patch.trueFlow
     if (patch.falseFlow !== undefined) attributes.falseFlow = patch.falseFlow
+    if (patch.actionType !== undefined) attributes.actionType = patch.actionType
+    if (patch.actionFieldKey !== undefined) attributes.fieldKey = patch.actionFieldKey || undefined
+    if (patch.actionAllowNegative !== undefined) attributes.allowNegative = patch.actionAllowNegative
+    if (patch.actionAssigneeRule !== undefined) Object.assign(attributes, assigneeAttributes(patch.actionAssigneeRule))
+    if (patch.actionNotificationTitle !== undefined) attributes.notificationTitle = patch.actionNotificationTitle || undefined
+    if (patch.actionNotificationMessage !== undefined) attributes.notificationMessage = patch.actionNotificationMessage || undefined
+    if (patch.nextFlow !== undefined) attributes.nextFlow = patch.nextFlow
     if (patch.endResult !== undefined) attributes.endResult = patch.endResult
     if (patch.assigneeRule !== undefined) Object.assign(attributes, assigneeAttributes(patch.assigneeRule))
     if (Object.keys(attributes).length) modeling.updateModdleProperties(element, metadata, attributes)
@@ -434,6 +479,7 @@ function readSelection(element: DiagramElement): BpmnNodeSelection | null {
     outgoingFlows,
     approvalMode: oneOf(textAttribute(metadata, 'approvalMode'), ['ANY', 'ALL', 'MAJORITY'], 'ANY'),
     allowSelfApproval: booleanAttribute(metadata, 'allowSelfApproval'),
+    allowReassign: booleanAttributeWithDefault(metadata, 'allowReassign', true),
     assigneeRule: {
       type: oneOf(textAttribute(metadata, 'assigneeRuleType'), [
         'REQUESTER_DIRECT_MANAGER',
@@ -458,12 +504,38 @@ function readSelection(element: DiagramElement): BpmnNodeSelection | null {
     approveFlow: textAttribute(metadata, 'approveFlow'),
     rejectFlow: textAttribute(metadata, 'rejectFlow'),
     revisionFlow: textAttribute(metadata, 'revisionFlow'),
-    conditionSource: oneOf(textAttribute(metadata, 'source'), ['FORM_FIELD', 'REQUESTER_ATTRIBUTE'], 'FORM_FIELD'),
+    conditionSource: oneOf(textAttribute(metadata, 'source'), ['FORM_FIELD', 'REQUESTER_ATTRIBUTE', 'APPROVAL_OUTCOME'], 'FORM_FIELD'),
     conditionFieldKey: textAttribute(metadata, 'fieldKey'),
     conditionOperator: oneOf(textAttribute(metadata, 'operator'), ['EQUALS', 'NOT_EQUALS', 'IN', 'GREATER_THAN', 'LESS_THAN'], 'EQUALS'),
     conditionValue: jsonAttribute(metadata, 'valueJson'),
     trueFlow: textAttribute(metadata, 'trueFlow'),
     falseFlow: textAttribute(metadata, 'falseFlow'),
+    actionType: oneOf(textAttribute(metadata, 'actionType'), ['BALANCE_DEDUCT', 'BALANCE_ADD', 'SEND_NOTIFICATION'], 'BALANCE_DEDUCT'),
+    actionFieldKey: textAttribute(metadata, 'fieldKey'),
+    actionAllowNegative: booleanAttribute(metadata, 'allowNegative'),
+    actionAssigneeRule: {
+      type: oneOf(textAttribute(metadata, 'assigneeRuleType'), [
+        'REQUESTER_DIRECT_MANAGER',
+        'REQUESTER_WORK_UNIT_MANAGER',
+        'REQUESTER_FUNCTIONAL_DEPARTMENT_MANAGER',
+        'REQUESTER_PARENT_WORK_UNIT_MANAGER',
+        'REQUESTER_DEPARTMENT_MANAGER',
+        'REQUESTER_PARENT_DEPARTMENT_MANAGER',
+        'COMPANY_MANAGER',
+        'ROLE',
+        'ROLE_IN_REQUESTER_DEPARTMENT',
+        'POSITION_IN_REQUESTER_DEPARTMENT',
+        'SPECIFIC_USER',
+      ], 'REQUESTER_DIRECT_MANAGER'),
+      roleIds: listAttribute(metadata, 'roleIds'),
+      positionIds: listAttribute(metadata, 'positionIds'),
+      userIds: listAttribute(metadata, 'userIds'),
+      departmentId: textAttribute(metadata, 'departmentId') || undefined,
+      includeInactive: false,
+    },
+    actionNotificationTitle: textAttribute(metadata, 'notificationTitle'),
+    actionNotificationMessage: textAttribute(metadata, 'notificationMessage'),
+    nextFlow: textAttribute(metadata, 'nextFlow'),
     endResult: oneOf(textAttribute(metadata, 'endResult'), ['APPROVED', 'REJECTED'], 'APPROVED'),
   }
 }
@@ -471,6 +543,7 @@ function readSelection(element: DiagramElement): BpmnNodeSelection | null {
 function selectionKind(type: string): BpmnNodeSelection['kind'] | null {
   if (type === 'bpmn:StartEvent') return 'START'
   if (type === 'bpmn:UserTask') return 'APPROVAL'
+  if (type === 'bpmn:ServiceTask') return 'ACTION'
   if (type === 'bpmn:ExclusiveGateway') return 'CONDITION'
   if (type === 'bpmn:EndEvent') return 'END'
   if (type === 'bpmn:SequenceFlow') return 'SEQUENCE_FLOW'
@@ -478,7 +551,7 @@ function selectionKind(type: string): BpmnNodeSelection['kind'] | null {
 }
 
 function metadataFor(businessObject: BpmnBusinessObject): BpmnMetadata | undefined {
-  return businessObject.extensionElements?.values?.find((value) => ['wf:Approval', 'wf:Condition', 'wf:End'].includes(value.$type))
+  return businessObject.extensionElements?.values?.find((value) => ['wf:Approval', 'wf:Condition', 'wf:Action', 'wf:End'].includes(value.$type))
 }
 
 function textAttribute(metadata: BpmnMetadata | undefined, key: string): string {
@@ -489,6 +562,13 @@ function textAttribute(metadata: BpmnMetadata | undefined, key: string): string 
 function booleanAttribute(metadata: BpmnMetadata | undefined, key: string): boolean {
   const value = metadata?.[key]
   return value === true || value === 'true'
+}
+
+function booleanAttributeWithDefault(metadata: BpmnMetadata | undefined, key: string, fallback: boolean): boolean {
+  const value = metadata?.[key]
+  if (value === true || value === 'true') return true
+  if (value === false || value === 'false') return false
+  return fallback
 }
 
 function positiveNumberAttribute(metadata: BpmnMetadata | undefined, key: string): number | undefined {

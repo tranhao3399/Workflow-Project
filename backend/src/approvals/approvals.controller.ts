@@ -140,9 +140,27 @@ export class ApprovalsController {
     ));
   }
 
+  @Get('tasks/:id/reassign-candidates')
+  @RequirePermissions({ any: ['APPROVALS.APPROVE_ASSIGNED', 'APPROVALS.REASSIGN'] })
+  @ApiOperation({ summary: 'Danh sách nhân viên đủ điều kiện nhận chuyển giao task phê duyệt' })
+  @ApiParam({ name: 'id', description: 'MongoDB ObjectId của task.' })
+  @ApiOkResponse({ type: ApiDataResponseDto })
+  @ApiResourceNotFound()
+  @ApiValidationError()
+  async listReassignCandidates(
+    @Req() request: RequestWithContext,
+    @Param() params: ApprovalTaskIdParamDto,
+  ) {
+    return dataResponse(await this.service.listReassignCandidates(
+      this.userId(request),
+      params.id,
+      request.effectivePermissionKeys ?? [],
+    ));
+  }
+
   @Post('tasks/:id/reassign')
   @HttpCode(200)
-  @RequirePermissions('APPROVALS.REASSIGN')
+  @RequirePermissions({ any: ['APPROVALS.APPROVE_ASSIGNED', 'APPROVALS.REASSIGN'] })
   @ApiOperation({ summary: 'Chuyển task cho người phê duyệt khác' })
   @ApiBody({ type: ReassignApprovalTaskDto })
   @ApiOkResponse({ type: ApiDataResponseDto })

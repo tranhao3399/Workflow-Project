@@ -86,7 +86,7 @@ export function RequestFormsPage({ initialFormId, initialSearch, onBack, onOpenR
   }
 
   return <>
-    <PageHeader title={selectedGroup && !query ? selectedGroup.name : 'Tạo phiếu'} description={selectedGroup && !query ? 'Chọn biểu mẫu để bắt đầu tạo phiếu.' : 'Chọn nhóm biểu mẫu phù hợp với nhu cầu của bạn.'} actions={<div className="page-header-actions">
+    <PageHeader title={selectedGroup && !query ? selectedGroup.name : 'Tạo phiếu'} actions={<div className="page-header-actions">
       {selectedGroup && !query && <button className="secondary-button" type="button" onClick={() => setSelectedGroupId(null)}><ArrowLeft size={14} /> Quay lại nhóm</button>}
       <button className="secondary-button" type="button" onClick={onBack}>← Quay lại</button>
     </div>} />

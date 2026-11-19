@@ -11,6 +11,7 @@ import { WorkflowDefinitionsService } from './workflow-definitions.service.js';
 import { Role, RoleSchema } from '../roles/schemas/role.schema.js';
 import { Position, PositionSchema } from '../positions/schemas/position.schema.js';
 import { User, UserSchema } from '../users/schemas/user.schema.js';
+import { Department, DepartmentSchema } from '../departments/schemas/department.schema.js';
 import { Employee, EmployeeSchema } from '../employees/schemas/employee.schema.js';
 import { BpmnWorkflowCompilerService } from './bpmn-workflow-compiler.service.js';
 
@@ -25,6 +26,7 @@ import { BpmnWorkflowCompilerService } from './bpmn-workflow-compiler.service.js
       { name: Role.name, schema: RoleSchema },
       { name: Position.name, schema: PositionSchema },
       { name: User.name, schema: UserSchema },
+      { name: Department.name, schema: DepartmentSchema },
       { name: Employee.name, schema: EmployeeSchema },
     ]),
   ],

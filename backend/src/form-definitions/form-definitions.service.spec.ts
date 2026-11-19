@@ -20,13 +20,21 @@ function listQuery<T>(value: T) {
 function createService(forms: Record<string, unknown>, validator: Record<string, unknown>) {
   return new FormDefinitionsService(
     forms as never,
-    { find: vi.fn() } as never,
+    {
+      find: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          lean: vi.fn().mockReturnValue({ exec: vi.fn().mockResolvedValue([]) }),
+        }),
+      }),
+    } as never,
     {} as never,
     {} as never,
     { find: vi.fn() } as never,
     { find: vi.fn() } as never,
     validator as never,
-    { requireAssignable: vi.fn() } as never,
+    {
+      requireAssignable: vi.fn((groupId: string) => Promise.resolve(new Types.ObjectId(groupId))),
+    } as never,
     { record: vi.fn().mockResolvedValue(undefined) } as never,
   );
 }
@@ -43,11 +51,13 @@ describe('FormDefinitionsService system fields and grouping', () => {
       assertDefinitionValid: vi.fn(),
       assertSystemRequestFieldsValid: vi.fn(),
     };
+    const groupId = new Types.ObjectId();
     const item = {
       _id: new Types.ObjectId(),
       code: 'LEAVE',
       version: 1,
       name: 'Đơn xin nghỉ phép',
+      groupId,
       status: 'DRAFT',
       fields: normalizedFields,
       settings: {},
@@ -65,6 +75,7 @@ describe('FormDefinitionsService system fields and grouping', () => {
       {
         code: 'leave',
         name: 'Đơn xin nghỉ phép',
+        groupId: groupId.toString(),
         fields: [{ key: 'reason', type: 'TEXT' }],
       } as never,
     );
@@ -72,7 +83,7 @@ describe('FormDefinitionsService system fields and grouping', () => {
     expect(validator.assertDefinitionValid).toHaveBeenCalledWith(normalizedFields);
     expect(validator.assertSystemRequestFieldsValid).toHaveBeenCalledWith(normalizedFields);
     expect(forms.create).toHaveBeenCalledWith(
-      expect.objectContaining({ fields: normalizedFields }),
+      expect.objectContaining({ groupId, fields: normalizedFields }),
     );
   });
 
@@ -163,6 +174,37 @@ describe('FormDefinitionsService system fields and grouping', () => {
       id.toString(),
       { code: 'EXISTING_CODE' } as never,
     )).rejects.toThrow('Mã biểu mẫu đã tồn tại.');
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('given an editable draft, when update tries to clear groupId, then BadRequestException is thrown before updating', async () => {
+    const id = new Types.ObjectId();
+    const fields = [{ key: 'request_code', type: 'TEXT' }];
+    const current = {
+      _id: id,
+      code: 'OLD_CODE',
+      status: 'DRAFT',
+      fields,
+      settings: {},
+      toObject: vi.fn().mockReturnValue({ fields, settings: {} }),
+    };
+    const findOneAndUpdate = vi.fn();
+    const forms = {
+      findById: vi.fn().mockReturnValue({ exec: vi.fn().mockResolvedValue(current) }),
+      findOneAndUpdate,
+    };
+    const validator = {
+      ensureSystemRequestFields: vi.fn().mockImplementation((value) => value),
+      assertDefinitionValid: vi.fn(),
+      assertSystemRequestFieldsValid: vi.fn(),
+    };
+    const service = createService(forms, validator);
+
+    await expect(service.update(
+      { user: { id: new Types.ObjectId().toString() } } as never,
+      id.toString(),
+      { groupId: null } as never,
+    )).rejects.toThrow('Biểu mẫu bắt buộc phải thuộc một nhóm biểu mẫu.');
     expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

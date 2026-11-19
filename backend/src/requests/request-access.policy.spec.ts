@@ -66,5 +66,27 @@ describe('RequestAccessPolicy organization scope', () => {
     expect(actions.canApprove).toBe(true);
     expect(actions.canReject).toBe(true);
     expect(actions.canRequestRevision).toBe(true);
+    expect(actions.canReassign).toBe(true);
+  });
+
+  it('given a step with allowReassign=false in workflowSnapshot, when actions are calculated, then canReassign is disabled', () => {
+    const { policy } = createPolicy(true);
+
+    const actions = policy.availableActions(
+      {
+        ...request,
+        currentStepKey: 'STEP_1',
+        workflowSnapshot: {
+          steps: [{ stepKey: 'STEP_1', type: 'APPROVAL', allowReassign: false }],
+        },
+      } as never,
+      new Types.ObjectId().toString(),
+      ['APPROVALS.APPROVE_ASSIGNED'],
+      true,
+      { status: 'SNAPSHOT_LOCKED' },
+    );
+
+    expect(actions.canApprove).toBe(true);
+    expect(actions.canReassign).toBe(false);
   });
 });

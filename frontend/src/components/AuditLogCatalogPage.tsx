@@ -202,6 +202,15 @@ export function AuditLogCatalogPage() {
     setExpandedId(null)
   }
 
+  function resetFilters() {
+    setFilters(emptyFilters)
+    setOpenSelect(null)
+    setActorSearch('')
+    setSelectedActorOption(null)
+    setPage(1)
+    setExpandedId(null)
+  }
+
   function refresh() {
     setIsRefreshing(true)
     setSearchInput('')
@@ -245,7 +254,7 @@ export function AuditLogCatalogPage() {
           <label><span>Hành động</span><FilterSelect ariaLabel="Lọc theo hành động" value={filters.actionGroup ?? ''} options={actionOptions} onChange={(value) => updateFilters({ actionGroup: value as AuditActionGroup | '' })} isOpen={openSelect === 'action'} onOpenChange={(open) => setOpenSelect(open ? 'action' : null)} /></label>
           <label><span>Từ ngày</span><DatePicker ariaLabel="Từ ngày" value={filters.startDate} maxDate={filters.endDate} onChange={(value) => updateFilters({ startDate: value ?? '' })} /></label>
           <label><span>Đến ngày</span><DatePicker ariaLabel="Đến ngày" value={filters.endDate} minDate={filters.startDate} onChange={(value) => updateFilters({ endDate: value ?? '' })} /></label>
-        </div></div></AdvancedFilterPanel>
+        </div>{activeFilterCount > 0 && <div className="advanced-filter-actions"><button className="secondary-button compact-button" type="button" onClick={resetFilters}>Xóa bộ lọc</button></div>}</div></AdvancedFilterPanel>
       </div></ListToolbar>
       <DataTable className="admin-table audit-log-table" fixedLayout><thead><tr><th>Thời gian</th><th>Nội dung nhật ký</th><th>Kết quả</th><th>Phân hệ</th><th>Chi tiết</th></tr></thead><tbody>
         {items.length === 0 ? <EmptyTableRow colSpan={5} message="Không có nhật ký phù hợp với điều kiện tra cứu." /> : items.map((log) => {

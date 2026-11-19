@@ -3,18 +3,23 @@ import type { FormDefinition, FormField, WorkflowGraphValidationError, WorkflowS
 export interface WorkflowBuilderIssue extends WorkflowGraphValidationError {}
 
 const stepKeyPattern = /^[A-Z][A-Z0-9_]*$/
-const transitionKeys = ['onApproveStepKey', 'onRejectStepKey', 'onRevisionStepKey', 'onTrueStepKey', 'onFalseStepKey'] as const
+const transitionKeys = ['onApproveStepKey', 'onRejectStepKey', 'onRevisionStepKey', 'onTrueStepKey', 'onFalseStepKey', 'onNextStepKey'] as const
 
 export function initialWorkflowSteps(): WorkflowStep[] {
   return [
     {
-      stepKey: 'APPROVAL_1', name: 'Phê duyệt', type: 'APPROVAL', uiPosition: { x: 250, y: 160 },
+      stepKey: 'APPROVAL_1', name: 'Phê duyệt', type: 'APPROVAL', uiPosition: { x: 210, y: 220 },
       approvalMode: 'ANY', allowSelfApproval: false,
       assigneeRule: { type: 'REQUESTER_DIRECT_MANAGER', includeInactive: false },
-      onApproveStepKey: 'END_APPROVED', onRejectStepKey: 'END_REJECTED',
+      onNextStepKey: 'CONDITION_1',
     },
-    { stepKey: 'END_APPROVED', name: 'Đã phê duyệt', type: 'END', endResult: 'APPROVED', uiPosition: { x: 540, y: 80 } },
-    { stepKey: 'END_REJECTED', name: 'Đã từ chối', type: 'END', endResult: 'REJECTED', uiPosition: { x: 540, y: 250 } },
+    {
+      stepKey: 'CONDITION_1', name: 'Kết quả duyệt?', type: 'CONDITION', uiPosition: { x: 415, y: 235 },
+      condition: { source: 'APPROVAL_OUTCOME', fieldKey: 'decision', operator: 'EQUALS', value: 'APPROVED' },
+      onTrueStepKey: 'END_APPROVED', onFalseStepKey: 'END_REJECTED',
+    },
+    { stepKey: 'END_APPROVED', name: 'Đã phê duyệt', type: 'END', endResult: 'APPROVED', uiPosition: { x: 570, y: 142 } },
+    { stepKey: 'END_REJECTED', name: 'Đã từ chối', type: 'END', endResult: 'REJECTED', uiPosition: { x: 570, y: 342 } },
   ]
 }
 
@@ -24,6 +29,7 @@ export function createWorkflowStep(type: WorkflowStepType, steps: readonly Workf
   const uiPosition = { x: 250 + ((steps.length % 3) * 260), y: 110 + (Math.floor(steps.length / 3) * 160) }
   if (type === 'APPROVAL') return { stepKey, name: `Phê duyệt ${number}`, type, uiPosition, approvalMode: 'ANY', allowSelfApproval: false, assigneeRule: { type: 'REQUESTER_DIRECT_MANAGER', includeInactive: false } }
   if (type === 'CONDITION') return { stepKey, name: `Điều kiện ${number}`, type, uiPosition, condition: { source: 'FORM_FIELD', fieldKey: '', operator: 'EQUALS', value: '' } }
+  if (type === 'ACTION') return { stepKey, name: `Hành động ${number}`, type, uiPosition, actionConfig: { actionType: 'BALANCE_DEDUCT', fieldKey: '', allowNegative: false } }
   return { stepKey, name: `Kết thúc ${number}`, type, uiPosition, endResult: 'APPROVED' }
 }
 
@@ -34,7 +40,9 @@ export function workflowEdges(steps: readonly WorkflowStep[]): Array<{ id: strin
       ? [[step.onApproveStepKey, 'Duyệt', 'success'], [step.onRejectStepKey, 'Từ chối', 'danger'], [step.onRevisionStepKey, 'Bổ sung', 'warning']]
       : step.type === 'CONDITION'
         ? [[step.onTrueStepKey, 'Đúng', 'success'], [step.onFalseStepKey, 'Sai', 'danger']]
-        : []
+        : step.type === 'ACTION'
+          ? [[step.onNextStepKey, 'Tiếp theo', 'info']]
+          : []
     candidates.forEach(([target, label, tone], index) => {
       if (target) edges.push({ id: `${step.stepKey}-${index}-${target}`, source: step.stepKey, target, label, tone })
     })
@@ -80,14 +88,24 @@ function validateStep(step: WorkflowStep, index: number, keys: ReadonlySet<strin
     if ((step.assigneeRule?.type === 'ROLE' || step.assigneeRule?.type === 'ROLE_IN_REQUESTER_DEPARTMENT') && !step.assigneeRule.roleIds?.length) add(issues, 'ROLE_REQUIRED', `${path}.assigneeRule.roleIds`, step.stepKey, 'Cần chọn ít nhất một vai trò.')
     if (step.assigneeRule?.type === 'POSITION_IN_REQUESTER_DEPARTMENT' && !step.assigneeRule.positionIds?.length) add(issues, 'POSITION_REQUIRED', `${path}.assigneeRule.positionIds`, step.stepKey, 'Cần chọn ít nhất một chức danh.')
     if (step.assigneeRule?.type === 'SPECIFIC_USER' && !step.assigneeRule.userIds?.length) add(issues, 'USER_REQUIRED', `${path}.assigneeRule.userIds`, step.stepKey, 'Cần chọn ít nhất một người dùng.')
-    if (!step.onApproveStepKey) add(issues, 'APPROVE_TRANSITION_REQUIRED', `${path}.onApproveStepKey`, step.stepKey, 'Thiếu transition Duyệt.')
-    if (!step.onRejectStepKey) add(issues, 'REJECT_TRANSITION_REQUIRED', `${path}.onRejectStepKey`, step.stepKey, 'Thiếu transition Từ chối.')
+    if (step.onNextStepKey) {
+      if (step.onApproveStepKey || step.onRejectStepKey) add(issues, 'APPROVAL_TRANSITION_CONFLICT', path, step.stepKey, 'Không thể dùng đồng thời Bước tiếp theo và Duyệt/Từ chối.')
+    } else if (step.onApproveStepKey || step.onRejectStepKey) {
+      if (!step.onApproveStepKey) add(issues, 'APPROVE_TRANSITION_REQUIRED', `${path}.onApproveStepKey`, step.stepKey, 'Thiếu transition Duyệt.')
+      if (!step.onRejectStepKey) add(issues, 'REJECT_TRANSITION_REQUIRED', `${path}.onRejectStepKey`, step.stepKey, 'Thiếu transition Từ chối.')
+    } else {
+      add(issues, 'NEXT_TRANSITION_REQUIRED', `${path}.onNextStepKey`, step.stepKey, 'Bước phê duyệt cần nối tới bước tiếp theo (ví dụ Exclusive Gateway).')
+    }
   }
   if (step.type === 'CONDITION') {
     if (!step.condition?.fieldKey) add(issues, 'CONDITION_FIELD_REQUIRED', `${path}.condition.fieldKey`, step.stepKey, 'Chưa chọn dữ liệu điều kiện.')
     if (step.condition?.source === 'FORM_FIELD' && step.condition.fieldKey && !formFields.some((field) => field.key === step.condition?.fieldKey)) add(issues, 'FORM_FIELD_NOT_FOUND', `${path}.condition.fieldKey`, step.stepKey, 'Trường Form dùng trong điều kiện không tồn tại.')
     if (!step.onTrueStepKey) add(issues, 'TRUE_TRANSITION_REQUIRED', `${path}.onTrueStepKey`, step.stepKey, 'Thiếu transition Đúng.')
     if (!step.onFalseStepKey) add(issues, 'FALSE_TRANSITION_REQUIRED', `${path}.onFalseStepKey`, step.stepKey, 'Thiếu transition Sai.')
+  }
+  if (step.type === 'ACTION') {
+    if (!step.actionConfig) add(issues, 'ACTION_CONFIG_REQUIRED', `${path}.actionConfig`, step.stepKey, 'Chưa cấu hình hành động tự động.')
+    if (!step.onNextStepKey) add(issues, 'NEXT_TRANSITION_REQUIRED', `${path}.onNextStepKey`, step.stepKey, 'Thiếu transition Tiếp theo.')
   }
   if (step.type === 'END') {
     if (!step.endResult) add(issues, 'END_RESULT_REQUIRED', `${path}.endResult`, step.stepKey, 'END phải chọn kết quả.')

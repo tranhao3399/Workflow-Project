@@ -38,6 +38,8 @@ export class UpdateDepartmentDto {
   @IsOptional() @IsBoolean() isActive?: boolean;
   @ApiPropertyOptional({ example: 10, minimum: 0, maximum: 10000 })
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(10000) sortOrder?: number;
+  @ApiPropertyOptional({ type: [String], example: ['66d0f0b74d5b5d4e65e75124'], description: 'Danh sách ObjectId chức danh áp dụng cho phòng ban.' })
+  @IsOptional() @IsArray() @ArrayUnique() @IsMongoId({ each: true }) positionIds?: string[];
 }
 
 export class DepartmentIdParamDto { @IsMongoId() id: string; }

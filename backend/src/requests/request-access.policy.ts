@@ -109,6 +109,12 @@ export class RequestAccessPolicy {
       canApprove: pendingTask,
       canReject: pendingTask,
       canRequestRevision: pendingTask,
+      canReassign:
+        request.status === 'IN_PROGRESS' &&
+        hasPendingTask &&
+        this.isReassignAllowed(request) &&
+        (permissions.has('APPROVALS.APPROVE_ASSIGNED') ||
+          permissions.has('APPROVALS.REASSIGN')),
       canVoid:
         this.isVoidable(request.status) && permissions.has('REQUESTS.VOID'),
       canDelete:
@@ -169,6 +175,30 @@ export class RequestAccessPolicy {
 
   isVoidable(status: RequestStatus): boolean {
     return VOIDABLE_STATUSES.has(status);
+  }
+
+  isReassignAllowed(
+    request: Pick<StoredRequest, 'workflowSnapshot' | 'currentStepKey'>,
+  ): boolean {
+    const snapshot = request.workflowSnapshot;
+    if (
+      !snapshot ||
+      typeof snapshot !== 'object' ||
+      !('steps' in snapshot) ||
+      !Array.isArray(snapshot.steps) ||
+      !request.currentStepKey
+    ) {
+      return true;
+    }
+    const step = snapshot.steps.find(
+      (candidate) =>
+        typeof candidate === 'object' &&
+        candidate !== null &&
+        'stepKey' in candidate &&
+        candidate.stepKey === request.currentStepKey,
+    );
+    if (!step || typeof step !== 'object') return true;
+    return !('allowReassign' in step) || step.allowReassign !== false;
   }
 
   notFound(): NotFoundException {

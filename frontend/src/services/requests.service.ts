@@ -40,6 +40,15 @@ export async function getRequestHistory(id: string): Promise<ApprovalHistory[]> 
   return (await apiClient<ApiDataResponse<ApprovalHistory[]>>(`/requests/${encodeURIComponent(id)}/history`)).data
 }
 
+export async function addRequestComment(id: string, comment: string): Promise<ApprovalHistory> {
+  return (
+    await apiClient<ApiDataResponse<ApprovalHistory>>(`/requests/${encodeURIComponent(id)}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ comment }),
+    })
+  ).data
+}
+
 export async function createRequest(formDefinitionId: string): Promise<RequestRecord> {
   return (await apiClient<ApiDataResponse<RequestRecord>>('/requests', {
     method: 'POST',

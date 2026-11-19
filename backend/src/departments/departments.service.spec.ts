@@ -494,4 +494,85 @@ describe('DepartmentsService organization hierarchy', () => {
       ),
     ).resolves.toBeUndefined();
   });
+
+  it('given updated positionIds, when department is updated, then removed and added positions are synchronized on save', async () => {
+    const departmentDoc = {
+      _id: 'dept-finance',
+      id: 'dept-finance',
+      code: 'FINANCE',
+      name: 'Phòng Tài chính',
+      unitType: OrganizationUnitType.DEPARTMENT,
+      parentId: 'company',
+      isActive: true,
+      sortOrder: 1,
+      toObject: () => ({
+        _id: 'dept-finance',
+        code: 'FINANCE',
+        name: 'Phòng Tài chính',
+        unitType: OrganizationUnitType.DEPARTMENT,
+        parentId: 'company',
+        isActive: true,
+        sortOrder: 1,
+      }),
+    };
+    const departments = {
+      findById: vi.fn().mockImplementation((id: string) =>
+        query(id === 'company' ? { _id: 'company', unitType: OrganizationUnitType.COMPANY } : departmentDoc),
+      ),
+      findByIdAndUpdate: vi.fn().mockReturnValue({
+        exec: vi.fn().mockResolvedValue(departmentDoc),
+      }),
+    };
+    const employees = { findOne: vi.fn() };
+    const positions = {
+      find: vi
+        .fn()
+        .mockReturnValueOnce(query([{ _id: 'pos-new', name: 'Kế toán trưởng' }]))
+        .mockReturnValueOnce(query([{ _id: 'pos-old', name: 'Chuyên viên cũ' }])),
+    };
+    const departmentPositions = {
+      find: vi.fn().mockReturnValue(
+        query([
+          { _id: 'assign-old', positionId: 'pos-old' },
+          { _id: 'assign-keep', positionId: 'pos-keep' },
+        ]),
+      ),
+      deleteMany: vi.fn().mockReturnValue({ exec: vi.fn().mockResolvedValue({ deletedCount: 1 }) }),
+      insertMany: vi.fn().mockResolvedValue([]),
+    };
+    const auditLogs = { record: vi.fn().mockResolvedValue(undefined) };
+    const organizationScope = {
+      resolve: vi.fn().mockResolvedValue({
+        fullAccess: true,
+        managedRootDepartmentIds: [],
+        departmentIds: [],
+      }),
+    };
+    const service = new DepartmentsService(
+      departments as never,
+      employees as never,
+      positions as never,
+      departmentPositions as never,
+      auditLogs as never,
+      organizationScope as never,
+    );
+
+    await service.update(
+      { user: { id: 'admin-1' } } as never,
+      'dept-finance',
+      { positionIds: ['pos-keep', 'pos-new'] },
+    );
+
+    expect(departmentPositions.deleteMany).toHaveBeenCalledWith({
+      _id: { $in: ['assign-old'] },
+      departmentId: 'dept-finance',
+    });
+    expect(departmentPositions.insertMany).toHaveBeenCalledWith([
+      {
+        departmentId: 'dept-finance',
+        positionId: 'pos-new',
+        createdBy: 'admin-1',
+      },
+    ]);
+  });
 });

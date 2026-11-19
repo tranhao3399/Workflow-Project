@@ -7,7 +7,7 @@ import { Employee } from '../employees/schemas/employee.schema.js';
 import { Position } from '../positions/schemas/position.schema.js';
 import { User } from '../users/schemas/user.schema.js';
 import {
-  extractLeaveDeductionConfig,
+  extractEffectiveLeaveDeductionConfig,
   extractLeaveDaysFromFormData,
   roundLeaveDays,
 } from './leave-deduction.helper.js';
@@ -114,11 +114,14 @@ export class RequestActorContextService {
         .find({
           requesterEmployeeId: employee._id,
           status: { $in: ['IN_PROGRESS', 'REVISION_REQUESTED'] },
-          'formSnapshot.settings.leaveDeduction.enabled': true,
+          $or: [
+            { 'formSnapshot.settings.leaveDeduction.enabled': true },
+            { 'workflowSnapshot.steps': { $elemMatch: { type: 'ACTION', 'actionConfig.actionType': 'BALANCE_DEDUCT' } } },
+          ],
           leaveDeductionApplied: { $exists: false },
           ...(excludeId ? { _id: { $ne: excludeId } } : {}),
         })
-        .select({ formData: 1, 'formSnapshot.settings.leaveDeduction': 1 })
+        .select({ formData: 1, 'formSnapshot.settings.leaveDeduction': 1, 'workflowSnapshot.steps': 1 })
         .session(querySession)
         .lean()
         .exec(),
@@ -133,8 +136,9 @@ export class RequestActorContextService {
 
     let pendingHeldLeaveDays = 0;
     for (const pending of pendingLeaveRequests) {
-      const cfg = extractLeaveDeductionConfig(
+      const cfg = extractEffectiveLeaveDeductionConfig(
         (pending.formSnapshot as { settings?: unknown } | undefined)?.settings,
+        (pending.workflowSnapshot as { steps?: unknown } | undefined)?.steps,
       );
       if (!cfg?.enabled) continue;
       const days = extractLeaveDaysFromFormData(pending.formData, cfg.fieldKey);

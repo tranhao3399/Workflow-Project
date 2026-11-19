@@ -171,6 +171,7 @@ export interface FormDefinition {
   fields: FormField[]
   settings: FormSettings
   previousVersionId?: string
+  createdBy?: { id: string; name: string }
   updatedBy?: { id: string; name: string }
   createdAt: string
   updatedAt: string
@@ -178,8 +179,10 @@ export interface FormDefinition {
 
 export type FormDefinitionSnapshot = Pick<FormDefinition, 'id' | 'code' | 'version' | 'name' | 'fields' | 'settings'>
 
-export const workflowStepTypes = ['APPROVAL', 'CONDITION', 'END'] as const
+export const workflowStepTypes = ['APPROVAL', 'CONDITION', 'ACTION', 'END'] as const
 export type WorkflowStepType = (typeof workflowStepTypes)[number]
+export const workflowActionTypes = ['BALANCE_DEDUCT', 'BALANCE_ADD', 'SEND_NOTIFICATION'] as const
+export type WorkflowActionType = (typeof workflowActionTypes)[number]
 export const workflowEndResults = ['APPROVED', 'REJECTED'] as const
 export type WorkflowEndResult = (typeof workflowEndResults)[number]
 export const approvalModes = ['ANY', 'ALL', 'MAJORITY'] as const
@@ -216,7 +219,7 @@ export const selectableAssigneeRuleTypes = [
   'POSITION_IN_REQUESTER_DEPARTMENT',
   'SPECIFIC_USER',
 ] as const satisfies readonly AssigneeRuleType[]
-export const workflowConditionSources = ['FORM_FIELD', 'REQUESTER_ATTRIBUTE'] as const
+export const workflowConditionSources = ['FORM_FIELD', 'REQUESTER_ATTRIBUTE', 'APPROVAL_OUTCOME'] as const
 export type WorkflowConditionSource = (typeof workflowConditionSources)[number]
 
 export interface WorkflowAssigneeRule {
@@ -235,6 +238,15 @@ export interface WorkflowCondition {
   value: unknown
 }
 
+export interface WorkflowActionConfig {
+  actionType: WorkflowActionType
+  fieldKey?: string
+  allowNegative?: boolean
+  assigneeRule?: WorkflowAssigneeRule
+  notificationTitle?: string
+  notificationMessage?: string
+}
+
 export interface WorkflowStep {
   stepKey: string
   name: string
@@ -243,14 +255,17 @@ export interface WorkflowStep {
   assigneeRule?: WorkflowAssigneeRule
   approvalMode?: ApprovalMode
   allowSelfApproval?: boolean
+  allowReassign?: boolean
   dueInHours?: number
   condition?: WorkflowCondition
+  actionConfig?: WorkflowActionConfig
   endResult?: WorkflowEndResult
   onApproveStepKey?: string
   onRejectStepKey?: string
   onRevisionStepKey?: string
   onTrueStepKey?: string
   onFalseStepKey?: string
+  onNextStepKey?: string
 }
 
 export interface WorkflowDefinition {
@@ -291,6 +306,8 @@ export interface WorkflowGraphValidationResult {
 export interface WorkflowBuilderReferenceData {
   roles: Array<{ id: string; key: string; name: string }>
   positions: Array<{ id: string; code: string; name: string }>
+  departments?: Array<{ id: string; code: string; name: string; unitType?: string }>
+  employees?: Array<{ id: string; employeeCode: string; fullName: string }>
   users: Array<{ id: string; name: string; email: string; employeeCode?: string }>
 }
 
@@ -340,6 +357,7 @@ export interface AvailableActions {
   canApprove: boolean
   canReject: boolean
   canRequestRevision: boolean
+  canReassign?: boolean
   canVoid: boolean
   canDelete: boolean
   canRecreate: boolean
@@ -517,6 +535,23 @@ export interface ApprovalTaskActions {
   canReassign: boolean
 }
 
+export interface ApprovalReassignCandidate {
+  userId: string
+  employeeId?: string
+  employeeCode?: string
+  fullName: string
+  email: string
+  avatarUrl?: string
+  departmentId?: string
+  departmentName?: string
+  workUnitId?: string
+  workUnitName?: string
+  positionId?: string
+  positionName?: string
+  isSameDepartment: boolean
+  isSamePosition: boolean
+}
+
 export interface ApprovalTask {
   id: string
   requestId: string
@@ -544,6 +579,7 @@ export const approvalHistoryActions = [
   'SUBMITTED',
   'ASSIGNED',
   'CONDITION_EVALUATED',
+  'ACTION_EXECUTED',
   'APPROVED',
   'REJECTED',
   'REVISION_REQUESTED',
@@ -551,6 +587,7 @@ export const approvalHistoryActions = [
   'RESUBMITTED',
   'CANCELLED',
   'VOIDED',
+  'COMMENTED',
   'AUTO_SKIPPED',
   'COMPLETED',
 ] as const

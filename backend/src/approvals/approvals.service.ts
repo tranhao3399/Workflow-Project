@@ -195,6 +195,154 @@ export class ApprovalsService {
     return this.decide(context, userId, id, 'REVISION_REQUESTED', comment, permissionKeys);
   }
 
+  async listReassignCandidates(
+    userId: string,
+    id: string,
+    permissionKeys: readonly string[],
+  ) {
+    const task = await this.tasks.findById(id).lean().exec();
+    if (!task) throw this.notFound();
+    const storedTask = task as StoredTask;
+    if (
+      storedTask.assigneeUserId.toString() !== userId
+      && !permissionKeys.includes('REQUESTS.VIEW_ALL')
+    ) {
+      throw this.notFound();
+    }
+    const request = await this.requests.findById(storedTask.requestId).lean().exec();
+    if (!request) throw this.notFound();
+    const storedRequest = request as StoredRequest;
+
+    const [eligibleRoles, existingStepTasks, callerUser] = await Promise.all([
+      this.roles.find({
+        isActive: true,
+        permissionKeys: 'APPROVALS.APPROVE_ASSIGNED',
+      }).select({ _id: 1 }).lean().exec(),
+      this.tasks.find({
+        requestId: storedTask.requestId,
+        stepKey: storedTask.stepKey,
+        stepRunNo: storedTask.stepRunNo,
+      }).select({ assigneeUserId: 1 }).lean().exec(),
+      this.users.findById(userId).select({ employeeId: 1 }).lean().exec(),
+    ]);
+    if (!eligibleRoles.length) return [];
+
+    const excludedUserIds = new Set<string>([
+      storedTask.assigneeUserId.toString(),
+      ...existingStepTasks.map((item) => item.assigneeUserId.toString()),
+    ]);
+    if (!this.selfApprovalAllowed(storedRequest, storedTask.stepKey)) {
+      excludedUserIds.add(storedRequest.requesterUserId.toString());
+    }
+
+    const candidateUsers = await this.users.find({
+      isActive: true,
+      roleIds: { $in: eligibleRoles.map((role) => role._id) },
+      _id: { $nin: [...excludedUserIds].map((candidateId) => new Types.ObjectId(candidateId)) },
+    })
+      .select({ _id: 1, displayName: 1, email: 1, employeeId: 1 })
+      .lean()
+      .exec();
+    if (!candidateUsers.length) return [];
+
+    const employeeIds = [
+      ...(callerUser?.employeeId ? [callerUser.employeeId] : []),
+      ...candidateUsers
+        .map((candidate) => candidate.employeeId)
+        .filter((employeeId): employeeId is Types.ObjectId => Boolean(employeeId)),
+    ];
+    const employees = employeeIds.length
+      ? await this.employees.find({ _id: { $in: employeeIds }, isActive: true })
+          .select({
+            _id: 1,
+            employeeCode: 1,
+            fullName: 1,
+            workEmail: 1,
+            departmentId: 1,
+            workUnitId: 1,
+            positionId: 1,
+          })
+          .lean()
+          .exec()
+      : [];
+    const employeesById = new Map(employees.map((emp) => [emp._id.toString(), emp]));
+    const callerEmployee = callerUser?.employeeId
+      ? employeesById.get(callerUser.employeeId.toString())
+      : undefined;
+
+    const departmentIds = new Set<string>();
+    const positionIds = new Set<string>();
+    for (const emp of employees) {
+      if (emp.departmentId) departmentIds.add(emp.departmentId.toString());
+      if (emp.workUnitId) departmentIds.add(emp.workUnitId.toString());
+      if (emp.positionId) positionIds.add(emp.positionId.toString());
+    }
+
+    const [departments, positions] = await Promise.all([
+      departmentIds.size
+        ? this.departments.find({ _id: { $in: [...departmentIds].map((deptId) => new Types.ObjectId(deptId)) } })
+            .select({ _id: 1, name: 1, code: 1 })
+            .lean()
+            .exec()
+        : Promise.resolve([]),
+      positionIds.size
+        ? this.positions.find({ _id: { $in: [...positionIds].map((posId) => new Types.ObjectId(posId)) } })
+            .select({ _id: 1, name: 1, code: 1 })
+            .lean()
+            .exec()
+        : Promise.resolve([]),
+    ]);
+    const departmentsById = new Map(departments.map((dept) => [dept._id.toString(), dept]));
+    const positionsById = new Map(positions.map((pos) => [pos._id.toString(), pos]));
+
+    const callerDepartmentId = callerEmployee?.departmentId?.toString();
+    const callerWorkUnitId = callerEmployee?.workUnitId?.toString();
+    const callerPositionId = callerEmployee?.positionId?.toString();
+
+    const candidates = candidateUsers
+      .map((candidate) => {
+        const emp = candidate.employeeId
+          ? employeesById.get(candidate.employeeId.toString())
+          : undefined;
+        if (candidate.employeeId && !emp) return null;
+        const departmentId = emp?.departmentId?.toString();
+        const workUnitId = emp?.workUnitId?.toString();
+        const positionId = emp?.positionId?.toString();
+        const dept = departmentId ? departmentsById.get(departmentId) : undefined;
+        const workUnit = workUnitId ? departmentsById.get(workUnitId) : undefined;
+        const pos = positionId ? positionsById.get(positionId) : undefined;
+        const isSameDepartment = Boolean(
+          (callerDepartmentId && departmentId && callerDepartmentId === departmentId)
+          || (callerWorkUnitId && workUnitId && callerWorkUnitId === workUnitId),
+        );
+        const isSamePosition = Boolean(callerPositionId && positionId && callerPositionId === positionId);
+        return {
+          userId: candidate._id.toString(),
+          ...(emp ? { employeeId: emp._id.toString(), employeeCode: emp.employeeCode } : {}),
+          fullName: emp?.fullName ?? candidate.displayName ?? candidate.email,
+          email: emp?.workEmail ?? candidate.email,
+          ...(departmentId ? { departmentId } : {}),
+          ...(dept?.name ? { departmentName: dept.name } : {}),
+          ...(workUnitId ? { workUnitId } : {}),
+          ...(workUnit?.name ? { workUnitName: workUnit.name } : {}),
+          ...(positionId ? { positionId } : {}),
+          ...(pos?.name ? { positionName: pos.name } : {}),
+          isSameDepartment,
+          isSamePosition,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+
+    candidates.sort((left, right) => {
+      const leftRank = (left.isSamePosition ? 2 : 0) + (left.isSameDepartment ? 1 : 0);
+      const rightRank = (right.isSamePosition ? 2 : 0) + (right.isSameDepartment ? 1 : 0);
+      if (leftRank !== rightRank) return rightRank - leftRank;
+      return left.fullName.localeCompare(right.fullName, 'vi');
+    });
+
+    return candidates;
+  }
+
   async reassign(
     context: RequestWithContext,
     userId: string,
@@ -207,6 +355,12 @@ export class ApprovalsService {
       const task = await this.assignedTask(id, userId, session);
       if (task.status !== 'PENDING') throw this.taskAlreadyProcessed();
       const request = await this.currentRequest(task, session);
+      if (!this.reassignAllowed(request, task.stepKey)) {
+        throw new ConflictException({
+          code: 'REASSIGN_NOT_ALLOWED',
+          message: 'Bước phê duyệt hiện tại không cho phép chuyển giao người xử lý.',
+        });
+      }
       if (newAssigneeUserId === userId) {
         throw new BadRequestException({
           code: 'SAME_APPROVAL_ASSIGNEE',
@@ -603,7 +757,10 @@ export class ApprovalsService {
       canApprove: canDecide,
       canReject: canDecide,
       canRequestRevision: canDecide,
-      canReassign: assigned && current && permissionKeys.includes('APPROVALS.REASSIGN'),
+      canReassign: assigned
+        && current
+        && this.reassignAllowed(request, task.stepKey)
+        && (permissionKeys.includes('APPROVALS.REASSIGN') || permissionKeys.includes('APPROVALS.APPROVE_ASSIGNED')),
     };
   }
 
@@ -697,6 +854,21 @@ export class ApprovalsService {
       && candidate.type === 'APPROVAL'
     ));
     return this.isRecord(step) && step.allowSelfApproval === true;
+  }
+
+  private reassignAllowed(
+    request: Pick<Request, 'workflowSnapshot'>,
+    stepKey: string,
+  ): boolean {
+    const snapshot = request.workflowSnapshot;
+    if (!this.isRecord(snapshot) || !Array.isArray(snapshot.steps)) return true;
+    const step = snapshot.steps.find((candidate) => (
+      this.isRecord(candidate)
+      && candidate.stepKey === stepKey
+      && candidate.type === 'APPROVAL'
+    ));
+    if (!this.isRecord(step)) return true;
+    return step.allowReassign !== false;
   }
 
   private notificationDedupeKey(

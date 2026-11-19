@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import type {
   ApprovalMode,
   AssigneeRuleType,
+  WorkflowActionType,
   WorkflowConditionOperator,
   WorkflowConditionSource,
   WorkflowEndResult,
@@ -25,6 +26,15 @@ export interface RuntimeCondition {
   value: unknown;
 }
 
+export interface RuntimeActionConfig {
+  actionType: WorkflowActionType;
+  fieldKey?: string;
+  allowNegative?: boolean;
+  assigneeRule?: RuntimeAssigneeRule;
+  notificationTitle?: string;
+  notificationMessage?: string;
+}
+
 export interface RuntimeWorkflowStep {
   stepKey: string;
   name: string;
@@ -34,12 +44,14 @@ export interface RuntimeWorkflowStep {
   allowSelfApproval: boolean;
   dueInHours?: number;
   condition?: RuntimeCondition;
+  actionConfig?: RuntimeActionConfig;
   endResult?: WorkflowEndResult;
   onApproveStepKey?: string;
   onRejectStepKey?: string;
   onRevisionStepKey?: string;
   onTrueStepKey?: string;
   onFalseStepKey?: string;
+  onNextStepKey?: string;
 }
 
 export interface RuntimeWorkflowSnapshot {

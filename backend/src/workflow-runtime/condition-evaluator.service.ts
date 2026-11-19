@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
 import type { RequestDocument } from '../requests/schemas/request.schema.js';
-import type { RuntimeCondition } from './workflow-runtime.types.js';
+import type { ApprovalTransitionOutcome, RuntimeCondition } from './workflow-runtime.types.js';
 
 const REQUESTER_ATTRIBUTE_KEYS = [
   'employeeCode',
+  'workUnitId',
   'departmentId',
   'positionId',
   'managerEmployeeId',
@@ -20,10 +21,16 @@ type Comparable =
 
 @Injectable()
 export class ConditionEvaluatorService {
-  evaluate(request: RequestDocument, condition: RuntimeCondition): boolean {
+  evaluate(
+    request: RequestDocument,
+    condition: RuntimeCondition,
+    lastApprovalOutcome?: ApprovalTransitionOutcome,
+  ): boolean {
     const actual = condition.source === 'FORM_FIELD'
       ? request.formData[condition.fieldKey]
-      : this.requesterAttribute(request, condition.fieldKey);
+      : condition.source === 'APPROVAL_OUTCOME'
+        ? this.approvalOutcome(condition.fieldKey, lastApprovalOutcome)
+        : this.requesterAttribute(request, condition.fieldKey);
 
     switch (condition.operator) {
       case 'EQUALS':
@@ -41,6 +48,19 @@ export class ConditionEvaluatorService {
     }
   }
 
+  private approvalOutcome(
+    fieldKey: string,
+    lastApprovalOutcome?: ApprovalTransitionOutcome,
+  ): 'APPROVED' | 'REJECTED' {
+    if (fieldKey !== 'decision') {
+      throw this.invalidCondition(`Trường kết quả phê duyệt không được hỗ trợ: ${fieldKey}`);
+    }
+    if (lastApprovalOutcome !== 'APPROVED' && lastApprovalOutcome !== 'REJECTED') {
+      throw this.invalidCondition('Điều kiện kết quả phê duyệt chỉ dùng được sau bước phê duyệt.');
+    }
+    return lastApprovalOutcome;
+  }
+
   private requesterAttribute(request: RequestDocument, fieldKey: string): unknown {
     if (!REQUESTER_ATTRIBUTE_KEYS.includes(fieldKey as RequesterAttributeKey)) {
       throw this.invalidCondition(`Thuộc tính người gửi không được phép dùng trong điều kiện: ${fieldKey}`);
@@ -48,6 +68,7 @@ export class ConditionEvaluatorService {
     const snapshot = request.requesterSnapshot;
     switch (fieldKey as RequesterAttributeKey) {
       case 'employeeCode': return snapshot.employeeCode;
+      case 'workUnitId': return snapshot.workUnitId;
       case 'departmentId': return snapshot.departmentId;
       case 'positionId': return snapshot.positionId;
       case 'managerEmployeeId': return snapshot.managerEmployeeId;

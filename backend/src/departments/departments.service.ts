@@ -516,8 +516,48 @@ export class DepartmentsService {
       }
     }
 
+    const { positionIds, ...departmentFields } = input;
+    let addedPositionIds: string[] = [];
+    let addedPositions: Array<{ id: string; _id: Types.ObjectId; name: string }> = [];
+    let removedAssignmentIds: Types.ObjectId[] = [];
+    let removedPositionIds: Types.ObjectId[] = [];
+    if (positionIds !== undefined) {
+      const requestedPositionIds = [...new Set(positionIds)];
+      const existingAssignments = await this.departmentPositions
+        .find({ departmentId: current._id })
+        .select({ _id: 1, positionId: 1 })
+        .lean()
+        .exec();
+      const existingPositionIdSet = new Set(
+        existingAssignments.map((assignment) => assignment.positionId.toString()),
+      );
+      const requestedPositionIdSet = new Set(requestedPositionIds);
+      addedPositionIds = requestedPositionIds.filter(
+        (positionId) => !existingPositionIdSet.has(positionId),
+      );
+      const removedAssignments = existingAssignments.filter(
+        (assignment) =>
+          !requestedPositionIdSet.has(assignment.positionId.toString()),
+      );
+      removedAssignmentIds = removedAssignments.map((assignment) => assignment._id);
+      removedPositionIds = removedAssignments.map(
+        (assignment) => assignment.positionId,
+      );
+      if (addedPositionIds.length) {
+        addedPositions = await this.positions
+          .find({ _id: { $in: addedPositionIds }, isActive: true })
+          .select({ name: 1 })
+          .exec();
+        if (addedPositions.length !== addedPositionIds.length) {
+          throw new BadRequestException(
+            'Có chức danh không tồn tại hoặc đã ngưng hoạt động.',
+          );
+        }
+      }
+    }
+
     const update: Record<string, unknown> = {
-      ...input,
+      ...departmentFields,
       ...(input.code ? { code: input.code.toUpperCase() } : {}),
       ...(input.name
         ? {
@@ -548,6 +588,49 @@ export class DepartmentsService {
         )
         .exec();
       if (!item) throw new NotFoundException('Không tìm thấy phòng ban.');
+      if (removedAssignmentIds.length) {
+        const removedPositions = await this.positions
+          .find({ _id: { $in: removedPositionIds } })
+          .select({ name: 1 })
+          .lean()
+          .exec();
+        await this.departmentPositions
+          .deleteMany({ _id: { $in: removedAssignmentIds }, departmentId: current._id })
+          .exec();
+        await this.audit(
+          request,
+          'DEPARTMENT.POSITIONS_DELETED',
+          item,
+          undefined,
+          {
+            positions: removedPositions.map((position) => ({
+              id: position._id.toString(),
+              name: position.name,
+            })),
+          },
+        );
+      }
+      if (addedPositionIds.length) {
+        await this.departmentPositions.insertMany(
+          addedPositionIds.map((positionId) => ({
+            departmentId: current._id,
+            positionId,
+            createdBy: request.user?.id,
+          })),
+        );
+        await this.audit(
+          request,
+          'DEPARTMENT.POSITIONS_ADDED',
+          item,
+          undefined,
+          {
+            positions: addedPositions.map((position) => ({
+              id: position._id.toString(),
+              name: position.name,
+            })),
+          },
+        );
+      }
       await this.audit(
         request,
         current.isActive && !item.isActive

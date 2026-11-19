@@ -1,9 +1,10 @@
-import type {
-  ApprovalTaskStatus,
-  DefinitionStatus,
-  FileScanStatus,
-  FileStatus,
-  RequestStatus,
+import {
+  requestStatuses,
+  type ApprovalTaskStatus,
+  type DefinitionStatus,
+  type FileScanStatus,
+  type FileStatus,
+  type RequestStatus,
 } from '../types/workflow'
 
 export type WorkflowEntityStatus = DefinitionStatus | RequestStatus | ApprovalTaskStatus | FileStatus | FileScanStatus
@@ -36,4 +37,11 @@ export function workflowStatusLabel(status: WorkflowEntityStatus): string {
 
 export function workflowStatusClass(status: WorkflowEntityStatus): string {
   return `status-${status.toLowerCase()}`
+}
+
+export function buildRequestStatusFilterOptions(): Array<{ value: string; label: string }> {
+  return [
+    { value: '', label: 'Tất cả trạng thái' },
+    ...requestStatuses.map((status) => ({ value: status, label: workflowStatusLabel(status) })),
+  ]
 }

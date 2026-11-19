@@ -11,6 +11,7 @@ export interface AvailableActions {
   canApprove: boolean;
   canReject: boolean;
   canRequestRevision: boolean;
+  canReassign?: boolean;
   canVoid: boolean;
   canDelete: boolean;
   canRecreate: boolean;

@@ -1,10 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { AuditLogService } from '../audit-logs/audit-log.service.js';
 import { AuditOutcome } from '../audit-logs/enums/audit-outcome.enum.js';
 import { createPaginationMetadata } from '../common/http/pagination.js';
 import type { RequestWithContext } from '../common/http/request-context.interface.js';
+import { Employee } from '../employees/schemas/employee.schema.js';
+import { MailService } from '../mail/mail.service.js';
+import { Request, type RequestStatus } from '../requests/schemas/request.schema.js';
+import { User } from '../users/schemas/user.schema.js';
 import type { SafeUser } from '../users/users.service.js';
 import { CreateNotificationDto, ListNotificationsDto } from './dto/notification.dto.js';
 import {
@@ -15,6 +20,9 @@ import {
 import { NotificationRead } from './schemas/notification-read.schema.js';
 
 type NotificationResult = Notification & { _id: Types.ObjectId; resolvedIsRead?: boolean };
+type SessionWithEndedEvent = ClientSession & {
+  once?: (event: 'ended', listener: () => void) => unknown;
+};
 type DuplicateKeyError = {
   code?: unknown;
   keyPattern?: Record<string, unknown>;
@@ -22,6 +30,16 @@ type DuplicateKeyError = {
 };
 
 const NOTIFICATION_DEDUPE_INDEX = 'uniq_notification_dedupe_recipient';
+const REQUEST_EMAIL_RESOURCE_TYPES = new Set(['REQUEST', 'APPROVAL_TASK']);
+const requestStatusLabels: Record<RequestStatus, string> = {
+  DRAFT: 'Nháp',
+  IN_PROGRESS: 'Đang xử lý',
+  REVISION_REQUESTED: 'Cần bổ sung',
+  APPROVED: 'Đã phê duyệt',
+  REJECTED: 'Đã từ chối',
+  CANCELLED: 'Đã hủy',
+  VOIDED: 'Đã vô hiệu hóa',
+};
 
 export interface CreatePersonalNotificationInput {
   recipientUserId: string | Types.ObjectId;
@@ -40,10 +58,17 @@ export interface CreatePersonalNotificationInput {
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
     @InjectModel(Notification.name) private readonly notifications: Model<Notification>,
     @InjectModel(NotificationRead.name) private readonly reads: Model<NotificationRead>,
     private readonly auditLogs: AuditLogService,
+    @Optional() private readonly configService?: ConfigService,
+    @Optional() private readonly mailService?: MailService,
+    @Optional() @InjectModel(User.name) private readonly users?: Model<User>,
+    @Optional() @InjectModel(Employee.name) private readonly employees?: Model<Employee>,
+    @Optional() @InjectModel(Request.name) private readonly requests?: Model<Request>,
   ) {}
 
   async findAll(user: SafeUser, query: ListNotificationsDto) {
@@ -138,7 +163,9 @@ export class NotificationsService {
 
     try {
       const created = await this.notifications.create([document], { session });
-      return created[0].toObject() as NotificationResult;
+      const createdObject = created[0].toObject() as NotificationResult;
+      this.scheduleRequestNotificationEmail(createdObject._id, input, session);
+      return createdObject;
     } catch (error) {
       if (!this.isDedupeConflict(error) || session) throw error;
       const duplicate = await this.findByDedupeKey(
@@ -253,5 +280,149 @@ export class NotificationsService {
   private toResponse(item: NotificationResult, isRead: boolean) {
     const { resolvedIsRead: _resolved, recipientUserId, message, ...rest } = item;
     return { ...rest, ...(recipientUserId ? { userId: recipientUserId } : {}), description: message, isRead };
+  }
+
+  private scheduleRequestNotificationEmail(
+    notificationId: Types.ObjectId,
+    input: CreatePersonalNotificationInput,
+    session?: ClientSession,
+  ): void {
+    const resourceType = input.resource?.type.trim().toUpperCase();
+    if (!resourceType || !REQUEST_EMAIL_RESOURCE_TYPES.has(resourceType)) return;
+    if (!this.mailService || !this.users) return;
+
+    const sessionWithEvents = session as SessionWithEndedEvent | undefined;
+    if (sessionWithEvents && typeof sessionWithEvents.once === 'function') {
+      sessionWithEvents.once('ended', () => {
+        void this.dispatchRequestNotificationEmail(notificationId, input, true).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : 'Lỗi không xác định';
+          this.logger.warn(`Không thể gửi email thông báo phiếu: ${message}`);
+        });
+      });
+      return;
+    }
+
+    void this.dispatchRequestNotificationEmail(notificationId, input, false).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Lỗi không xác định';
+      this.logger.warn(`Không thể gửi email thông báo phiếu: ${message}`);
+    });
+  }
+
+  private async dispatchRequestNotificationEmail(
+    notificationId: Types.ObjectId,
+    input: CreatePersonalNotificationInput,
+    verifyPersisted: boolean,
+  ): Promise<void> {
+    if (!this.mailService || !this.users) return;
+    if (verifyPersisted) {
+      const persisted = await this.notifications.exists({ _id: notificationId }).exec();
+      if (!persisted) return;
+    }
+
+    const user = await this.users
+      .findOne({ _id: this.toObjectId(input.recipientUserId), isActive: true })
+      .select({ email: 1, displayName: 1, employeeId: 1 })
+      .lean()
+      .exec();
+    if (!user?.email) return;
+
+    const requestId = this.resolveRequestId(input);
+    const [employee, request] = await Promise.all([
+      user.employeeId && this.employees
+        ? this.employees.findById(user.employeeId).select({ fullName: 1 }).lean().exec()
+        : Promise.resolve(null),
+      requestId && this.requests
+        ? this.requests
+            .findById(requestId)
+            .select({
+              requestNo: 1,
+              title: 1,
+              status: 1,
+              currentStepKey: 1,
+              requesterSnapshot: 1,
+              formSnapshot: 1,
+              workflowSnapshot: 1,
+            })
+            .lean()
+            .exec()
+        : Promise.resolve(null),
+    ]);
+
+    const stepKey = this.dataString(input.data, 'stepKey') ?? request?.currentStepKey;
+    const stepName = this.resolveStepName(request?.workflowSnapshot, stepKey);
+    const formName = this.resolveFormName(request?.formSnapshot);
+    const requestNo = request?.requestNo ?? this.dataString(input.data, 'requestNo');
+
+    await this.mailService.sendRequestNotification({
+      toEmail: user.email,
+      recipientName: employee?.fullName ?? user.displayName ?? user.email,
+      type: input.type,
+      title: input.title.trim(),
+      message: input.message.trim(),
+      requestNo,
+      requestTitle: request?.title,
+      formName,
+      requesterName: request?.requesterSnapshot?.fullName,
+      requesterDepartment: request?.requesterSnapshot?.departmentName,
+      stepName,
+      statusLabel: request?.status ? requestStatusLabels[request.status] : undefined,
+      actionUrl: this.buildActionUrl(input, requestId),
+    });
+  }
+
+  private resolveRequestId(input: CreatePersonalNotificationInput): string | undefined {
+    const resourceType = input.resource?.type.trim().toUpperCase();
+    if (resourceType === 'REQUEST' && input.resource?.id) {
+      return input.resource.id.toString();
+    }
+    return this.dataString(input.data, 'requestId');
+  }
+
+  private resolveStepName(
+    workflowSnapshot: Record<string, unknown> | undefined,
+    stepKey: string | undefined,
+  ): string | undefined {
+    if (!workflowSnapshot || !stepKey) return stepKey;
+    const steps = workflowSnapshot.steps;
+    if (!Array.isArray(steps)) return stepKey;
+    const matched = steps.find(
+      (step): step is { stepKey?: unknown; name?: unknown } =>
+        Boolean(step && typeof step === 'object' && (step as { stepKey?: unknown }).stepKey === stepKey),
+    );
+    return typeof matched?.name === 'string' && matched.name.trim() ? matched.name.trim() : stepKey;
+  }
+
+  private resolveFormName(formSnapshot: Record<string, unknown> | undefined): string | undefined {
+    const name = formSnapshot?.name;
+    return typeof name === 'string' && name.trim() ? name.trim() : undefined;
+  }
+
+  private buildActionUrl(
+    input: CreatePersonalNotificationInput,
+    requestId: string | undefined,
+  ): string | undefined {
+    const origin =
+      this.configService?.get<string>('FRONTEND_ORIGIN') ??
+      this.configService?.get<string>('FRONTEND_URL') ??
+      'http://localhost:5173';
+    const baseUrl = origin.split(',')[0]?.trim().replace(/\/+$/, '');
+    if (!baseUrl) return undefined;
+
+    const resourceType = input.resource?.type.trim().toUpperCase();
+    if (resourceType === 'APPROVAL_TASK' && requestId && input.resource?.id) {
+      return `${baseUrl}/requests/${requestId}?from=approval-inbox&taskId=${encodeURIComponent(input.resource.id.toString())}`;
+    }
+    if (resourceType === 'REQUEST' && requestId) {
+      return `${baseUrl}/requests/${requestId}`;
+    }
+    if (input.link?.startsWith('/')) {
+      return `${baseUrl}${input.link}`;
+    }
+    return undefined;
+  }
+
+  private dataString(data: Record<string, unknown> | undefined, key: string): string | undefined {
+    const value = data?.[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
   }
 }

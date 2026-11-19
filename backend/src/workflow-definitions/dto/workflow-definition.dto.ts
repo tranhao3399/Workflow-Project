@@ -22,6 +22,7 @@ import { definitionStatuses, type DefinitionStatus } from '../../form-definition
 import {
   approvalModes,
   assigneeRuleTypes,
+  workflowActionTypes,
   workflowConditionOperators,
   workflowConditionSources,
   workflowEndResults,
@@ -30,6 +31,7 @@ import {
   WORKFLOW_BPMN_EXTENSION_NAMESPACE,
   type ApprovalMode,
   type AssigneeRuleType,
+  type WorkflowActionType,
   type WorkflowConditionOperator,
   type WorkflowConditionSource,
   type WorkflowEndResult,
@@ -60,6 +62,15 @@ export class WorkflowConditionDto {
   @ApiProperty({ example: 1000000 }) @IsDefined() value: unknown;
 }
 
+export class WorkflowActionConfigDto {
+  @ApiProperty({ enum: workflowActionTypes }) @IsIn(workflowActionTypes) actionType: WorkflowActionType;
+  @ApiPropertyOptional({ example: 'so_ngay_nghi' }) @IsOptional() @Transform(trim) @IsString() @MaxLength(80) fieldKey?: string;
+  @ApiPropertyOptional({ default: false }) @IsOptional() @IsBoolean() allowNegative?: boolean;
+  @ApiPropertyOptional({ type: WorkflowAssigneeRuleDto }) @IsOptional() @ValidateNested() @Type(() => WorkflowAssigneeRuleDto) assigneeRule?: WorkflowAssigneeRuleDto;
+  @ApiPropertyOptional() @IsOptional() @Transform(trim) @IsString() @MaxLength(160) notificationTitle?: string;
+  @ApiPropertyOptional() @IsOptional() @Transform(trim) @IsString() @MaxLength(500) notificationMessage?: string;
+}
+
 export class WorkflowStepDto {
   @ApiProperty({ example: 'MANAGER_APPROVAL' }) @Transform(upper) @IsString() @Matches(/^[A-Z][A-Z0-9_]*$/) @MaxLength(80) stepKey: string;
   @ApiProperty({ example: 'Quản lý phê duyệt' }) @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(160) name: string;
@@ -68,14 +79,17 @@ export class WorkflowStepDto {
   @ApiPropertyOptional({ type: WorkflowAssigneeRuleDto }) @IsOptional() @ValidateNested() @Type(() => WorkflowAssigneeRuleDto) assigneeRule?: WorkflowAssigneeRuleDto;
   @ApiPropertyOptional({ enum: approvalModes }) @IsOptional() @IsIn(approvalModes) approvalMode?: ApprovalMode;
   @ApiPropertyOptional({ default: false }) @IsOptional() @IsBoolean() allowSelfApproval?: boolean;
+  @ApiPropertyOptional({ default: true }) @IsOptional() @IsBoolean() allowReassign?: boolean;
   @ApiPropertyOptional({ minimum: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) dueInHours?: number;
   @ApiPropertyOptional({ type: WorkflowConditionDto }) @IsOptional() @ValidateNested() @Type(() => WorkflowConditionDto) condition?: WorkflowConditionDto;
+  @ApiPropertyOptional({ type: WorkflowActionConfigDto }) @IsOptional() @ValidateNested() @Type(() => WorkflowActionConfigDto) actionConfig?: WorkflowActionConfigDto;
   @ApiPropertyOptional({ enum: workflowEndResults }) @IsOptional() @IsIn(workflowEndResults) endResult?: WorkflowEndResult;
   @ApiPropertyOptional() @IsOptional() @Transform(upper) @IsString() @Matches(/^[A-Z][A-Z0-9_]*$/) onApproveStepKey?: string;
   @ApiPropertyOptional() @IsOptional() @Transform(upper) @IsString() @Matches(/^[A-Z][A-Z0-9_]*$/) onRejectStepKey?: string;
   @ApiPropertyOptional() @IsOptional() @Transform(upper) @IsString() @Matches(/^[A-Z][A-Z0-9_]*$/) onRevisionStepKey?: string;
   @ApiPropertyOptional() @IsOptional() @Transform(upper) @IsString() @Matches(/^[A-Z][A-Z0-9_]*$/) onTrueStepKey?: string;
   @ApiPropertyOptional() @IsOptional() @Transform(upper) @IsString() @Matches(/^[A-Z][A-Z0-9_]*$/) onFalseStepKey?: string;
+  @ApiPropertyOptional() @IsOptional() @Transform(upper) @IsString() @Matches(/^[A-Z][A-Z0-9_]*$/) onNextStepKey?: string;
 }
 
 export class CreateWorkflowDefinitionDto {

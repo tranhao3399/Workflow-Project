@@ -107,6 +107,44 @@ export class AssigneeResolverService {
     );
   }
 
+  async resolveNotificationRecipients(
+    request: RequestDocument,
+    rule: RuntimeAssigneeRule,
+    session: ClientSession,
+  ): Promise<ResolvedAssignee[]> {
+    const initialUsers = await this.resolveRuleUsers(request, rule, session);
+    const uniqueUsers = new Map(
+      initialUsers.map((user) => [user._id.toString(), user]),
+    );
+    const candidates = [...uniqueUsers.values()];
+    if (!candidates.length) return [];
+
+    const employeeIds = candidates.flatMap((user) =>
+      user.employeeId ? [user.employeeId] : [],
+    );
+    const employeeDocuments = employeeIds.length
+      ? await this.employees
+          .find({ _id: { $in: employeeIds }, isActive: true })
+          .session(session)
+          .exec()
+      : [];
+    const employeesById = new Map(
+      employeeDocuments.map((employee) => [employee._id.toString(), employee]),
+    );
+
+    const eligible = candidates.filter(
+      (user) => !user.employeeId || employeesById.has(user.employeeId.toString()),
+    );
+    const snapshots = await this.snapshotAssignees(
+      eligible,
+      employeesById,
+      session,
+    );
+    return snapshots.sort((first, second) =>
+      first.userId.toString().localeCompare(second.userId.toString()),
+    );
+  }
+
   private async resolveRuleUsers(
     request: RequestDocument,
     rule: RuntimeAssigneeRule,

@@ -303,6 +303,7 @@ export function FormBuilderEditorPage({
         draft.name,
         draft.fields,
         draft.settings,
+        draft.groupId,
       ),
     [draft],
   );
@@ -341,16 +342,9 @@ export function FormBuilderEditorPage({
   const nameError = displayedIssues.find(
     (issue) => issue.path === 'name',
   )?.message;
-  const leaveFieldError = displayedIssues.find(
-    (issue) => issue.path === 'settings.leaveDeduction.fieldKey',
+  const groupError = displayedIssues.find(
+    (issue) => issue.path === 'groupId',
   )?.message;
-  const leaveNumberFields = useMemo(
-    () =>
-      draft.fields.filter(
-        (field) => field.type === 'NUMBER' && !field.autoFill,
-      ),
-    [draft.fields],
-  );
 
   const previewDefinition = useMemo<FormDefinition>(
     () => ({
@@ -594,7 +588,7 @@ export function FormBuilderEditorPage({
         ? await updateFormDefinition(definition.id, {
             code: draft.code.trim().toUpperCase(),
             name: draft.name.trim(),
-            groupId: draft.groupId || null,
+            groupId: draft.groupId,
             category: draft.category || null,
             description: draft.description.trim(),
             fields,
@@ -603,7 +597,7 @@ export function FormBuilderEditorPage({
         : await createFormDefinition({
             code: draft.code.trim().toUpperCase(),
             name: draft.name.trim(),
-            ...(draft.groupId ? { groupId: draft.groupId } : {}),
+            groupId: draft.groupId,
             ...(draft.category ? { category: draft.category } : {}),
             description: draft.description.trim(),
             fields,
@@ -779,15 +773,15 @@ export function FormBuilderEditorPage({
     ? 'Tạo biểu mẫu'
     : (definition?.name ?? 'Chi tiết biểu mẫu');
   const definitionGroup = definition?.group;
-  const catalogGroupId = initialGroupId ?? definitionGroup?.id;
-  const catalogGroupName = catalogGroupId === 'UNGROUPED'
-    ? 'Chưa phân nhóm'
-    : (
-        formGroups.find((group) => group.id === catalogGroupId)?.name
-        ?? (definitionGroup && definitionGroup.id === catalogGroupId
-          ? definitionGroup.name
-          : undefined)
-      );
+  const catalogGroupId =
+    initialGroupId && initialGroupId !== 'UNGROUPED'
+      ? initialGroupId
+      : definitionGroup?.id;
+  const catalogGroupName =
+    formGroups.find((group) => group.id === catalogGroupId)?.name
+    ?? (definitionGroup && definitionGroup.id === catalogGroupId
+      ? definitionGroup.name
+      : undefined);
 
   return (
     <>
@@ -993,14 +987,21 @@ export function FormBuilderEditorPage({
               {nameError && <small className="field-error">{nameError}</small>}
             </label>
 
-            <div className="form-builder-top-field">
-              <span>Nhóm biểu mẫu</span>
+            <div
+              className="form-builder-top-field"
+              data-form-property="groupId"
+              tabIndex={-1}
+              data-invalid={groupError ? 'true' : undefined}
+            >
+              <span className="required-field-label">Nhóm biểu mẫu</span>
               <FilterSelect
                 ariaLabel="Nhóm biểu mẫu"
                 disabled={!isEditable}
                 value={draft.groupId}
                 options={[
-                  { value: '', label: 'Chưa phân nhóm' },
+                  ...(!draft.groupId
+                    ? [{ value: '', label: 'Chọn nhóm biểu mẫu' }]
+                    : []),
                   ...formGroups
                     .filter(
                       (group) => group.isActive || group.id === draft.groupId,
@@ -1009,6 +1010,7 @@ export function FormBuilderEditorPage({
                 ]}
                 onChange={(value) => changeDraft({ groupId: value })}
               />
+              {groupError && <small className="field-error">{groupError}</small>}
             </div>
 
             <div className="form-builder-top-field">
@@ -1031,95 +1033,6 @@ export function FormBuilderEditorPage({
                 }
               />
             </label>
-
-            <div className="form-builder-leave-settings">
-              <div className="form-builder-leave-toggles">
-                <label className="form-builder-inline-checkbox">
-                  <input
-                    type="checkbox"
-                    disabled={!isEditable}
-                    checked={Boolean(draft.settings.leaveDeduction?.enabled)}
-                    onChange={(event) => {
-                      const enabled = event.target.checked;
-                      changeDraft({
-                        settings: {
-                          ...draft.settings,
-                          leaveDeduction: {
-                            enabled,
-                            fieldKey: enabled
-                              ? (draft.settings.leaveDeduction?.fieldKey ?? leaveNumberFields[0]?.key ?? undefined)
-                              : undefined,
-                            allowNegative: enabled
-                              ? Boolean(draft.settings.leaveDeduction?.allowNegative)
-                              : false,
-                          },
-                        },
-                      });
-                    }}
-                  />
-                  <span>Tự động trừ quỹ ngày phép năm khi phê duyệt</span>
-                </label>
-                {draft.settings.leaveDeduction?.enabled && (
-                  <label className="form-builder-inline-checkbox">
-                    <input
-                      type="checkbox"
-                      disabled={!isEditable}
-                      checked={Boolean(draft.settings.leaveDeduction?.allowNegative)}
-                      onChange={(event) =>
-                        changeDraft({
-                          settings: {
-                            ...draft.settings,
-                            leaveDeduction: {
-                              enabled: true,
-                              fieldKey: draft.settings.leaveDeduction?.fieldKey,
-                              allowNegative: event.target.checked,
-                            },
-                          },
-                        })
-                      }
-                    />
-                    <span>Cho phép trừ âm quỹ phép</span>
-                  </label>
-                )}
-              </div>
-              {draft.settings.leaveDeduction?.enabled && (
-                <div className="form-builder-leave-field-select">
-                  <span className="required-field-label">Trường số ngày nghỉ cần trừ</span>
-                  <div data-form-property="settings.leaveDeduction.fieldKey">
-                    <FilterSelect
-                      ariaLabel="Trường số ngày nghỉ cần trừ"
-                      disabled={!isEditable}
-                      value={draft.settings.leaveDeduction?.fieldKey ?? ''}
-                      options={[
-                        {
-                          value: '',
-                          label: leaveNumberFields.length
-                            ? 'Chọn trường kiểu Số trên biểu mẫu'
-                            : 'Chưa có trường kiểu Số phù hợp',
-                        },
-                        ...leaveNumberFields.map((field) => ({
-                          value: field.key,
-                          label: `${field.label} (${field.key})`,
-                        })),
-                      ]}
-                      onChange={(value) =>
-                        changeDraft({
-                          settings: {
-                            ...draft.settings,
-                            leaveDeduction: {
-                              enabled: true,
-                              fieldKey: value || undefined,
-                              allowNegative: Boolean(draft.settings.leaveDeduction?.allowNegative),
-                            },
-                          },
-                        })
-                      }
-                    />
-                  </div>
-                  {leaveFieldError && <small className="field-error">{leaveFieldError}</small>}
-                </div>
-              )}
-            </div>
           </div>
         )}
       </SurfaceCard>
@@ -2190,7 +2103,7 @@ function emptyDraft(initialGroupId = ''): FormDraft {
   return {
     code: '',
     name: '',
-    groupId: initialGroupId,
+    groupId: initialGroupId !== 'UNGROUPED' ? initialGroupId : '',
     category: '',
     description: '',
     fields,

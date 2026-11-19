@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Clock3, MessageSquareText } from 'lucide-react'
 import {
+  addRequestComment,
   cancelRequest,
   deleteRequest,
   getRequest,
@@ -10,7 +12,7 @@ import {
   updateRequest,
   voidRequest,
 } from '../../services/requests.service'
-import { approveTask, getApprovalTask, rejectTask, requestTaskRevision } from '../../services/approvals.service'
+import { approveTask, getApprovalTask, reassignApprovalTask, rejectTask, requestTaskRevision } from '../../services/approvals.service'
 import { ApiError } from '../../services/api-client'
 import {
   approvalTaskStatus,
@@ -31,11 +33,13 @@ import { ApprovalTaskStatusBadge, RequestStatusBadge } from '../StatusBadge'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { PageHeader } from '../ui/PageHeader'
 import { SurfaceCard } from '../ui/SurfaceCard'
+import { ReassignTaskDialog } from './ReassignTaskDialog'
 
 interface RequestDetailPageProps {
   requestId: string
   currentUserId: string
   taskId?: string
+  viewContext?: 'requester' | 'approver'
   onBack: () => void
   onDeleted: () => void
   onOpenRequest: (requestId: string) => void
@@ -46,7 +50,7 @@ type ConfirmAction = 'cancel' | 'void' | 'delete'
 type DecisionAction = 'approve' | 'reject' | 'revision'
 type AccessError = 'forbidden' | 'not-found' | 'general' | null
 
-export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, onDeleted, onOpenRequest, onNotify }: RequestDetailPageProps) {
+export function RequestDetailPage({ requestId, currentUserId, taskId, viewContext = 'requester', onBack, onDeleted, onOpenRequest, onNotify }: RequestDetailPageProps) {
   const rendererRef = useRef<DynamicFormRendererHandle>(null)
   const [request, setRequest] = useState<RequestRecord | null>(null)
   const [history, setHistory] = useState<ApprovalHistory[]>([])
@@ -61,10 +65,15 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
   const [reason, setReason] = useState('')
   const [decisionAction, setDecisionAction] = useState<DecisionAction | null>(null)
   const [decisionComment, setDecisionComment] = useState('')
+  const [isReassignOpen, setIsReassignOpen] = useState(false)
+  const [chatterTab, setChatterTab] = useState<'COMMENT' | 'HISTORY'>('COMMENT')
+  const [commentInput, setCommentInput] = useState('')
+  const commentInputRef = useRef<HTMLTextAreaElement | null>(null)
   const [migrationReview] = useState<DraftMigrationReviewItem[]>(() => readMigrationReview(requestId))
 
+  const isApproverView = viewContext === 'approver' || Boolean(taskId)
   const fingerprint = useMemo(() => JSON.stringify({ title: title.trim(), formData }), [formData, title])
-  const isDirty = Boolean(request?.availableActions.canEdit && savedFingerprint && fingerprint !== savedFingerprint)
+  const isDirty = Boolean(!isApproverView && request?.availableActions.canEdit && savedFingerprint && fingerprint !== savedFingerprint)
 
   const applyRequest = useCallback((nextRequest: RequestRecord) => {
     const nextTitle = nextRequest.title ?? ''
@@ -81,7 +90,7 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
       getRequestHistory(requestId),
     ])
     let nextTask: ApprovalTask | null = null
-    const contextualTaskId = taskId ?? nextRequest.currentApprovalTaskId
+    const contextualTaskId = isApproverView ? (taskId ?? nextRequest.currentApprovalTaskId) : undefined
     if (contextualTaskId) {
       try {
         nextTask = await getApprovalTask(contextualTaskId)
@@ -90,7 +99,7 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
       }
     }
     return { nextRequest, nextHistory, nextTask }
-  }, [requestId, taskId])
+  }, [isApproverView, requestId, taskId])
 
   const applyBundle = useCallback((bundle: { nextRequest: RequestRecord; nextHistory: ApprovalHistory[]; nextTask: ApprovalTask | null }) => {
     applyRequest(bundle.nextRequest)
@@ -300,20 +309,69 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
     }
   }
 
+  async function confirmReassign(newAssigneeUserId: string, reassignReason: string) {
+    if (!request || !approvalTask || mutation) return
+    setMutation('reassign')
+    try {
+      await reassignApprovalTask(approvalTask.id, newAssigneeUserId, reassignReason)
+      setIsReassignOpen(false)
+      await refreshAfterMutation('Đã chuyển giao task phê duyệt thành công.')
+    } catch (error) {
+      if (isApiErrorCode(error, 'TASK_ALREADY_PROCESSED') || (error instanceof ApiError && error.status === 409)) {
+        setIsReassignOpen(false)
+        await refreshAfterDecisionConflict(error instanceof ApiError && error.message ? error.message : 'Task đã được xử lý hoặc vừa thay đổi. Dữ liệu đã được tải lại.')
+      } else {
+        showMutationError(error, 'Không thể chuyển giao task phê duyệt.')
+      }
+    } finally {
+      setMutation(null)
+    }
+  }
+
+  function handleCommentChange(value: string) {
+    setCommentInput(value)
+    const textarea = commentInputRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 170)}px`
+  }
+
+  async function submitComment() {
+    if (!request || mutation) return
+    const trimmed = commentInput.trim()
+    if (!trimmed) return
+    setMutation('comment')
+    try {
+      const created = await addRequestComment(request.id, trimmed)
+      setHistory((current) => (current.some((item) => item._id === created._id) ? current : [...current, created]))
+      setCommentInput('')
+      if (commentInputRef.current) commentInputRef.current.style.height = 'auto'
+      onNotify('Đã gửi bình luận.')
+    } catch (error) {
+      showMutationError(error, 'Không thể gửi bình luận.')
+    } finally {
+      setMutation(null)
+    }
+  }
+
   if (isLoading) return <LoadingState />
   if (accessError === 'forbidden') return <PermissionDeniedState />
   if (accessError === 'not-found') return <RequestNotFound onBack={onBack} />
   if (accessError || !request) return <ErrorState onRetry={() => void load()} />
 
-  const editable = request.availableActions.canEdit
-  const latestRevision = [...history].reverse().find((item) => item.action === 'REVISION_REQUESTED')
+  const editable = !isApproverView && request.availableActions.canEdit
+  const commentEntries = [...history].filter((item) => item.action === 'COMMENTED').reverse()
+  const auditEntries = history.filter((item) => item.action !== 'COMMENTED')
+  const latestRevision = [...auditEntries].reverse().find((item) => item.action === 'REVISION_REQUESTED')
   const formName = request.formSnapshot?.name ?? request.form?.name ?? `Form v${request.formVersion}`
-  const ownsPendingTask = approvalTask?.status === approvalTaskStatus.pending
+  const ownsPendingTask = isApproverView
+    && approvalTask?.status === approvalTaskStatus.pending
     && approvalTask.assigneeUserId === currentUserId
     && approvalTask.id === request.currentApprovalTaskId
   const canApprove = Boolean(ownsPendingTask && request.availableActions.canApprove && approvalTask.availableActions?.canApprove)
   const canReject = Boolean(ownsPendingTask && request.availableActions.canReject && approvalTask.availableActions?.canReject)
   const canRequestRevision = Boolean(ownsPendingTask && request.availableActions.canRequestRevision && approvalTask.availableActions?.canRequestRevision)
+  const canReassign = Boolean(ownsPendingTask && (request.availableActions.canReassign ?? true) && approvalTask.availableActions?.canReassign)
 
   return <>
     <PageHeader
@@ -365,7 +423,7 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
       </section>
     )}
 
-    {approvalTask && <section className="approval-task-context" aria-label="Task phê duyệt đang xem"><div><span>Task phê duyệt</span><strong>{approvalTask.stepName}</strong></div><div><span>Vòng xử lý</span><strong>Vòng bổ sung {approvalTask.revisionRound} · Lần chạy {approvalTask.stepRunNo}</strong></div><div><span>Hạn xử lý</span><strong>{approvalTask.dueAt ? formatDateTime(approvalTask.dueAt) : 'Không có hạn'}</strong></div><div><ApprovalTaskStatusBadge status={approvalTask.status} />{approvalTask.isOverdue && <span className="approval-overdue-badge">Quá hạn</span>}</div></section>}
+    {isApproverView && approvalTask && <section className="approval-task-context" aria-label="Task phê duyệt đang xem"><div><span>Task phê duyệt</span><strong>{approvalTask.stepName}</strong></div><div><span>Vòng xử lý</span><strong>Vòng bổ sung {approvalTask.revisionRound} · Lần chạy {approvalTask.stepRunNo}</strong></div><div><span>Hạn xử lý</span><strong>{approvalTask.dueAt ? formatDateTime(approvalTask.dueAt) : 'Không có hạn'}</strong></div><div><ApprovalTaskStatusBadge status={approvalTask.status} />{approvalTask.isOverdue && <span className="approval-overdue-badge">Quá hạn</span>}</div></section>}
 
     {request.status === requestStatus.revisionRequested && latestRevision && (
       <section className="request-revision-callout" role="status">
@@ -397,26 +455,140 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
       </SurfaceCard>
 
       <SurfaceCard className="request-history-card">
-        <header className="request-section-heading"><div><h2>Lịch sử xử lý</h2><p>{history.length} hoạt động</p></div></header>
-        {history.length === 0 ? <p className="request-history-empty">Chưa có lịch sử xử lý.</p> : <ol className="request-timeline">{history.map((item) => <li key={item._id} className={item.action === 'REVISION_REQUESTED' ? 'is-revision' : ''}>
-          <span className="request-timeline-marker" aria-hidden="true" />
-          <div><strong className="request-timeline-actor">{formatAuditSentence({ action: item.action, actor: item.actorSnapshot ? { userId: item.actorUserId, fullName: actorName(item), employeeCode: item.actorSnapshot.employeeCode } : undefined, currentUserId, resourceType: 'REQUEST', resourceName: request.title ? `${request.title} (${request.requestNo})` : request.requestNo })}</strong><time>{formatDateTime(item.occurredAt)}</time>{(historyRevisionRound(item) !== undefined || item.stepRunNo !== undefined) && <span className="request-history-cycle">Vòng bổ sung {historyRevisionRound(item) ?? 0} · Lần chạy bước {item.stepRunNo ?? '—'}</span>}{item.comment && <p>{item.comment}</p>}</div>
-        </li>)}</ol>}
+        <header className="request-chatter-heading">
+          <MessageSquareText size={16} aria-hidden="true" />
+          <h2>Trao đổi &amp; Lịch sử</h2>
+        </header>
+
+        <div className="request-chatter-tabs" role="tablist" aria-label="Trao đổi và lịch sử thao tác">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={chatterTab === 'COMMENT'}
+            className={chatterTab === 'COMMENT' ? 'is-active' : undefined}
+            onClick={() => setChatterTab('COMMENT')}
+          >
+            Bình luận ({commentEntries.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={chatterTab === 'HISTORY'}
+            className={chatterTab === 'HISTORY' ? 'is-active' : undefined}
+            onClick={() => setChatterTab('HISTORY')}
+          >
+            Lịch sử thao tác ({auditEntries.length})
+          </button>
+        </div>
+
+        {chatterTab === 'COMMENT' ? (
+          <div className="request-chatter-panel">
+            <div className="request-comment-box">
+              <textarea
+                ref={commentInputRef}
+                rows={2}
+                value={commentInput}
+                maxLength={2000}
+                disabled={mutation !== null}
+                placeholder="Nhập bình luận về phiếu..."
+                onChange={(event) => handleCommentChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                    event.preventDefault()
+                    void submitComment()
+                  }
+                }}
+              />
+              <div className="request-comment-box-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={mutation !== null || !commentInput.trim()}
+                  onClick={() => void submitComment()}
+                >
+                  {mutation === 'comment' ? 'Đang gửi...' : 'Gửi bình luận'}
+                </button>
+              </div>
+            </div>
+
+            {commentEntries.length === 0 ? (
+              <p className="request-history-empty">Chưa có bình luận nào.</p>
+            ) : (
+              <ol className="request-comment-list">
+                {commentEntries.map((item) => {
+                  const name = actorName(item)
+                  const metaParts = [item.actorSnapshot?.employeeCode, item.actorSnapshot?.departmentName].filter(Boolean)
+                  return (
+                    <li key={item._id} className="request-comment-item">
+                      <span className="request-comment-avatar" aria-hidden="true">{actorInitials(name)}</span>
+                      <div className="request-comment-content">
+                        <div className="request-comment-meta">
+                          <strong>{name}</strong>
+                          {metaParts.length > 0 && <span className="request-comment-submeta">{metaParts.join(' · ')}</span>}
+                        </div>
+                        {item.comment && <p className="request-comment-body">{item.comment}</p>}
+                        <time className="request-comment-time">
+                          <Clock3 size={12} aria-hidden="true" />
+                          {formatDateTime(item.occurredAt)}
+                        </time>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ol>
+            )}
+          </div>
+        ) : auditEntries.length === 0 ? (
+          <p className="request-history-empty">Chưa có lịch sử xử lý.</p>
+        ) : (
+          <ol className="request-timeline">
+            {auditEntries.map((item) => (
+              <li key={item._id} className={item.action === 'REVISION_REQUESTED' ? 'is-revision' : ''}>
+                <span className="request-timeline-marker" aria-hidden="true" />
+                <div>
+                  <strong className="request-timeline-actor">
+                    {formatAuditSentence({
+                      action: item.action,
+                      actor: item.actorSnapshot
+                        ? {
+                            userId: item.actorUserId,
+                            fullName: actorName(item),
+                            employeeCode: item.actorSnapshot.employeeCode,
+                          }
+                        : undefined,
+                      currentUserId,
+                      resourceType: 'REQUEST',
+                      resourceName: request.title ? `${request.title} (${request.requestNo})` : request.requestNo,
+                    })}
+                  </strong>
+                  <time>{formatDateTime(item.occurredAt)}</time>
+                  {(historyRevisionRound(item) !== undefined || item.stepRunNo !== undefined) && (
+                    <span className="request-history-cycle">
+                      Vòng bổ sung {historyRevisionRound(item) ?? 0} · Lần chạy bước {item.stepRunNo ?? '—'}
+                    </span>
+                  )}
+                  {item.comment && <p>{item.comment}</p>}
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
       </SurfaceCard>
     </div>
 
     <div className="request-action-bar" aria-label="Thao tác phiếu">
       <div><strong>{request.requestNo}</strong><span>{isDirty ? 'Có thay đổi chưa lưu' : 'Dữ liệu đã được đồng bộ'}</span></div>
       <div className="request-action-buttons">
+        {canReassign && <button className="secondary-button" type="button" disabled={Boolean(mutation)} onClick={() => setIsReassignOpen(true)}>Chuyển người duyệt</button>}
         {canRequestRevision && <button className="secondary-button" type="button" disabled={Boolean(mutation)} onClick={() => { setDecisionComment(''); setDecisionAction('revision') }}>Yêu cầu bổ sung</button>}
         {canReject && <button className="danger-button" type="button" disabled={Boolean(mutation)} onClick={() => { setDecisionComment(''); setDecisionAction('reject') }}>Từ chối</button>}
         {canApprove && <button className="primary-button" type="button" disabled={Boolean(mutation)} onClick={() => { setDecisionComment(''); setDecisionAction('approve') }}>Phê duyệt</button>}
-        {request.availableActions.canDelete && <button className="danger-outline-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('delete') }}>Xóa phiếu nháp</button>}
-        {request.availableActions.canCancel && <button className="secondary-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('cancel') }}>Hủy phiếu</button>}
+        {!isApproverView && request.availableActions.canDelete && <button className="danger-outline-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('delete') }}>Xóa phiếu nháp</button>}
+        {!isApproverView && request.availableActions.canCancel && <button className="secondary-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('cancel') }}>Hủy phiếu</button>}
         {request.availableActions.canVoid && <button className="danger-button" type="button" disabled={Boolean(mutation)} onClick={() => { setReason(''); setConfirmAction('void') }}>Vô hiệu hóa</button>}
         {editable && <button className="secondary-button" type="button" disabled={Boolean(mutation) || !isDirty} onClick={() => void saveDraft()}>{mutation === 'save' ? 'Đang lưu...' : 'Lưu nháp'}</button>}
-        {request.availableActions.canSubmit && <button className="primary-button" type="button" disabled={Boolean(mutation)} onClick={() => void send('submit')}>{mutation === 'submit' ? 'Đang gửi...' : 'Gửi phiếu'}</button>}
-        {request.availableActions.canResubmit && <button className="primary-button" type="button" disabled={Boolean(mutation)} onClick={() => void send('resubmit')}>{mutation === 'resubmit' ? 'Đang gửi...' : 'Gửi lại phiếu'}</button>}
+        {!isApproverView && request.availableActions.canSubmit && <button className="primary-button" type="button" disabled={Boolean(mutation)} onClick={() => void send('submit')}>{mutation === 'submit' ? 'Đang gửi...' : 'Gửi phiếu'}</button>}
+        {!isApproverView && request.availableActions.canResubmit && <button className="primary-button" type="button" disabled={Boolean(mutation)} onClick={() => void send('resubmit')}>{mutation === 'resubmit' ? 'Đang gửi...' : 'Gửi lại phiếu'}</button>}
       </div>
     </div>
 
@@ -441,6 +613,17 @@ export function RequestDetailPage({ requestId, currentUserId, taskId, onBack, on
       onCancel={() => { if (!mutation) { setDecisionAction(null); setDecisionComment('') } }}
       onConfirm={() => void confirmDecision()}
     ><label className="request-reason-field"><span>{decisionAction === 'approve' ? 'Ghi chú (không bắt buộc)' : decisionAction === 'reject' ? 'Lý do từ chối' : 'Nội dung cần bổ sung'} {decisionAction !== 'approve' && <b aria-hidden="true">*</b>}</span><textarea rows={4} maxLength={2000} value={decisionComment} onChange={(event) => setDecisionComment(event.target.value)} autoFocus /></label></ConfirmDialog>}
+
+    {isReassignOpen && approvalTask && (
+      <ReassignTaskDialog
+        taskId={approvalTask.id}
+        requestNo={request.requestNo}
+        stepName={approvalTask.stepName}
+        isSubmitting={mutation === 'reassign'}
+        onCancel={() => { if (!mutation) setIsReassignOpen(false) }}
+        onConfirm={(newAssigneeUserId, reassignReason) => void confirmReassign(newAssigneeUserId, reassignReason)}
+      />
+    )}
   </>
 }
 
@@ -450,6 +633,13 @@ function RequestNotFound({ onBack }: { onBack: () => void }) {
 
 function actorName(item: ApprovalHistory): string {
   return item.actorSnapshot?.fullName || 'Hệ thống'
+}
+
+function actorInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return 'HT'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return `${parts[0][0] ?? ''}${parts[parts.length - 1][0] ?? ''}`.toUpperCase()
 }
 
 function historyRevisionRound(item: ApprovalHistory): number | undefined {

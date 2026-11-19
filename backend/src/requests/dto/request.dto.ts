@@ -55,6 +55,15 @@ export class RequestReasonDto {
   reason: string;
 }
 
+export class RequestCommentDto {
+  @ApiProperty({ maxLength: 2000, example: 'Nhờ bộ phận liên quan kiểm tra thêm chứng từ đính kèm.' })
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty({ message: 'Vui lòng nhập nội dung bình luận.' })
+  @MaxLength(2000)
+  comment: string;
+}
+
 export const requestSortFields = [
   'requestNo',
   'title',

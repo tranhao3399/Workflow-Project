@@ -15,7 +15,7 @@ import { withQuery } from './query-params'
 export interface CreateFormDefinitionInput {
   code: string
   name: string
-  groupId?: string
+  groupId: string
   category?: FormCategory
   description?: string
   fields: FormField[]
@@ -25,7 +25,7 @@ export interface CreateFormDefinitionInput {
 export interface UpdateFormDefinitionInput {
   code?: string
   name?: string
-  groupId?: string | null
+  groupId?: string
   category?: FormCategory | null
   description?: string
   fields?: FormField[]
@@ -113,7 +113,7 @@ export async function deleteFormDefinition(id: string): Promise<{ id: string }> 
   })).data
 }
 
-export async function assignFormDefinitionGroup(id: string, groupId: string | null): Promise<void> {
+export async function assignFormDefinitionGroup(id: string, groupId: string): Promise<void> {
   await apiClient(`/form-definitions/${encodeURIComponent(id)}/group`, {
     method: 'PATCH',
     body: JSON.stringify({ groupId }),

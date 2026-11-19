@@ -45,7 +45,7 @@ interface WorkflowDraft {
   formDefinitionId: string
 }
 
-const emptyReferenceData: WorkflowBuilderReferenceData = { roles: [], positions: [], users: [] }
+const emptyReferenceData: WorkflowBuilderReferenceData = { roles: [], positions: [], departments: [], employees: [], users: [] }
 
 export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDefinitionId, canCreate, canUpdate, canDeleteDraft, canPublishWorkflow, canPublishPackage, canCloneWorkflow, canClonePackage, onBack, onOpen, onNotify }: WorkflowBuilderEditorPageProps) {
   const canvasRef = useRef<WorkflowGraphCanvasHandle>(null)
@@ -62,7 +62,6 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
   const [loadError, setLoadError] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
   const [isSaving, setIsSaving] = useState(false)
-  const [isValidating, setIsValidating] = useState(false)
   const [isPublishing, setIsPublishing] = useState(false)
   const [isCloning, setIsCloning] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -201,33 +200,6 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
     if (!saved) return
     onNotify(wasNew ? 'Tạo Workflow BPMN nháp thành công.' : 'Lưu Workflow BPMN thành công.')
     if (wasNew) onOpen(saved.id, true)
-  }
-
-  async function validateDiagram(): Promise<WorkflowDefinition | null> {
-    if (isValidating) return null
-    setIsValidating(true)
-    setGeneralError('')
-    try {
-      let target = definition
-      if (!target) target = await persist()
-      if (!target) return null
-      const bpmnXml = await canvasRef.current?.exportXml()
-      if (!bpmnXml) throw new Error('Không thể lấy BPMN XML từ trình thiết kế.')
-      const result = await validateWorkflowDefinition(target.id, bpmnXml)
-      setServerIssues(result.errors)
-      if (!result.valid) {
-        focusIssue(result.errors[0])
-        onNotify('Quy trình còn lỗi cần xử lý.', 'error')
-        return null
-      }
-      onNotify('Quy trình BPMN hợp lệ và sẵn sàng công bố.')
-      return target
-    } catch (error) {
-      handleApiError(error)
-      return null
-    } finally {
-      setIsValidating(false)
-    }
   }
 
   async function publish() {
@@ -369,9 +341,8 @@ export function WorkflowBuilderEditorPage({ workflowDefinitionId, initialFormDef
         {!isDraft && canCloneWorkflow && definition?.formDefinition?.status === 'PUBLISHED' && <button className="primary-button compact-button" type="button" disabled={isCloning} onClick={() => setConfirmAction('CLONE_WORKFLOW')}>Chỉ cập nhật quy trình</button>}
         {!isDraft && canClonePackage && <button className="secondary-button compact-button" type="button" disabled={isCloning} onClick={() => setConfirmAction('CLONE_PACKAGE')}>Tạo phiên bản Form + Workflow</button>}
         {definition?.status === 'DRAFT' && canDeleteDraft && <button className="danger-outline-button compact-button form-builder-delete-draft-button" type="button" disabled={isSaving} onClick={() => setConfirmAction('DELETE')}>Xóa bản nháp</button>}
-        {isEditable && <button className="secondary-button compact-button" type="button" disabled={isSaving || isValidating || isPublishing || (!isDirty && Boolean(definition))} onClick={() => void save()}>{isSaving ? 'Đang lưu...' : 'Lưu nháp'}</button>}
-        {isEditable && <button className="secondary-button compact-button" type="button" disabled={isSaving || isValidating || isPublishing} onClick={() => void validateDiagram()}>{isValidating ? 'Đang kiểm tra...' : 'Kiểm tra quy trình'}</button>}
-        {isEditable && canPublish && <button className="primary-button compact-button" type="button" disabled={isSaving || isValidating || isPublishing} onClick={() => setConfirmAction('PUBLISH')}>{isPublishing ? 'Đang công bố...' : 'Công bố'}</button>}
+        {isEditable && <button className="secondary-button compact-button" type="button" disabled={isSaving || isPublishing || (!isDirty && Boolean(definition))} onClick={() => void save()}>{isSaving ? 'Đang lưu...' : 'Lưu nháp'}</button>}
+        {isEditable && canPublish && <button className="primary-button compact-button" type="button" disabled={isSaving || isPublishing} onClick={() => setConfirmAction('PUBLISH')}>{isPublishing ? 'Đang công bố...' : 'Công bố'}</button>}
       </div>
     </section>
 

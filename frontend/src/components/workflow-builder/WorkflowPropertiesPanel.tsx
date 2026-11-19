@@ -1,15 +1,17 @@
+import { useEffect, useRef, useState } from 'react'
 import type {
   AssigneeRuleType,
   FormDefinition,
   FormField,
+  WorkflowActionType,
   WorkflowBuilderReferenceData,
   WorkflowDefinition,
   WorkflowGraphValidationError,
 } from '../../types/workflow'
-import { approvalModes, legacyAssigneeRuleTypes, selectableAssigneeRuleTypes, workflowConditionSources, workflowEndResults } from '../../types/workflow'
+import { approvalModes, legacyAssigneeRuleTypes, selectableAssigneeRuleTypes, workflowActionTypes, workflowConditionSources, workflowEndResults } from '../../types/workflow'
 import { operatorOptionsForField } from '../../utils/workflow-builder'
 import { FilterSelect } from '../ui/FilterSelect'
-import { assigneeRuleLabels, type BpmnNodePatch, type BpmnNodeSelection } from './bpmn-workflow'
+import { assigneeRuleLabels, workflowActionTypeLabels, type BpmnNodePatch, type BpmnNodeSelection } from './bpmn-workflow'
 
 interface WorkflowDraftProperties {
   code: string
@@ -34,7 +36,8 @@ interface WorkflowPropertiesPanelProps {
 
 const requesterAttributes = [
   { value: 'employeeCode', label: 'Mã nhân viên' },
-  { value: 'departmentId', label: 'Phòng ban' },
+  { value: 'workUnitId', label: 'Đơn vị làm việc' },
+  { value: 'departmentId', label: 'Phòng ban chuyên môn' },
   { value: 'positionId', label: 'Chức danh' },
   { value: 'managerEmployeeId', label: 'Quản lý trực tiếp' },
 ]
@@ -53,7 +56,15 @@ export function WorkflowPropertiesPanel({ workflow, definition, forms, selection
 
   const elementError = (suffix?: string) => issues.find((item) => item.elementId === selection.elementId && (!suffix || item.path.endsWith(suffix)))?.message
   const flowOptions = [{ value: '', label: 'Chọn đường nối' }, ...selection.outgoingFlows.map((flow) => ({ value: flow.id, label: flow.label }))]
-  const badgeClass = selection.kind === 'APPROVAL' ? 'type-approval' : selection.kind === 'CONDITION' ? 'type-condition' : selection.kind === 'END' ? 'type-end' : ''
+  const badgeClass = selection.kind === 'APPROVAL'
+    ? 'type-approval'
+    : selection.kind === 'ACTION'
+      ? 'type-action'
+      : selection.kind === 'CONDITION'
+        ? 'type-condition'
+        : selection.kind === 'END'
+          ? 'type-end'
+          : ''
 
   return <div className="workflow-properties-body">
     <div className="workflow-node-property-heading"><span className={`workflow-node-chip ${badgeClass}`}>{selectionKindLabel(selection.kind)}</span><button className="text-action-button" type="button" onClick={onClearSelection}>Workflow</button></div>
@@ -64,7 +75,8 @@ export function WorkflowPropertiesPanel({ workflow, definition, forms, selection
 
     {selection.kind === 'START' && <div className="workflow-start-help"><strong>Start Event</strong><p>Workflow phải có đúng một Start Event và đúng một đường nối đi ra.</p></div>}
     {selection.kind === 'APPROVAL' && <ApprovalProperties selection={selection} error={elementError} disabled={disabled} options={flowOptions} referenceData={referenceData} update={onNodeChange} />}
-    {selection.kind === 'CONDITION' && <ConditionProperties selection={selection} form={forms.find((form) => form.id === workflow.formDefinitionId)} error={elementError} disabled={disabled} options={flowOptions} update={onNodeChange} />}
+    {selection.kind === 'ACTION' && <ActionProperties selection={selection} form={forms.find((form) => form.id === workflow.formDefinitionId)} error={elementError} disabled={disabled} options={flowOptions} referenceData={referenceData} update={onNodeChange} />}
+    {selection.kind === 'CONDITION' && <ConditionProperties selection={selection} form={forms.find((form) => form.id === workflow.formDefinitionId)} error={elementError} disabled={disabled} options={flowOptions} referenceData={referenceData} update={onNodeChange} />}
     {selection.kind === 'END' && <PropertyField label="Kết quả cuối" required error={elementError('endResult')}><FilterSelect disabled={disabled} ariaLabel="Kết quả kết thúc" value={selection.endResult} options={workflowEndResults.map((value) => ({ value, label: value === 'APPROVED' ? 'Phê duyệt' : 'Từ chối' }))} onChange={(value) => onNodeChange({ endResult: value as 'APPROVED' | 'REJECTED' })} /></PropertyField>}
     {!disabled && selection.kind !== 'SEQUENCE_FLOW' && <button className="danger-outline-button workflow-delete-element" type="button" onClick={onDeleteNode}>Xóa phần tử</button>}
   </div>
@@ -84,10 +96,12 @@ function ApprovalProperties({ selection, error, disabled, options, referenceData
     ...(legacyAssigneeRuleTypes.includes(rule.type as never) ? [rule.type] : []),
     ...selectableAssigneeRuleTypes,
   ].map((type) => ({ value: type, label: assigneeRuleLabels[type] }))
+  const usesLegacyBranching = Boolean(selection.approveFlow || selection.rejectFlow) && !selection.nextFlow
   return <>
     <section className="workflow-property-section"><h3>Phê duyệt</h3>
       <PropertyField label="Chế độ" required error={error('approvalMode')}><FilterSelect disabled={disabled} ariaLabel="Chế độ phê duyệt" value={selection.approvalMode} options={approvalModes.map((mode) => ({ value: mode, label: mode === 'ANY' ? 'Một người duyệt' : mode === 'ALL' ? 'Tất cả cùng duyệt' : 'Đa số duyệt' }))} onChange={(value) => update({ approvalMode: value as BpmnNodeSelection['approvalMode'] })} /></PropertyField>
       <label className="form-builder-toggle"><input type="checkbox" checked={selection.allowSelfApproval} disabled={disabled} onChange={(event) => update({ allowSelfApproval: event.target.checked })} /><span>Cho phép tự phê duyệt</span></label>
+      <label className="form-builder-toggle"><input type="checkbox" checked={selection.allowReassign} disabled={disabled} onChange={(event) => update({ allowReassign: event.target.checked })} /><span>Cho phép chuyển người duyệt (Assign)</span></label>
       <PropertyField label="Thời hạn xử lý (giờ)"><input type="number" min="1" value={selection.dueInHours ?? ''} disabled={disabled} onChange={(event) => update({ dueInHours: event.target.value ? Number(event.target.value) : undefined })} /></PropertyField>
     </section>
     <section className="workflow-property-section"><h3>Người phê duyệt</h3>
@@ -97,29 +111,153 @@ function ApprovalProperties({ selection, error, disabled, options, referenceData
       {rule.type === 'SPECIFIC_USER' && <CheckboxCollection label="Người dùng" error={error('userIds')} items={referenceData.users.map((item) => ({ id: item.id, label: `${item.name} · ${item.email}` }))} selected={rule.userIds ?? []} disabled={disabled} onChange={(userIds) => setRule({ userIds })} />}
     </section>
     <section className="workflow-property-section"><h3>Nhánh xử lý</h3>
-      <PropertyField label="Khi duyệt" required error={error('approveFlow')}><FilterSelect disabled={disabled} ariaLabel="Đường nối khi duyệt" value={selection.approveFlow} options={options} onChange={(value) => update({ approveFlow: value })} /></PropertyField>
-      <PropertyField label="Khi từ chối" required error={error('rejectFlow')}><FilterSelect disabled={disabled} ariaLabel="Đường nối khi từ chối" value={selection.rejectFlow} options={options} onChange={(value) => update({ rejectFlow: value })} /></PropertyField>
+      {usesLegacyBranching ? (
+        <>
+          <PropertyField label="Khi duyệt" required error={error('approveFlow')}><FilterSelect disabled={disabled} ariaLabel="Đường nối khi duyệt" value={selection.approveFlow} options={options} onChange={(value) => update({ approveFlow: value })} /></PropertyField>
+          <PropertyField label="Khi từ chối" required error={error('rejectFlow')}><FilterSelect disabled={disabled} ariaLabel="Đường nối khi từ chối" value={selection.rejectFlow} options={options} onChange={(value) => update({ rejectFlow: value })} /></PropertyField>
+        </>
+      ) : (
+        <PropertyField label="Bước tiếp theo" required error={error('nextFlow') ?? error('onNextStepKey')}><FilterSelect disabled={disabled} ariaLabel="Đường nối bước tiếp theo" value={selection.nextFlow} options={options} onChange={(value) => update({ nextFlow: value })} /></PropertyField>
+      )}
       <PropertyField label="Khi yêu cầu bổ sung"><FilterSelect disabled={disabled} ariaLabel="Đường nối khi yêu cầu bổ sung" value={selection.revisionFlow} options={[{ value: '', label: 'Quay lại bước hiện tại' }, ...options.filter((option) => option.value)]} onChange={(value) => update({ revisionFlow: value })} /></PropertyField>
     </section>
   </>
 }
 
-function ConditionProperties({ selection, form, error, disabled, options, update }: {
+function ActionProperties({ selection, form, error, disabled, options, referenceData, update }: {
   selection: BpmnNodeSelection
   form?: FormDefinition
   error: (suffix?: string) => string | undefined
   disabled: boolean
   options: Array<{ value: string; label: string }>
+  referenceData: WorkflowBuilderReferenceData
+  update: (patch: BpmnNodePatch) => void
+}) {
+  const numberFields = (form?.fields ?? []).filter((item) => item.type === 'NUMBER' && !item.autoFill)
+  const rule = selection.actionAssigneeRule
+  const setRule = (patch: Partial<typeof rule>) => update({ actionAssigneeRule: { ...rule, ...patch, includeInactive: false } })
+  const assigneeRuleOptions = [
+    ...(legacyAssigneeRuleTypes.includes(rule.type as never) ? [rule.type] : []),
+    ...selectableAssigneeRuleTypes,
+  ].map((type) => ({ value: type, label: assigneeRuleLabels[type] }))
+
+  return <>
+    <section className="workflow-property-section"><h3>Hành động tự động (Action Catalog)</h3>
+      <PropertyField label="Loại hành động" required error={error('actionType')}>
+        <FilterSelect
+          disabled={disabled}
+          ariaLabel="Loại hành động tự động"
+          value={selection.actionType}
+          options={workflowActionTypes.map((type) => ({ value: type, label: workflowActionTypeLabels[type] }))}
+          onChange={(value) => update({
+            actionType: value as WorkflowActionType,
+            actionFieldKey: value === 'SEND_NOTIFICATION' ? '' : (selection.actionFieldKey || numberFields[0]?.key || ''),
+          })}
+        />
+      </PropertyField>
+
+      {(selection.actionType === 'BALANCE_DEDUCT' || selection.actionType === 'BALANCE_ADD') && (
+        <>
+          <PropertyField label={selection.actionType === 'BALANCE_DEDUCT' ? 'Trường số ngày nghỉ cần trừ' : 'Trường số ngày phép cộng thêm'} required error={error('fieldKey')}>
+            <FilterSelect
+              disabled={disabled}
+              ariaLabel="Trường số ngày phép trên Form"
+              value={selection.actionFieldKey}
+              options={[
+                { value: '', label: numberFields.length ? 'Chọn trường kiểu Số trên Form' : 'Chưa có trường kiểu Số phù hợp' },
+                ...numberFields.map((field) => ({ value: field.key, label: `${field.label} (${field.key})` })),
+              ]}
+              onChange={(value) => update({ actionFieldKey: value })}
+            />
+          </PropertyField>
+          {selection.actionType === 'BALANCE_DEDUCT' && (
+            <label className="form-builder-toggle">
+              <input type="checkbox" checked={selection.actionAllowNegative} disabled={disabled} onChange={(event) => update({ actionAllowNegative: event.target.checked })} />
+              <span>Cho phép trừ âm quỹ phép năm</span>
+            </label>
+          )}
+        </>
+      )}
+
+      {selection.actionType === 'SEND_NOTIFICATION' && (
+        <>
+          <PropertyField label="Người nhận thông báo" required error={error('assigneeRule')}>
+            <FilterSelect
+              disabled={disabled}
+              ariaLabel="Quy tắc người nhận thông báo"
+              value={rule.type}
+              options={assigneeRuleOptions}
+              onChange={(value) => update({ actionAssigneeRule: { type: value as AssigneeRuleType, includeInactive: false } })}
+            />
+          </PropertyField>
+          {(rule.type === 'ROLE' || rule.type === 'ROLE_IN_REQUESTER_DEPARTMENT') && <CheckboxCollection label="Vai trò nhận thông báo" error={error('roleIds')} items={referenceData.roles.map((item) => ({ id: item.id, label: `${item.name} (${item.key})` }))} selected={rule.roleIds ?? []} disabled={disabled} onChange={(roleIds) => setRule({ roleIds })} />}
+          {rule.type === 'POSITION_IN_REQUESTER_DEPARTMENT' && <CheckboxCollection label="Chức danh nhận thông báo" error={error('positionIds')} items={referenceData.positions.map((item) => ({ id: item.id, label: `${item.name} (${item.code})` }))} selected={rule.positionIds ?? []} disabled={disabled} onChange={(positionIds) => setRule({ positionIds })} />}
+          {rule.type === 'SPECIFIC_USER' && <CheckboxCollection label="Người dùng nhận thông báo" error={error('userIds')} items={referenceData.users.map((item) => ({ id: item.id, label: `${item.name} · ${item.email}` }))} selected={rule.userIds ?? []} disabled={disabled} onChange={(userIds) => setRule({ userIds })} />}
+          <PropertyField label="Tiêu đề thông báo (tùy chọn)">
+            <input type="text" maxLength={160} placeholder="Mặc định theo tên bước" value={selection.actionNotificationTitle} disabled={disabled} onChange={(event) => update({ actionNotificationTitle: event.target.value })} />
+          </PropertyField>
+          <PropertyField label="Nội dung thông báo (tùy chọn)">
+            <textarea rows={3} maxLength={500} placeholder="Mặc định thông báo mã phiếu và tên người gửi" value={selection.actionNotificationMessage} disabled={disabled} onChange={(event) => update({ actionNotificationMessage: event.target.value })} />
+          </PropertyField>
+        </>
+      )}
+    </section>
+    <section className="workflow-property-section"><h3>Nhánh xử lý</h3>
+      <PropertyField label="Bước tiếp theo" required error={error('nextFlow') ?? error('onNextStepKey')}>
+        <FilterSelect disabled={disabled} ariaLabel="Đường nối bước tiếp theo" value={selection.nextFlow} options={options} onChange={(value) => update({ nextFlow: value })} />
+      </PropertyField>
+    </section>
+  </>
+}
+
+const conditionSourceLabels: Record<BpmnNodeSelection['conditionSource'], string> = {
+  FORM_FIELD: 'Trường trên Form',
+  REQUESTER_ATTRIBUTE: 'Thuộc tính người gửi',
+  APPROVAL_OUTCOME: 'Kết quả phê duyệt',
+}
+
+const approvalOutcomeFields = [
+  { value: 'decision', label: 'Kết quả phê duyệt (Duyệt / Từ chối)' },
+]
+
+const approvalOutcomeValues = [
+  { id: 'APPROVED', label: 'Phê duyệt (APPROVED)' },
+  { id: 'REJECTED', label: 'Từ chối (REJECTED)' },
+]
+
+function ConditionProperties({ selection, form, error, disabled, options, referenceData, update }: {
+  selection: BpmnNodeSelection
+  form?: FormDefinition
+  error: (suffix?: string) => string | undefined
+  disabled: boolean
+  options: Array<{ value: string; label: string }>
+  referenceData: WorkflowBuilderReferenceData
   update: (patch: BpmnNodePatch) => void
 }) {
   const field = selection.conditionSource === 'FORM_FIELD' ? form?.fields.find((item) => item.key === selection.conditionFieldKey) : undefined
   const operators = selection.conditionSource === 'FORM_FIELD' ? operatorOptionsForField(field) : ['EQUALS', 'NOT_EQUALS', 'IN'] as const
+  const formFields = (form?.fields ?? []).filter((item) => item.type !== 'FILE' && item.type !== 'TABLE' && item.type !== 'SECTION')
+  const fieldOptions = selection.conditionSource === 'FORM_FIELD'
+    ? [{ value: '', label: 'Chọn dữ liệu' }, ...formFields.map((item) => ({ value: item.key, label: `${item.label} (${item.key})` }))]
+    : selection.conditionSource === 'APPROVAL_OUTCOME'
+      ? approvalOutcomeFields
+      : [{ value: '', label: 'Chọn dữ liệu' }, ...requesterAttributes]
+  const fieldLabel = selection.conditionSource === 'FORM_FIELD'
+    ? 'Trường Form'
+    : selection.conditionSource === 'APPROVAL_OUTCOME'
+      ? 'Dữ liệu kiểm tra'
+      : 'Thuộc tính người gửi'
   return <>
     <section className="workflow-property-section"><h3>Điều kiện</h3>
-      <PropertyField label="Nguồn dữ liệu"><FilterSelect disabled={disabled} ariaLabel="Nguồn điều kiện" value={selection.conditionSource} options={workflowConditionSources.map((source) => ({ value: source, label: source === 'FORM_FIELD' ? 'Trường trên Form' : 'Thuộc tính người gửi' }))} onChange={(value) => update({ conditionSource: value as BpmnNodeSelection['conditionSource'], conditionFieldKey: '', conditionOperator: 'EQUALS', conditionValue: '' })} /></PropertyField>
-      <PropertyField label={selection.conditionSource === 'FORM_FIELD' ? 'Trường Form' : 'Thuộc tính người gửi'} required error={error('fieldKey')}><FilterSelect disabled={disabled} ariaLabel="Dữ liệu điều kiện" value={selection.conditionFieldKey} options={[{ value: '', label: 'Chọn dữ liệu' }, ...(selection.conditionSource === 'FORM_FIELD' ? (form?.fields ?? []).filter((item) => item.type !== 'FILE' && item.type !== 'TABLE').map((item) => ({ value: item.key, label: `${item.label} (${item.key})` })) : requesterAttributes)]} onChange={(value) => update({ conditionFieldKey: value, conditionOperator: 'EQUALS', conditionValue: '' })} /></PropertyField>
-      <PropertyField label="Toán tử" required error={error('operator')}><FilterSelect disabled={disabled} ariaLabel="Toán tử điều kiện" value={selection.conditionOperator} options={operators.map((operator) => ({ value: operator, label: ({ EQUALS: 'Bằng', NOT_EQUALS: 'Khác', IN: 'Nằm trong', GREATER_THAN: 'Lớn hơn', LESS_THAN: 'Nhỏ hơn' })[operator] }))} onChange={(value) => update({ conditionOperator: value as BpmnNodeSelection['conditionOperator'], conditionValue: value === 'IN' ? [] : '' })} /></PropertyField>
-      <ConditionValue field={field} operator={selection.conditionOperator} value={selection.conditionValue} disabled={disabled} onChange={(conditionValue) => update({ conditionValue })} />
+      <PropertyField label="Nguồn dữ liệu"><FilterSelect disabled={disabled} ariaLabel="Nguồn điều kiện" value={selection.conditionSource} options={workflowConditionSources.map((source) => ({ value: source, label: conditionSourceLabels[source] }))} onChange={(value) => {
+        const nextSource = value as BpmnNodeSelection['conditionSource']
+        update(nextSource === 'APPROVAL_OUTCOME'
+          ? { conditionSource: nextSource, conditionFieldKey: 'decision', conditionOperator: 'EQUALS', conditionValue: 'APPROVED' }
+          : { conditionSource: nextSource, conditionFieldKey: '', conditionOperator: 'EQUALS', conditionValue: '' })
+      }} /></PropertyField>
+      <PropertyField label={fieldLabel} required error={error('fieldKey')}><FilterSelect disabled={disabled} ariaLabel="Dữ liệu điều kiện" value={selection.conditionFieldKey} options={fieldOptions} onChange={(value) => update({ conditionFieldKey: value, conditionOperator: 'EQUALS', conditionValue: selection.conditionSource === 'APPROVAL_OUTCOME' ? 'APPROVED' : '' })} /></PropertyField>
+      <PropertyField label="Toán tử" required error={error('operator')}><FilterSelect disabled={disabled} ariaLabel="Toán tử điều kiện" value={selection.conditionOperator} options={operators.map((operator) => ({ value: operator, label: ({ EQUALS: 'Bằng', NOT_EQUALS: 'Khác', IN: 'Nằm trong', GREATER_THAN: 'Lớn hơn', LESS_THAN: 'Nhỏ hơn' })[operator] }))} onChange={(value) => update({ conditionOperator: value as BpmnNodeSelection['conditionOperator'], conditionValue: value === 'IN' ? [] : selection.conditionSource === 'APPROVAL_OUTCOME' ? 'APPROVED' : '' })} /></PropertyField>
+      <ConditionValue key={`${selection.elementId}:${selection.conditionSource}:${selection.conditionFieldKey}:${selection.conditionOperator}`} source={selection.conditionSource} fieldKey={selection.conditionFieldKey} field={field} operator={selection.conditionOperator} value={selection.conditionValue} referenceData={referenceData} disabled={disabled} onChange={(conditionValue) => update({ conditionValue })} />
     </section>
     <section className="workflow-property-section"><h3>Nhánh xử lý</h3>
       <PropertyField label="Nhánh Đúng" required error={error('trueFlow')}><FilterSelect disabled={disabled} ariaLabel="Đường nối nhánh đúng" value={selection.trueFlow} options={options} onChange={(value) => update({ trueFlow: value })} /></PropertyField>
@@ -128,11 +266,111 @@ function ConditionProperties({ selection, form, error, disabled, options, update
   </>
 }
 
-function ConditionValue({ field, operator, value, disabled, onChange }: { field?: FormField; operator: BpmnNodeSelection['conditionOperator']; value: unknown; disabled: boolean; onChange: (value: unknown) => void }) {
-  if (field && ['SELECT', 'RADIO'].includes(field.type) && operator !== 'IN') return <PropertyField label="Giá trị so sánh"><FilterSelect disabled={disabled} ariaLabel="Giá trị điều kiện" value={typeof value === 'string' ? value : ''} options={[{ value: '', label: 'Chọn giá trị' }, ...(field.options ?? []).map((option) => ({ value: option.value, label: option.label }))]} onChange={onChange} /></PropertyField>
-  const type = field && ['NUMBER', 'CURRENCY'].includes(field.type) ? 'number' : field?.type === 'DATE' ? 'date' : field?.type === 'DATETIME' ? 'datetime-local' : 'text'
+function requesterAttributeItems(fieldKey: string, referenceData: WorkflowBuilderReferenceData): Array<{ id: string; label: string }> | null {
+  if (fieldKey === 'departmentId' || fieldKey === 'workUnitId') {
+    const departments = referenceData.departments ?? []
+    return departments.length ? departments.map((item) => ({ id: item.id, label: `${item.name} (${item.code})` })) : null
+  }
+  if (fieldKey === 'positionId') {
+    return referenceData.positions.length ? referenceData.positions.map((item) => ({ id: item.id, label: `${item.name} (${item.code})` })) : null
+  }
+  if (fieldKey === 'managerEmployeeId') {
+    const employees = referenceData.employees ?? []
+    return employees.length ? employees.map((item) => ({ id: item.id, label: `${item.fullName} (${item.employeeCode})` })) : null
+  }
+  return null
+}
+
+function ConditionValue({ source, fieldKey, field, operator, value, referenceData, disabled, onChange }: {
+  source: BpmnNodeSelection['conditionSource']
+  fieldKey: string
+  field?: FormField
+  operator: BpmnNodeSelection['conditionOperator']
+  value: unknown
+  referenceData: WorkflowBuilderReferenceData
+  disabled: boolean
+  onChange: (value: unknown) => void
+}) {
+  if (source === 'APPROVAL_OUTCOME') {
+    if (operator === 'IN') {
+      const selected = Array.isArray(value) ? value.map((item) => String(item)) : []
+      return <CheckboxCollection label="Giá trị so sánh" items={approvalOutcomeValues} selected={selected} disabled={disabled} onChange={onChange} />
+    }
+    const current = typeof value === 'string' ? value : ''
+    return <PropertyField label="Giá trị so sánh"><FilterSelect disabled={disabled} ariaLabel="Giá trị điều kiện" value={current} options={[{ value: '', label: 'Chọn kết quả' }, ...approvalOutcomeValues.map((item) => ({ value: item.id, label: item.label }))]} onChange={onChange} /></PropertyField>
+  }
+  if (source === 'REQUESTER_ATTRIBUTE') {
+    const items = requesterAttributeItems(fieldKey, referenceData)
+    if (items) {
+      if (operator === 'IN') {
+        const selected = Array.isArray(value) ? value.map((item) => String(item)) : []
+        return <CheckboxCollection label="Giá trị so sánh" items={items} selected={selected} disabled={disabled} onChange={onChange} />
+      }
+      const current = typeof value === 'string' ? value : ''
+      const selectOptions = [
+        { value: '', label: 'Chọn giá trị' },
+        ...items.map((item) => ({ value: item.id, label: item.label })),
+        ...(current && !items.some((item) => item.id === current) ? [{ value: current, label: current }] : []),
+      ]
+      return <PropertyField label="Giá trị so sánh"><FilterSelect disabled={disabled} ariaLabel="Giá trị điều kiện" value={current} options={selectOptions} onChange={onChange} /></PropertyField>
+    }
+  }
+
+  if (field?.type === 'BOOLEAN') {
+    if (operator === 'IN') {
+      const booleanItems = [{ id: 'true', label: 'Đúng (Có)' }, { id: 'false', label: 'Sai (Không)' }]
+      const selected = Array.isArray(value) ? value.filter((item): item is boolean => typeof item === 'boolean').map((item) => String(item)) : []
+      return <CheckboxCollection label="Giá trị so sánh" items={booleanItems} selected={selected} disabled={disabled} onChange={(ids) => onChange(ids.map((id) => id === 'true'))} />
+    }
+    const current = typeof value === 'boolean' ? String(value) : ''
+    return <PropertyField label="Giá trị so sánh"><FilterSelect disabled={disabled} ariaLabel="Giá trị điều kiện" value={current} options={[{ value: '', label: 'Chọn giá trị' }, { value: 'true', label: 'Đúng (Có)' }, { value: 'false', label: 'Sai (Không)' }]} onChange={(next) => onChange(next === '' ? '' : next === 'true')} /></PropertyField>
+  }
+
+  if (field && ['SELECT', 'RADIO', 'MULTI_SELECT', 'CHECKBOX'].includes(field.type) && field.options?.length) {
+    const optionItems = field.options.map((option) => ({ id: option.value, label: option.label }))
+    if (operator === 'IN' || ['MULTI_SELECT', 'CHECKBOX'].includes(field.type)) {
+      const selected = Array.isArray(value) ? value.map((item) => String(item)) : []
+      return <CheckboxCollection label="Giá trị so sánh" items={optionItems} selected={selected} disabled={disabled} onChange={onChange} />
+    }
+    return <PropertyField label="Giá trị so sánh"><FilterSelect disabled={disabled} ariaLabel="Giá trị điều kiện" value={typeof value === 'string' ? value : ''} options={[{ value: '', label: 'Chọn giá trị' }, ...field.options.map((option) => ({ value: option.value, label: option.label }))]} onChange={onChange} /></PropertyField>
+  }
+
+  const isNumericField = Boolean(field && ['NUMBER', 'CURRENCY'].includes(field.type))
+  if (operator === 'IN' && isNumericField) {
+    return <NumberListConditionInput value={value} disabled={disabled} onChange={onChange} />
+  }
+
+  const type = isNumericField ? 'number' : field?.type === 'DATE' ? 'date' : field?.type === 'DATETIME' ? 'datetime-local' : 'text'
   const inputValue = Array.isArray(value) ? value.join(', ') : typeof value === 'string' || typeof value === 'number' ? String(value) : ''
   return <PropertyField label={operator === 'IN' ? 'Giá trị (phân cách bằng dấu phẩy)' : 'Giá trị so sánh'}><input type={type} value={inputValue} disabled={disabled} onChange={(event) => onChange(operator === 'IN' ? event.target.value.split(',').map((item) => item.trim()).filter(Boolean) : type === 'number' && event.target.value !== '' ? Number(event.target.value) : event.target.value)} /></PropertyField>
+}
+
+function NumberListConditionInput({ value, disabled, onChange }: { value: unknown; disabled: boolean; onChange: (value: number[]) => void }) {
+  const normalizeNumbers = (input: unknown): number[] => (
+    Array.isArray(input)
+      ? input.filter((item): item is number => typeof item === 'number' && Number.isFinite(item))
+      : []
+  )
+  const initialNumbers = normalizeNumbers(value)
+  const [text, setText] = useState(() => initialNumbers.join(', '))
+  const lastEmittedRef = useRef<string>(JSON.stringify(initialNumbers))
+
+  useEffect(() => {
+    const normalized = normalizeNumbers(value)
+    const serialized = JSON.stringify(normalized)
+    if (serialized !== lastEmittedRef.current) {
+      lastEmittedRef.current = serialized
+      setText(normalized.join(', '))
+    }
+  }, [value])
+
+  return <PropertyField label="Giá trị số (phân cách bằng dấu phẩy)"><input type="text" value={text} disabled={disabled} placeholder="VD: 1, 2, 3" onChange={(event) => {
+    const raw = event.target.value
+    setText(raw)
+    const nextNumbers = raw.split(',').map((item) => item.trim()).filter(Boolean).map(Number).filter((item) => Number.isFinite(item))
+    lastEmittedRef.current = JSON.stringify(nextNumbers)
+    onChange(nextNumbers)
+  }} /></PropertyField>
 }
 
 function CheckboxCollection({ label, items, selected, disabled, error, onChange }: { label: string; items: Array<{ id: string; label: string }>; selected: readonly string[]; disabled: boolean; error?: string; onChange: (ids: string[]) => void }) {
@@ -146,6 +384,7 @@ function PropertyField({ label, required = false, error, children }: { label: st
 function selectionKindLabel(kind: BpmnNodeSelection['kind']): string {
   if (kind === 'START') return 'START EVENT'
   if (kind === 'APPROVAL') return 'USER TASK'
+  if (kind === 'ACTION') return 'SERVICE TASK (ACTION)'
   if (kind === 'CONDITION') return 'EXCLUSIVE GATEWAY'
   if (kind === 'END') return 'END EVENT'
   return 'SEQUENCE FLOW'

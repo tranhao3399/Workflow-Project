@@ -1,4 +1,4 @@
-import type { ApprovalTask, ApprovalTaskFilter, PaginatedResponse } from '../types/workflow'
+import type { ApprovalReassignCandidate, ApprovalTask, ApprovalTaskFilter, PaginatedResponse } from '../types/workflow'
 import { apiClient } from './api-client'
 import type { ApiDataResponse } from './api-client'
 import { withQuery } from './query-params'
@@ -9,6 +9,10 @@ export function listApprovalInbox(filter: ApprovalTaskFilter = {}): Promise<Pagi
 
 export async function getApprovalTask(id: string): Promise<ApprovalTask> {
   return (await apiClient<ApiDataResponse<ApprovalTask>>(`/approvals/tasks/${encodeURIComponent(id)}`)).data
+}
+
+export async function listReassignCandidates(id: string): Promise<ApprovalReassignCandidate[]> {
+  return (await apiClient<ApiDataResponse<ApprovalReassignCandidate[]>>(`/approvals/tasks/${encodeURIComponent(id)}/reassign-candidates`)).data
 }
 
 async function decideApprovalTask(

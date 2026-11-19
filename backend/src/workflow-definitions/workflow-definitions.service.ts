@@ -20,6 +20,7 @@ import { WorkflowDefinition, type WorkflowDefinitionDocument } from './schemas/w
 import { Role } from '../roles/schemas/role.schema.js';
 import { Position } from '../positions/schemas/position.schema.js';
 import { User } from '../users/schemas/user.schema.js';
+import { Department } from '../departments/schemas/department.schema.js';
 import { Employee } from '../employees/schemas/employee.schema.js';
 import { BpmnWorkflowCompilerService } from './bpmn-workflow-compiler.service.js';
 
@@ -36,6 +37,7 @@ export class WorkflowDefinitionsService {
     @InjectModel(Role.name) private readonly roles: Model<Role>,
     @InjectModel(Position.name) private readonly positions: Model<Position>,
     @InjectModel(User.name) private readonly users: Model<User>,
+    @InjectModel(Department.name) private readonly departments: Model<Department>,
     @InjectModel(Employee.name) private readonly employees: Model<Employee>,
     private readonly bpmnCompiler: BpmnWorkflowCompilerService,
     private readonly auditLogs: AuditLogService,
@@ -70,19 +72,28 @@ export class WorkflowDefinitionsService {
   }
 
   async referenceData() {
-    const [roles, positions, users] = await Promise.all([
+    const [roles, positions, users, departments, activeEmployees] = await Promise.all([
       this.roles.find({ isActive: true, permissionKeys: 'APPROVALS.APPROVE_ASSIGNED' }).select({ key: 1, name: 1 }).sort({ name: 1 }).lean().exec(),
       this.positions.find({ isActive: true }).select({ code: 1, name: 1 }).sort({ name: 1 }).lean().exec(),
       this.users.find({ isActive: true }).select({ displayName: 1, email: 1, employeeId: 1 }).sort({ email: 1 }).lean().exec(),
+      this.departments.find({ isActive: true }).select({ code: 1, name: 1, unitType: 1 }).sort({ sortOrder: 1, name: 1 }).lean().exec(),
+      this.employees.find({ isActive: true }).select({ fullName: 1, employeeCode: 1 }).sort({ employeeCode: 1, fullName: 1 }).lean().exec(),
     ]);
-    const employeeIds = users.flatMap((user) => user.employeeId ? [user.employeeId] : []);
-    const employees = employeeIds.length
-      ? await this.employees.find({ _id: { $in: employeeIds }, isActive: true }).select({ fullName: 1, employeeCode: 1 }).lean().exec()
-      : [];
-    const employeeMap = new Map(employees.map((employee) => [employee._id.toString(), employee]));
+    const employeeMap = new Map(activeEmployees.map((employee) => [employee._id.toString(), employee]));
     return {
       roles: roles.map((role) => ({ id: role._id.toString(), key: role.key, name: role.name })),
       positions: positions.map((position) => ({ id: position._id.toString(), code: position.code, name: position.name })),
+      departments: departments.map((department) => ({
+        id: department._id.toString(),
+        code: department.code,
+        name: department.name,
+        unitType: department.unitType,
+      })),
+      employees: activeEmployees.map((employee) => ({
+        id: employee._id.toString(),
+        employeeCode: employee.employeeCode,
+        fullName: employee.fullName,
+      })),
       users: users.flatMap((user) => {
         const employee = user.employeeId ? employeeMap.get(user.employeeId.toString()) : undefined;
         if (user.employeeId && !employee) return [];

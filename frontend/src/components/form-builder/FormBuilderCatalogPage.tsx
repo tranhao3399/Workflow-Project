@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, CopyPlus, FolderOpen, Settings2 } from 'lucide-react'
 import {
   cloneFormDefinition,
@@ -12,7 +12,7 @@ import {
   type FormDefinitionSortField,
   type FormGroup,
 } from '../../types/workflow'
-import { formatDateTime, normalizeSearchText } from '../../utils/formatters'
+import { normalizeSearchText } from '../../utils/formatters'
 import { DefinitionStatusBadge } from '../StatusBadge'
 import { EmptyState, ErrorState, LoadingState } from '../DataStates'
 import { AdvancedFilterPanel } from '../ui/AdvancedFilterPanel'
@@ -35,18 +35,6 @@ interface FormBuilderCatalogPageProps {
   onNotify: (message: string, tone?: 'success' | 'error') => void
 }
 
-interface UngroupedCatalogGroup {
-  id: 'UNGROUPED'
-  code: 'UNGROUPED'
-  name: 'Chưa phân nhóm'
-  description: string
-  isActive: true
-  sortOrder: number
-  formCount: number
-}
-
-type CatalogGroup = FormGroup | UngroupedCatalogGroup
-
 const pageSizes = [10, 20, 50]
 const statusOptions = [
   { value: '', label: 'Tất cả trạng thái' },
@@ -62,8 +50,9 @@ export function FormBuilderCatalogPage({
   onNotify,
 }: FormBuilderCatalogPageProps) {
   const [groups, setGroups] = useState<FormGroup[]>([])
-  const [ungroupedCount, setUngroupedCount] = useState(0)
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(initialGroupId ?? null)
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(
+    initialGroupId && initialGroupId !== 'UNGROUPED' ? initialGroupId : null,
+  )
   const [isManagingGroups, setIsManagingGroups] = useState(false)
   const [items, setItems] = useState<FormDefinition[]>([])
   const [searchInput, setSearchInput] = useState('')
@@ -85,31 +74,15 @@ export function FormBuilderCatalogPage({
   const [cloningId, setCloningId] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const allGroups = useMemo<CatalogGroup[]>(() => [
-    ...groups,
-    {
-      id: 'UNGROUPED',
-      code: 'UNGROUPED',
-      name: 'Chưa phân nhóm',
-      description: 'Các biểu mẫu cũ hoặc chưa được gán vào nhóm.',
-      isActive: true,
-      sortOrder: Number.MAX_SAFE_INTEGER,
-      formCount: ungroupedCount,
-    },
-  ], [groups, ungroupedCount])
-  const selectedGroup = allGroups.find((group) => group.id === selectedGroupId) ?? null
+  const selectedGroup = groups.find((group) => group.id === selectedGroupId) ?? null
+  const hasActiveGroups = groups.some((group) => group.isActive)
   const normalizedGroupSearch = normalizeSearchText(searchInput.trim())
   const visibleGroups = normalizedGroupSearch
-    ? allGroups.filter((group) => normalizeSearchText(`${group.code} ${group.name} ${group.description ?? ''}`).includes(normalizedGroupSearch))
-    : allGroups
+    ? groups.filter((group) => normalizeSearchText(`${group.code} ${group.name} ${group.description ?? ''}`).includes(normalizedGroupSearch))
+    : groups
 
   const loadGroups = useCallback(async () => {
-    const [nextGroups, ungrouped] = await Promise.all([
-      listFormGroups(),
-      listFormDefinitions({ page: 1, limit: 1, ungrouped: true }),
-    ])
-    setGroups(nextGroups)
-    setUngroupedCount(ungrouped.pagination.total)
+    setGroups(await listFormGroups())
   }, [])
 
   useEffect(() => {
@@ -136,7 +109,7 @@ export function FormBuilderCatalogPage({
         limit,
         ...(search ? { search } : {}),
         ...(status ? { status } : {}),
-        ...(selectedGroupId === 'UNGROUPED' ? { ungrouped: true } : { groupId: selectedGroupId }),
+        groupId: selectedGroupId,
         sortBy,
         sortOrder,
       })
@@ -172,7 +145,7 @@ export function FormBuilderCatalogPage({
     }
   }
 
-  function openGroup(group: CatalogGroup) {
+  function openGroup(group: FormGroup) {
     setSelectedGroupId(group.id)
     setSearchInput('')
     setSearch('')
@@ -254,7 +227,7 @@ export function FormBuilderCatalogPage({
       actions={<div className="page-header-actions">
         {selectedGroup && <button className="secondary-button compact-button" type="button" onClick={backToGroups}><ArrowLeft size={14} /> Quay lại nhóm</button>}
         {!selectedGroup && <button className="secondary-button compact-button" type="button" onClick={() => setIsManagingGroups(true)}><Settings2 size={14} /> Quản lý nhóm</button>}
-        {canCreate && (!selectedGroup || selectedGroup.id === 'UNGROUPED' || selectedGroup.isActive) && <button className="primary-button compact-button" type="button" onClick={() => onCreate(selectedGroup && selectedGroup.id !== 'UNGROUPED' ? selectedGroup.id : undefined)}>Tạo biểu mẫu</button>}
+        {canCreate && (selectedGroup ? selectedGroup.isActive : hasActiveGroups) && <button className="primary-button compact-button" type="button" onClick={() => onCreate(selectedGroup?.id)}>Tạo biểu mẫu</button>}
       </div>}
     />
 
@@ -281,10 +254,10 @@ export function FormBuilderCatalogPage({
       </ListToolbar>
 
       {isLoading && (!selectedGroup || !items.length) ? <LoadingState /> : hasError ? <ErrorState onRetry={() => { setIsLoading(true); setReloadVersion((value) => value + 1) }} /> : !selectedGroup ? (
-        visibleGroups.length === 0 ? <EmptyState title="Không tìm thấy nhóm biểu mẫu" description="Thử lại với từ khóa khác." /> : <div className="form-group-card-grid">
+        visibleGroups.length === 0 ? <EmptyState title={groups.length === 0 ? 'Chưa có nhóm biểu mẫu' : 'Không tìm thấy nhóm biểu mẫu'} description={groups.length === 0 ? 'Vui lòng tạo nhóm biểu mẫu trước khi tạo biểu mẫu mới.' : 'Thử lại với từ khóa khác.'} /> : <div className="form-group-card-grid">
           {visibleGroups.map((group) => <button className="form-group-card" type="button" key={group.id} onClick={() => openGroup(group)}>
             <span className="form-group-card-icon"><FolderOpen size={22} /></span>
-            <span className="form-group-card-content"><span className="form-group-card-title"><strong>{group.name}</strong>{group.id !== 'UNGROUPED' && <span className={group.isActive ? 'status-badge status-active' : 'status-badge status-inactive'}>{group.isActive ? 'Hoạt động' : 'Ngưng hoạt động'}</span>}</span><small>{group.code}</small><span>{group.description || 'Nhóm biểu mẫu nội bộ.'}</span></span>
+            <span className="form-group-card-content"><span className="form-group-card-title"><strong>{group.name}</strong><span className={group.isActive ? 'status-badge status-active' : 'status-badge status-inactive'}>{group.isActive ? 'Hoạt động' : 'Ngưng hoạt động'}</span></span><small>{group.code}</small><span>{group.description || 'Nhóm biểu mẫu nội bộ.'}</span></span>
             <span className="form-group-card-count"><strong>{group.formCount}</strong><span>biểu mẫu</span></span>
           </button>)}
         </div>
@@ -294,18 +267,16 @@ export function FormBuilderCatalogPage({
             <SortableTableHeader column="code" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Mã biểu mẫu</SortableTableHeader>
             <SortableTableHeader column="name" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Tên biểu mẫu</SortableTableHeader>
             <SortableTableHeader column="version" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Phiên bản</SortableTableHeader>
-            <th>Số trường</th>
             <SortableTableHeader column="status" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Trạng thái</SortableTableHeader>
-            <th>Người cập nhật</th>
-            <SortableTableHeader column="updatedAt" sortBy={sortBy} sortOrder={sortOrder} showIndicator={hasUserSorted} onSort={changeSort}>Cập nhật lúc</SortableTableHeader>
+            <th>Người tạo</th>
             <th aria-label="Thao tác" />
           </tr></thead>
-          <tbody>{items.length === 0 ? <EmptyTableRow colSpan={8} message="Không tìm thấy biểu mẫu phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id}>
+          <tbody>{items.length === 0 ? <EmptyTableRow colSpan={6} message="Không tìm thấy biểu mẫu phù hợp." /> : items.map((item) => <tr className="form-builder-row" key={item.id}>
             <td><button className="master-code-link" type="button" onClick={() => onOpen(item.id)}>{item.code}</button></td>
             <td><div className="form-builder-catalog-title"><strong>{item.name}</strong></div></td>
             <td><span className="form-builder-version-text">v{item.version}</span></td>
-            <td><span className="form-builder-field-count-badge">{item.fields.length} trường</span></td>
-            <td><DefinitionStatusBadge status={item.status} /></td><td>{item.updatedBy?.name ?? '—'}</td><td>{formatDateTime(item.updatedAt, 'date-first')}</td>
+            <td><DefinitionStatusBadge status={item.status} /></td>
+            <td>{item.createdBy?.name ?? item.updatedBy?.name ?? '—'}</td>
             <td><div className="form-builder-row-actions">
               {item.status !== 'DRAFT' && canCreate && <button className="secondary-button form-builder-clone-btn" type="button" disabled={cloningId === item.id} onClick={() => void clone(item)}><CopyPlus size={13} /><span>{cloningId === item.id ? 'Đang tạo...' : 'Tạo bản nháp'}</span></button>}
             </div></td>

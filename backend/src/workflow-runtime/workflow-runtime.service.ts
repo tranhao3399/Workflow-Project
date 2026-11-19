@@ -14,6 +14,7 @@ import type { RequestDocument } from '../requests/schemas/request.schema.js';
 import {
   approvalModes,
   assigneeRuleTypes,
+  workflowActionTypes,
   workflowConditionOperators,
   workflowConditionSources,
   workflowEndResults,
@@ -25,6 +26,7 @@ import { ConditionEvaluatorService } from './condition-evaluator.service.js';
 import { WorkflowHistoryService } from './workflow-history.service.js';
 import type {
   ApprovalTransitionOutcome,
+  RuntimeActionConfig,
   RuntimeAssigneeRule,
   RuntimeCondition,
   RuntimeWorkflowSnapshot,
@@ -173,11 +175,10 @@ export class WorkflowRuntimeService {
       throw this.invalidSnapshot('Bước hiện tại của phiếu không phải là bước phê duyệt hợp lệ.');
     }
 
-    const targetStepKey = outcome === 'APPROVED'
-      ? currentStep.onApproveStepKey
-      : outcome === 'REJECTED'
-        ? currentStep.onRejectStepKey
-        : currentStep.onRevisionStepKey ?? currentStep.stepKey;
+    const targetStepKey = outcome === 'REVISION_REQUESTED'
+      ? (currentStep.onRevisionStepKey ?? currentStep.stepKey)
+      : currentStep.onNextStepKey
+        ?? (outcome === 'APPROVED' ? currentStep.onApproveStepKey : currentStep.onRejectStepKey);
     if (!targetStepKey) {
       throw this.invalidSnapshot(`Bước ${currentStep.stepKey} thiếu transition cho kết quả ${outcome}.`);
     }
@@ -214,7 +215,13 @@ export class WorkflowRuntimeService {
         stepRunNo: request.currentStepRunNo,
       };
     }
-    return this.advanceWithSnapshot(request, snapshot, targetStepKey, session);
+    return this.advanceWithSnapshot(
+      request,
+      snapshot,
+      targetStepKey,
+      session,
+      outcome === 'APPROVED' || outcome === 'REJECTED' ? outcome : undefined,
+    );
   }
 
   async complete(
@@ -275,6 +282,34 @@ export class WorkflowRuntimeService {
           };
         }
       }
+    } else if (
+      step.endResult === 'REJECTED' &&
+      request.leaveDeductionApplied &&
+      !request.leaveDeductionApplied.refundedAt
+    ) {
+      const refundDays = roundLeaveDays(request.leaveDeductionApplied.days);
+      if (refundDays > 0) {
+        const updatedEmployee = await this.employees
+          .findOneAndUpdate(
+            { _id: request.requesterEmployeeId },
+            { $inc: { annualLeaveDays: refundDays } },
+            { session, returnDocument: 'after' },
+          )
+          .select({ annualLeaveDays: 1 })
+          .exec();
+        request.leaveDeductionApplied = {
+          ...request.leaveDeductionApplied,
+          refundedAt: new Date(),
+        };
+        request.markModified('leaveDeductionApplied');
+        const remainingLeave = (updatedEmployee as unknown as { annualLeaveDays?: unknown } | null)?.annualLeaveDays;
+        leaveDeductionMetadata = {
+          leaveRefundedDays: refundDays,
+          ...(typeof remainingLeave === 'number'
+            ? { remainingAnnualLeaveDays: roundLeaveDays(remainingLeave) }
+            : {}),
+        };
+      }
     }
     request.status = step.endResult;
     request.completedAt = new Date();
@@ -320,6 +355,7 @@ export class WorkflowRuntimeService {
     snapshot: RuntimeWorkflowSnapshot,
     initialStepKey: string,
     session: ClientSession,
+    lastApprovalOutcome?: ApprovalTransitionOutcome,
   ): Promise<WorkflowRuntimeResult> {
     const steps = new Map(snapshot.steps.map((step) => [step.stepKey, step]));
     let stepKey = initialStepKey;
@@ -328,9 +364,20 @@ export class WorkflowRuntimeService {
       if (!step) throw this.invalidSnapshot(`Không tìm thấy Workflow step: ${stepKey}`);
       if (step.type === 'APPROVAL') return this.enterApprovalStep(request, step, session);
       if (step.type === 'END') return this.complete(request, step, session);
+      if (step.type === 'ACTION') {
+        if (!step.actionConfig) {
+          throw this.invalidSnapshot(`Bước hành động ${step.stepKey} thiếu cấu hình actionConfig.`);
+        }
+        if (!step.onNextStepKey) {
+          throw this.invalidSnapshot(`Bước hành động ${step.stepKey} thiếu transition tiếp theo.`);
+        }
+        await this.executeActionStep(request, step, session);
+        stepKey = step.onNextStepKey;
+        continue;
+      }
       if (!step.condition) throw this.invalidSnapshot(`Bước điều kiện ${step.stepKey} thiếu cấu hình condition.`);
 
-      const result = this.conditionEvaluator.evaluate(request, step.condition);
+      const result = this.conditionEvaluator.evaluate(request, step.condition, lastApprovalOutcome);
       await this.history.record(request, {
         stepKey: step.stepKey,
         action: 'CONDITION_EVALUATED',
@@ -386,6 +433,7 @@ export class WorkflowRuntimeService {
       ...this.optionalTransition(value, 'onRevisionStepKey'),
       ...this.optionalTransition(value, 'onTrueStepKey'),
       ...this.optionalTransition(value, 'onFalseStepKey'),
+      ...this.optionalTransition(value, 'onNextStepKey'),
     };
 
     if (type === 'APPROVAL') {
@@ -396,9 +444,200 @@ export class WorkflowRuntimeService {
       };
     }
     if (type === 'CONDITION') return { ...base, condition: this.parseCondition(value.condition, index) };
+    if (type === 'ACTION') return { ...base, actionConfig: this.parseActionConfig(value.actionConfig, index) };
     return {
       ...base,
       endResult: this.enumValue(value.endResult, workflowEndResults, `steps.${index}.endResult`),
+    };
+  }
+
+  private async executeActionStep(
+    request: RequestDocument,
+    step: RuntimeWorkflowStep,
+    session: ClientSession,
+  ): Promise<void> {
+    const config = step.actionConfig!;
+    const stepRunNo = (request.currentStepRunNo ?? 0) + 1;
+    request.currentStepRunNo = stepRunNo;
+
+    if (config.actionType === 'BALANCE_DEDUCT') {
+      if (request.leaveDeductionApplied && !request.leaveDeductionApplied.refundedAt) {
+        await this.history.record(request, {
+          stepKey: step.stepKey,
+          stepRunNo,
+          action: 'ACTION_EXECUTED',
+          comment: `Bước tự động "${step.name}" bỏ qua khấu trừ trùng (đã trừ ${request.leaveDeductionApplied.days} ngày phép).`,
+          metadata: {
+            actionType: config.actionType,
+            skippedDuplicate: true,
+            leaveDeductedDays: request.leaveDeductionApplied.days,
+          },
+        }, session);
+        return;
+      }
+      const days = extractLeaveDaysFromFormData(request.formData, config.fieldKey);
+      if (days === undefined || days < 0) {
+        throw this.runtimeConflict(
+          'INVALID_LEAVE_DEDUCTION_DAYS',
+          'Số ngày nghỉ phép trên phiếu không hợp lệ để khấu trừ quỹ phép năm.',
+        );
+      }
+      let remainingAnnualLeaveDays: number | undefined;
+      if (days > 0) {
+        const updatedEmployee = await this.employees
+          .findOneAndUpdate(
+            {
+              _id: request.requesterEmployeeId,
+              annualLeaveDays: {
+                $gte: config.allowNegative ? -36500 : days,
+              },
+            },
+            { $inc: { annualLeaveDays: -days } },
+            { session, returnDocument: 'after' },
+          )
+          .select({ annualLeaveDays: 1 })
+          .exec();
+        if (!updatedEmployee) {
+          throw this.runtimeConflict(
+            'INSUFFICIENT_ANNUAL_LEAVE',
+            'Không đủ số ngày phép năm còn lại hoặc nhân viên chưa được cấu hình quỹ phép năm.',
+          );
+        }
+        request.leaveDeductionApplied = {
+          fieldKey: config.fieldKey!,
+          days,
+          deductedAt: new Date(),
+        };
+        request.markModified('leaveDeductionApplied');
+        await request.save({ session });
+        const rawRemaining = (updatedEmployee as unknown as { annualLeaveDays?: unknown }).annualLeaveDays;
+        if (typeof rawRemaining === 'number') {
+          remainingAnnualLeaveDays = roundLeaveDays(rawRemaining);
+        }
+      }
+      await this.history.record(request, {
+        stepKey: step.stepKey,
+        stepRunNo,
+        action: 'ACTION_EXECUTED',
+        comment: `Đã thực thi "${step.name}": khấu trừ ${days} ngày phép năm.`,
+        metadata: {
+          actionType: config.actionType,
+          leaveDeductedDays: days,
+          ...(remainingAnnualLeaveDays !== undefined ? { remainingAnnualLeaveDays } : {}),
+        },
+      }, session);
+      return;
+    }
+
+    if (config.actionType === 'BALANCE_ADD') {
+      const days = extractLeaveDaysFromFormData(request.formData, config.fieldKey);
+      if (days === undefined || days < 0) {
+        throw this.runtimeConflict(
+          'INVALID_LEAVE_ADDITION_DAYS',
+          'Số ngày cộng thêm trên phiếu không hợp lệ.',
+        );
+      }
+      let remainingAnnualLeaveDays: number | undefined;
+      if (days > 0) {
+        const updatedEmployee = await this.employees
+          .findOneAndUpdate(
+            { _id: request.requesterEmployeeId },
+            { $inc: { annualLeaveDays: days } },
+            { session, returnDocument: 'after' },
+          )
+          .select({ annualLeaveDays: 1 })
+          .exec();
+        if (!updatedEmployee) {
+          throw this.runtimeConflict(
+            'EMPLOYEE_NOT_FOUND',
+            'Không tìm thấy hồ sơ nhân viên để cộng quỹ phép năm.',
+          );
+        }
+        const rawRemaining = (updatedEmployee as unknown as { annualLeaveDays?: unknown }).annualLeaveDays;
+        if (typeof rawRemaining === 'number') {
+          remainingAnnualLeaveDays = roundLeaveDays(rawRemaining);
+        }
+      }
+      await this.history.record(request, {
+        stepKey: step.stepKey,
+        stepRunNo,
+        action: 'ACTION_EXECUTED',
+        comment: `Đã thực thi "${step.name}": cộng thêm ${days} ngày vào quỹ phép năm.`,
+        metadata: {
+          actionType: config.actionType,
+          leaveAddedDays: days,
+          ...(remainingAnnualLeaveDays !== undefined ? { remainingAnnualLeaveDays } : {}),
+        },
+      }, session);
+      return;
+    }
+
+    if (!config.assigneeRule) {
+      throw this.invalidSnapshot(`Bước gửi thông báo ${step.stepKey} thiếu assigneeRule.`);
+    }
+    const recipients = await this.assigneeResolver.resolveNotificationRecipients(
+      request,
+      config.assigneeRule,
+      session,
+    );
+    const title = config.notificationTitle || `Thông báo quy trình: ${step.name}`;
+    const message =
+      config.notificationMessage ||
+      `Phiếu ${request.requestNo} của ${request.requesterSnapshot.fullName} đã đi qua bước "${step.name}".`;
+    for (const recipient of recipients) {
+      await this.notifications.createPersonal({
+        recipientUserId: recipient.userId,
+        type: 'SYSTEM',
+        title,
+        message,
+        link: `/requests/${request._id.toString()}`,
+        resource: { type: 'REQUEST', id: request._id },
+        data: {
+          requestId: request._id.toString(),
+          requestNo: request.requestNo,
+          stepKey: step.stepKey,
+          stepRunNo,
+          actionType: config.actionType,
+        },
+        dedupeKey: this.notificationDedupeKey(
+          request._id,
+          step.stepKey,
+          stepRunNo,
+          'ACTION_NOTIFICATION',
+        ),
+      }, session);
+    }
+    await this.history.record(request, {
+      stepKey: step.stepKey,
+      stepRunNo,
+      action: 'ACTION_EXECUTED',
+      comment: `Đã thực thi "${step.name}": gửi thông báo cho ${recipients.length} người nhận.`,
+      metadata: {
+        actionType: config.actionType,
+        recipientCount: recipients.length,
+      },
+    }, session);
+  }
+
+  private parseActionConfig(value: unknown, stepIndex: number): RuntimeActionConfig {
+    if (!this.isRecord(value)) throw this.invalidSnapshot(`steps.${stepIndex}.actionConfig không hợp lệ.`);
+    const actionType = this.enumValue(value.actionType, workflowActionTypes, `steps.${stepIndex}.actionConfig.actionType`);
+    if (actionType === 'BALANCE_DEDUCT' || actionType === 'BALANCE_ADD') {
+      return {
+        actionType,
+        fieldKey: this.requiredString(value.fieldKey, `steps.${stepIndex}.actionConfig.fieldKey`),
+        allowNegative: value.allowNegative === true,
+      };
+    }
+    return {
+      actionType,
+      assigneeRule: this.parseAssigneeRule(value.assigneeRule, stepIndex),
+      ...(typeof value.notificationTitle === 'string' && value.notificationTitle.trim()
+        ? { notificationTitle: value.notificationTitle.trim() }
+        : {}),
+      ...(typeof value.notificationMessage === 'string' && value.notificationMessage.trim()
+        ? { notificationMessage: value.notificationMessage.trim() }
+        : {}),
     };
   }
 

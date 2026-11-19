@@ -302,6 +302,7 @@ export async function updateDepartmentFromApi(
     unitType?: DepartmentPreview["unitType"];
     parentId?: string | null;
     managerEmployeeId?: string | null;
+    positionIds?: string[];
   },
 ): Promise<void> {
   await apiClient(`/departments/${encodeURIComponent(departmentId)}`, {

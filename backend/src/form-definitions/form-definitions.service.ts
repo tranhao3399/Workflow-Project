@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -62,12 +63,12 @@ export class FormDefinitionsService {
       this.forms.find(filter).sort(sort).skip(skip).limit(query.limit).lean().exec(),
       this.forms.countDocuments(filter).exec(),
     ]);
-    const [updaterNames, groups] = await Promise.all([
-      this.resolveUpdaterNames(items as StoredFormDefinition[]),
+    const [actorNames, groups] = await Promise.all([
+      this.resolveActorNames(items as StoredFormDefinition[]),
       this.resolveGroups(items as StoredFormDefinition[]),
     ]);
     return {
-      data: items.map((item) => this.toResponse(item as StoredFormDefinition, updaterNames, groups)),
+      data: items.map((item) => this.toResponse(item as StoredFormDefinition, actorNames, groups)),
       pagination: createPaginationMetadata(query.page, query.limit, total),
     };
   }
@@ -75,11 +76,11 @@ export class FormDefinitionsService {
   async findOne(id: string) {
     const item = await this.forms.findById(id).lean().exec();
     if (!item) throw new NotFoundException('Không tìm thấy biểu mẫu.');
-    const [updaterNames, groups] = await Promise.all([
-      this.resolveUpdaterNames([item as StoredFormDefinition]),
+    const [actorNames, groups] = await Promise.all([
+      this.resolveActorNames([item as StoredFormDefinition]),
       this.resolveGroups([item as StoredFormDefinition]),
     ]);
-    return this.toResponse(item as StoredFormDefinition, updaterNames, groups);
+    return this.toResponse(item as StoredFormDefinition, actorNames, groups);
   }
 
   async create(request: RequestWithContext, input: CreateFormDefinitionDto) {
@@ -92,13 +93,13 @@ export class FormDefinitionsService {
     if (settings) this.validator.assertDefinitionValid(fields, settings);
     else this.validator.assertDefinitionValid(fields);
     this.validator.assertSystemRequestFieldsValid(fields);
-    const groupId = input.groupId ? await this.formGroups.requireAssignable(input.groupId) : undefined;
+    const groupId = await this.formGroups.requireAssignable(input.groupId);
     try {
       const item = await this.forms.create({
         code,
         version: 1,
         name: input.name.trim(),
-        ...(groupId ? { groupId } : {}),
+        groupId,
         ...(input.category ? { category: input.category } : {}),
         description: input.description?.trim(),
         status: 'DRAFT',
@@ -161,14 +162,19 @@ export class FormDefinitionsService {
     if (nextSettings) this.validator.assertDefinitionValid(nextFields, nextSettings);
     else this.validator.assertDefinitionValid(nextFields);
     this.validator.assertSystemRequestFieldsValid(nextFields);
-    const groupChanged = input.groupId !== undefined
-      && (input.groupId ?? '') !== (current.groupId?.toString() ?? '');
+    if (input.groupId !== undefined && !input.groupId) {
+      throw new BadRequestException({ message: 'Biểu mẫu bắt buộc phải thuộc một nhóm biểu mẫu.', field: 'groupId' });
+    }
+    const nextGroupId = input.groupId !== undefined
+      ? await this.formGroups.requireAssignable(input.groupId)
+      : undefined;
+    const groupChanged = nextGroupId !== undefined
+      && nextGroupId.toString() !== (current.groupId?.toString() ?? '');
     const update: Record<string, unknown> = { updatedBy: this.actorId(request) };
     const unset: Record<string, 1> = {};
     if (codeChanged) update.code = nextCode;
     if (input.name !== undefined) update.name = input.name.trim();
-    if (groupChanged && input.groupId === null) unset.groupId = 1;
-    else if (groupChanged && input.groupId != null) update.groupId = await this.formGroups.requireAssignable(input.groupId);
+    if (groupChanged && nextGroupId) update.groupId = nextGroupId;
     if (input.category === null) unset.category = 1;
     else if (input.category !== undefined) update.category = input.category;
     if (input.description !== undefined) update.description = input.description.trim();
@@ -239,11 +245,11 @@ export class FormDefinitionsService {
         changedDescription: input.description !== undefined,
       },
     });
-    if (groupChanged) {
-      const siblingUpdate = input.groupId === null
-        ? { $unset: { groupId: 1 } }
-        : { $set: { groupId: new Types.ObjectId(input.groupId) } };
-      await this.forms.updateMany({ code: item.code, _id: { $ne: item._id } }, siblingUpdate).exec();
+    if (groupChanged && nextGroupId) {
+      await this.forms.updateMany(
+        { code: item.code, _id: { $ne: item._id } },
+        { $set: { groupId: nextGroupId } },
+      ).exec();
     }
     const groups = await this.resolveGroups([item]);
     return this.toResponse(item, new Map(), groups);
@@ -373,12 +379,11 @@ export class FormDefinitionsService {
     return this.validator.validateFormData({ fields: item.fields }, formData);
   }
 
-  async updateGroup(request: RequestWithContext, id: string, groupId: string | null) {
+  async updateGroup(request: RequestWithContext, id: string, groupId: string) {
     const item = await this.forms.findById(id).select({ code: 1, name: 1, groupId: 1 }).lean().exec();
     if (!item) throw new NotFoundException('Không tìm thấy biểu mẫu.');
-    const nextGroupId = groupId ? await this.formGroups.requireAssignable(groupId) : undefined;
-    const update = nextGroupId ? { $set: { groupId: nextGroupId } } : { $unset: { groupId: 1 } };
-    const result = await this.forms.updateMany({ code: item.code }, update).exec();
+    const nextGroupId = await this.formGroups.requireAssignable(groupId);
+    const result = await this.forms.updateMany({ code: item.code }, { $set: { groupId: nextGroupId } }).exec();
     await this.auditLogs.record(request, {
       action: 'FORM.GROUP_CHANGED',
       description: 'Đã chuyển nhóm biểu mẫu.',
@@ -386,11 +391,11 @@ export class FormDefinitionsService {
       resource: { type: 'FORM_DEFINITION', id: item._id.toString(), code: item.code, name: item.name },
       changes: {
         before: { groupId: item.groupId?.toString() },
-        after: { groupId: nextGroupId?.toString() },
+        after: { groupId: nextGroupId.toString() },
       },
       metadata: { affectedVersions: result.modifiedCount },
     });
-    return { code: item.code, groupId: nextGroupId?.toString(), affectedVersions: result.modifiedCount };
+    return { code: item.code, groupId: nextGroupId.toString(), affectedVersions: result.modifiedCount };
   }
 
   async remove(request: RequestWithContext, id: string): Promise<{ id: string }> {
@@ -459,9 +464,10 @@ export class FormDefinitionsService {
 
   private toResponse(
     item: StoredFormDefinition | FormDefinitionDocument,
-    updaterNames: ReadonlyMap<string, string> = new Map(),
+    actorNames: ReadonlyMap<string, string> = new Map(),
     groups: ReadonlyMap<string, { id: string; code: string; name: string; isActive: boolean }> = new Map(),
   ) {
+    const creatorId = item.createdBy?.toString();
     const updaterId = item.updatedBy?.toString();
     const group = item.groupId ? groups.get(item.groupId.toString()) : undefined;
     return {
@@ -476,14 +482,18 @@ export class FormDefinitionsService {
       fields: this.validator.ensureSystemRequestFields(item.fields),
       settings: item.settings,
       ...(item.previousVersionId ? { previousVersionId: item.previousVersionId.toString() } : {}),
-      ...(updaterId ? { updatedBy: { id: updaterId, name: updaterNames.get(updaterId) ?? updaterId } } : {}),
+      ...(creatorId ? { createdBy: { id: creatorId, name: actorNames.get(creatorId) ?? creatorId } } : {}),
+      ...(updaterId ? { updatedBy: { id: updaterId, name: actorNames.get(updaterId) ?? updaterId } } : {}),
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
     };
   }
 
-  private async resolveUpdaterNames(items: readonly StoredFormDefinition[]): Promise<Map<string, string>> {
-    const ids = [...new Set(items.flatMap((item) => item.updatedBy ? [item.updatedBy.toString()] : []))];
+  private async resolveActorNames(items: readonly StoredFormDefinition[]): Promise<Map<string, string>> {
+    const ids = [...new Set(items.flatMap((item) => [
+      ...(item.createdBy ? [item.createdBy.toString()] : []),
+      ...(item.updatedBy ? [item.updatedBy.toString()] : []),
+    ]))];
     if (!ids.length) return new Map();
     const users = await this.users.find({ _id: { $in: ids } }).select({ displayName: 1, email: 1, employeeId: 1 }).lean().exec();
     const employeeIds = users.flatMap((user) => user.employeeId ? [user.employeeId] : []);

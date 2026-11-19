@@ -6,10 +6,12 @@ import {
   approvalModes,
   assigneeRuleTypes,
   MAX_BPMN_XML_BYTES,
+  workflowActionTypes,
   workflowConditionOperators,
   workflowConditionSources,
   workflowEndResults,
   WORKFLOW_BPMN_EXTENSION_NAMESPACE,
+  type WorkflowActionConfig,
   type WorkflowAssigneeRule,
   type WorkflowCondition,
   type WorkflowStep,
@@ -23,6 +25,7 @@ const STEP_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const SUPPORTED_PROCESS_ELEMENTS = new Set([
   'startEvent',
   'userTask',
+  'serviceTask',
   'exclusiveGateway',
   'endEvent',
   'sequenceFlow',
@@ -30,7 +33,7 @@ const SUPPORTED_PROCESS_ELEMENTS = new Set([
 ]);
 
 type XmlRecord = Record<string, unknown>;
-type SupportedNodeType = 'START' | 'APPROVAL' | 'CONDITION' | 'END';
+type SupportedNodeType = 'START' | 'APPROVAL' | 'CONDITION' | 'ACTION' | 'END';
 
 interface ParsedNode {
   id: string;
@@ -257,6 +260,9 @@ export class BpmnWorkflowCompilerService {
       } else if (node.type === 'CONDITION') {
         const step = this.compileCondition(node, stepKey, metadata, uiPosition, flows, flowsById, stepKeyByNodeId, errors);
         if (step) compiledSteps.push(step);
+      } else if (node.type === 'ACTION') {
+        const step = this.compileAction(node, stepKey, metadata, uiPosition, flows, flowsById, stepKeyByNodeId, errors);
+        if (step) compiledSteps.push(step);
       } else {
         const step = this.compileEnd(node, stepKey, metadata, uiPosition, flows, errors);
         if (step) compiledSteps.push(step);
@@ -310,20 +316,51 @@ export class BpmnWorkflowCompilerService {
   ): WorkflowStep | undefined {
     const approvalMode = this.enumMetadata(metadata, 'approvalMode', approvalModes, node.id, errors);
     const allowSelfApproval = this.booleanMetadata(metadata, 'allowSelfApproval', node.id, errors, true);
+    const allowReassign = this.booleanMetadata(metadata, 'allowReassign', node.id, errors, false) ?? true;
     const assigneeRule = this.assigneeRule(metadata, node.id, errors);
-    const approveFlow = this.requiredMetadataAttribute(metadata, 'approveFlow', node.id, errors);
-    const rejectFlow = this.requiredMetadataAttribute(metadata, 'rejectFlow', node.id, errors);
+    const nextFlow = this.attribute(metadata, 'nextFlow');
+    const approveFlow = this.attribute(metadata, 'approveFlow');
+    const rejectFlow = this.attribute(metadata, 'rejectFlow');
     const revisionFlow = this.attribute(metadata, 'revisionFlow');
-    const branchFlowIds = [approveFlow, rejectFlow, revisionFlow].filter((value): value is string => Boolean(value));
-    this.validateBranchFlows(node.id, branchFlowIds, flows, flowsById, errors);
-    if (new Set(branchFlowIds).size !== branchFlowIds.length) {
-      this.add(errors, 'BPMN_APPROVAL_BRANCH_DUPLICATE', 'bpmnXml', node.id, 'Các nhánh approve/reject/revision phải dùng Sequence Flow khác nhau.');
+    const hasLegacyFlows = Boolean(approveFlow || rejectFlow);
+
+    let onNextStepKey: string | undefined;
+    let onApproveStepKey: string | undefined;
+    let onRejectStepKey: string | undefined;
+    if (nextFlow && hasLegacyFlows) {
+      this.add(errors, 'BPMN_APPROVAL_FLOW_CONFLICT', 'bpmnXml', node.id, 'Không thể dùng đồng thời nextFlow và approveFlow/rejectFlow.');
+    } else if (hasLegacyFlows) {
+      const resolvedApproveFlow = approveFlow ?? this.requiredMetadataAttribute(metadata, 'approveFlow', node.id, errors);
+      const resolvedRejectFlow = rejectFlow ?? this.requiredMetadataAttribute(metadata, 'rejectFlow', node.id, errors);
+      const branchFlowIds = [resolvedApproveFlow, resolvedRejectFlow, revisionFlow].filter((value): value is string => Boolean(value));
+      this.validateBranchFlows(node.id, branchFlowIds, flows, flowsById, errors);
+      if (new Set(branchFlowIds).size !== branchFlowIds.length) {
+        this.add(errors, 'BPMN_APPROVAL_BRANCH_DUPLICATE', 'bpmnXml', node.id, 'Các nhánh approve/reject/revision phải dùng Sequence Flow khác nhau.');
+      }
+      onApproveStepKey = resolvedApproveFlow ? this.flowTargetStepKey(resolvedApproveFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
+      onRejectStepKey = resolvedRejectFlow ? this.flowTargetStepKey(resolvedRejectFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
+    } else {
+      if (!nextFlow) {
+        this.add(
+          errors,
+          'BPMN_METADATA_REQUIRED',
+          'bpmnXml',
+          node.id,
+          'Bước phê duyệt cần nối 1 đường dẫn tiếp theo (ví dụ qua Exclusive Gateway để rẽ nhánh Duyệt / Từ chối).',
+        );
+      }
+      const branchFlowIds = [nextFlow, revisionFlow].filter((value): value is string => Boolean(value));
+      this.validateBranchFlows(node.id, branchFlowIds, flows, flowsById, errors);
+      if (new Set(branchFlowIds).size !== branchFlowIds.length) {
+        this.add(errors, 'BPMN_APPROVAL_BRANCH_DUPLICATE', 'bpmnXml', node.id, 'Nhánh tiếp theo và nhánh bổ sung phải dùng Sequence Flow khác nhau.');
+      }
+      onNextStepKey = nextFlow ? this.flowTargetStepKey(nextFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
     }
-    const onApproveStepKey = approveFlow ? this.flowTargetStepKey(approveFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
-    const onRejectStepKey = rejectFlow ? this.flowTargetStepKey(rejectFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
+
     const onRevisionStepKey = revisionFlow ? this.flowTargetStepKey(revisionFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
     const dueInHours = this.optionalPositiveIntegerMetadata(metadata, 'dueInHours', node.id, errors, 87_600);
-    if (!approvalMode || allowSelfApproval === undefined || !assigneeRule || !onApproveStepKey || !onRejectStepKey) return undefined;
+    if (!approvalMode || allowSelfApproval === undefined || !assigneeRule) return undefined;
+    if (!onNextStepKey && (!onApproveStepKey || !onRejectStepKey)) return undefined;
     return {
       stepKey,
       name: node.name,
@@ -332,9 +369,9 @@ export class BpmnWorkflowCompilerService {
       assigneeRule,
       approvalMode,
       allowSelfApproval,
+      allowReassign,
       ...(dueInHours ? { dueInHours } : {}),
-      onApproveStepKey,
-      onRejectStepKey,
+      ...(onNextStepKey ? { onNextStepKey } : { onApproveStepKey, onRejectStepKey }),
       ...(onRevisionStepKey ? { onRevisionStepKey } : {}),
     };
   }
@@ -364,8 +401,14 @@ export class BpmnWorkflowCompilerService {
     const onFalseStepKey = falseFlow ? this.flowTargetStepKey(falseFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
     let value: unknown;
     if (valueJson) {
+      const normalizedJson = valueJson
+        .replace(/&quot;|&#34;/g, '"')
+        .replace(/&apos;|&#39;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
       try {
-        value = JSON.parse(valueJson) as unknown;
+        value = JSON.parse(normalizedJson) as unknown;
       } catch {
         this.add(errors, 'BPMN_CONDITION_VALUE_INVALID', 'bpmnXml', node.id, 'valueJson của Gateway phải là JSON hợp lệ.');
       }
@@ -380,6 +423,56 @@ export class BpmnWorkflowCompilerService {
       condition,
       onTrueStepKey,
       onFalseStepKey,
+    };
+  }
+
+  private compileAction(
+    node: ParsedNode,
+    stepKey: string,
+    metadata: XmlRecord,
+    uiPosition: WorkflowUiPosition | undefined,
+    flows: readonly ParsedSequenceFlow[],
+    flowsById: ReadonlyMap<string, ParsedSequenceFlow>,
+    stepKeyByNodeId: ReadonlyMap<string, string>,
+    errors: BpmnWorkflowValidationError[],
+  ): WorkflowStep | undefined {
+    const actionType = this.enumMetadata(metadata, 'actionType', workflowActionTypes, node.id, errors);
+    const nextFlow = this.requiredMetadataAttribute(metadata, 'nextFlow', node.id, errors);
+    const branchFlowIds = nextFlow ? [nextFlow] : [];
+    this.validateBranchFlows(node.id, branchFlowIds, flows, flowsById, errors);
+    const onNextStepKey = nextFlow ? this.flowTargetStepKey(nextFlow, node.id, flowsById, stepKeyByNodeId, errors) : undefined;
+    if (!actionType || !onNextStepKey) return undefined;
+
+    let actionConfig: WorkflowActionConfig | undefined;
+    if (actionType === 'BALANCE_DEDUCT' || actionType === 'BALANCE_ADD') {
+      const fieldKey = this.requiredMetadataAttribute(metadata, 'fieldKey', node.id, errors);
+      const allowNegative = this.booleanMetadata(metadata, 'allowNegative', node.id, errors, false) ?? false;
+      if (!fieldKey) return undefined;
+      actionConfig = {
+        actionType,
+        fieldKey,
+        ...(actionType === 'BALANCE_DEDUCT' ? { allowNegative } : {}),
+      };
+    } else {
+      const assigneeRule = this.assigneeRule(metadata, node.id, errors);
+      if (!assigneeRule) return undefined;
+      const notificationTitle = this.attribute(metadata, 'notificationTitle')?.trim();
+      const notificationMessage = this.attribute(metadata, 'notificationMessage')?.trim();
+      actionConfig = {
+        actionType,
+        assigneeRule,
+        ...(notificationTitle ? { notificationTitle } : {}),
+        ...(notificationMessage ? { notificationMessage } : {}),
+      };
+    }
+
+    return {
+      stepKey,
+      name: node.name,
+      type: 'ACTION',
+      ...(uiPosition ? { uiPosition } : {}),
+      actionConfig,
+      onNextStepKey,
     };
   }
 
@@ -449,7 +542,13 @@ export class BpmnWorkflowCompilerService {
       this.add(errors, 'BPMN_EXTENSION_ELEMENTS_INVALID', 'bpmnXml', node.id, 'extensionElements không hợp lệ.');
       return undefined;
     }
-    const expectedName = node.type === 'APPROVAL' ? 'approval' : node.type === 'CONDITION' ? 'condition' : 'end';
+    const expectedName = node.type === 'APPROVAL'
+      ? 'approval'
+      : node.type === 'CONDITION'
+        ? 'condition'
+        : node.type === 'ACTION'
+          ? 'action'
+          : 'end';
     const businessChildren = this.children(extension);
     for (const child of businessChildren) {
       if (!this.isWorkflowName(child.qualifiedName, namespaces) || this.localName(child.qualifiedName) !== expectedName) {
@@ -478,7 +577,7 @@ export class BpmnWorkflowCompilerService {
     errors: BpmnWorkflowValidationError[],
   ): void {
     const common = new Set(['documentation', 'incoming', 'outgoing']);
-    const allowed = elementType === 'userTask' || elementType === 'exclusiveGateway' || elementType === 'endEvent'
+    const allowed = elementType === 'userTask' || elementType === 'serviceTask' || elementType === 'exclusiveGateway' || elementType === 'endEvent'
       ? new Set([...common, 'extensionElements'])
       : common;
     for (const child of this.children(element)) {
@@ -496,12 +595,23 @@ export class BpmnWorkflowCompilerService {
     errors: BpmnWorkflowValidationError[],
   ): void {
     const approvalAttributes = new Set([
-      'stepKey', 'approvalMode', 'allowSelfApproval', 'assigneeRuleType', 'roleIds', 'positionIds',
-      'userIds', 'departmentId', 'includeInactive', 'dueInHours', 'approveFlow', 'rejectFlow', 'revisionFlow',
+      'stepKey', 'approvalMode', 'allowSelfApproval', 'allowReassign', 'assigneeRuleType', 'roleIds', 'positionIds',
+      'userIds', 'departmentId', 'includeInactive', 'dueInHours', 'nextFlow', 'approveFlow', 'rejectFlow', 'revisionFlow',
     ]);
     const conditionAttributes = new Set(['stepKey', 'source', 'fieldKey', 'operator', 'valueJson', 'trueFlow', 'falseFlow']);
+    const actionAttributes = new Set([
+      'stepKey', 'actionType', 'fieldKey', 'allowNegative',
+      'assigneeRuleType', 'roleIds', 'positionIds', 'userIds', 'departmentId', 'includeInactive',
+      'notificationTitle', 'notificationMessage', 'nextFlow',
+    ]);
     const endAttributes = new Set(['stepKey', 'endResult']);
-    const allowed = nodeType === 'APPROVAL' ? approvalAttributes : nodeType === 'CONDITION' ? conditionAttributes : endAttributes;
+    const allowed = nodeType === 'APPROVAL'
+      ? approvalAttributes
+      : nodeType === 'CONDITION'
+        ? conditionAttributes
+        : nodeType === 'ACTION'
+          ? actionAttributes
+          : endAttributes;
     for (const [key] of Object.entries(metadata)) {
       if (key === '#text') continue;
       if (!key.startsWith('@_')) {
@@ -709,6 +819,7 @@ export class BpmnWorkflowCompilerService {
   private nodeType(localName: string): SupportedNodeType | undefined {
     if (localName === 'startEvent') return 'START';
     if (localName === 'userTask') return 'APPROVAL';
+    if (localName === 'serviceTask') return 'ACTION';
     if (localName === 'exclusiveGateway') return 'CONDITION';
     if (localName === 'endEvent') return 'END';
     return undefined;
